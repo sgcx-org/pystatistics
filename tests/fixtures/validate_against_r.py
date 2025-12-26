@@ -87,7 +87,8 @@ def validate_fixture(fixture_name: str) -> tuple[bool, list[str], bool]:
     ds = DataSource.from_file(csv_path)
     
     # Get predictor columns (everything except 'y')
-    x_cols = [c for c in ds.columns if c != 'y']
+    # Use keys() which returns frozenset, convert to sorted list
+    x_cols = sorted(k for k in ds.keys() if k != 'y')
     
     # Build design and fit
     design = Design.from_datasource(ds, x=x_cols, y='y')

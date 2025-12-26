@@ -1,5 +1,5 @@
 """
-Linear algebra primitives for PyStatistics.
+Linear algebra kernels for PyStatistics.
 
 This module provides CPU and GPU implementations of core linear algebra
 operations used across all statistical domains.
@@ -18,7 +18,7 @@ Submodules:
     determinant: Log-determinant computation (stub)
 """
 
-from pystatistics.core.backends.linalg.qr import (
+from pystatistics.core.compute.linalg.qr import (
     QRResult,
     qr_cpu,
     qr_gpu,

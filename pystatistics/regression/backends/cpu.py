@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 
 from pystatistics.core.result import Result
-from pystatistics.core.backends.timing import Timer
-from pystatistics.core.backends.linalg.qr import qr_solve_cpu, qr_cpu
+from pystatistics.core.compute.timing import Timer
+from pystatistics.core.compute.linalg.qr import qr_solve_cpu, qr_cpu
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearParams
 

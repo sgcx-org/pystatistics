@@ -10,12 +10,15 @@ furniture, paper, or two-by-fours.
 Usage:
     from pystatistics import DataSource
     
-    ds = DataSource.build(X, y)
-    ds = DataSource.build("data.csv")
     ds = DataSource.from_arrays(X=X, y=y)
     ds = DataSource.from_file("data.csv")
     ds = DataSource.from_dataframe(df)
     ds = DataSource.from_tensors(X=X_gpu, y=y_gpu)
+    
+    # Access arrays
+    ds.keys()  # frozenset({'X', 'y'})
+    X = ds['X']
+    y = ds['y']
 """
 
 from __future__ import annotations
@@ -27,16 +30,17 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.capabilities import (
+    CAPABILITY_MATERIALIZED,
+    CAPABILITY_STREAMING,
+    CAPABILITY_GPU_NATIVE,
+    CAPABILITY_REPEATABLE,
+    CAPABILITY_SUFFICIENT_STATISTICS,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
     import torch
-
-
-CAPABILITY_MATERIALIZE = 'materialize'
-CAPABILITY_STREAM = 'stream'
-CAPABILITY_GPU_NATIVE = 'gpu_native'
-CAPABILITY_SECOND_PASS = 'second_pass'
 
 
 @dataclass
@@ -45,10 +49,86 @@ class DataSource:
     Universal data container. Domain-agnostic.
     
     Construct via factory classmethods, not directly.
+    
+    The lumber yard analogy: DataSource has data (logs). It doesn't know
+    or care what you're building—furniture (regression), paper (MVN MLE),
+    or two-by-fours (survival analysis).
     """
     _data: dict[str, Any]
     _capabilities: frozenset[str]
     _metadata: dict[str, Any] = field(default_factory=dict)
+    
+    # === Array Access ===
+    
+    def keys(self) -> frozenset[str]:
+        """
+        Return the names of all available arrays.
+        
+        Returns:
+            frozenset of array names
+            
+        Example:
+            >>> ds = DataSource.from_arrays(X=X, y=y)
+            >>> ds.keys()
+            frozenset({'X', 'y'})
+        """
+        return frozenset(k for k in self._data.keys() if not k.startswith('_'))
+    
+    def __getitem__(self, key: str) -> Any:
+        """
+        Access a named array.
+        
+        Args:
+            key: Array name
+            
+        Returns:
+            The array
+            
+        Raises:
+            KeyError: If key not found, with helpful message listing available keys
+            
+        Example:
+            >>> ds = DataSource.from_arrays(X=X, y=y)
+            >>> X = ds['X']
+            >>> ds['Z']  # KeyError: "DataSource has no array 'Z'. Available: {'X', 'y'}"
+        """
+        if key not in self._data:
+            available = self.keys()
+            raise KeyError(
+                f"DataSource has no array '{key}'. Available: {available}"
+            )
+        return self._data[key]
+    
+    def __contains__(self, key: str) -> bool:
+        """Check if a key exists."""
+        return key in self._data
+    
+    # === Properties ===
+    
+    @property
+    def n_observations(self) -> int:
+        """Number of statistical units (rows)."""
+        return self._metadata.get('n_observations', 0)
+    
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Domain-agnostic metadata."""
+        return self._metadata.copy()
+    
+    def supports(self, capability: str) -> bool:
+        """
+        Check if this DataSource supports a capability.
+        
+        Args:
+            capability: Use constants from pystatistics.core.capabilities
+            
+        Returns:
+            True if supported, False otherwise
+            
+        Note:
+            Unknown capabilities return False, never raise.
+        """
+        return capability in self._capabilities
     
     # === Factory Methods ===
     
@@ -95,7 +175,7 @@ class DataSource:
         
         return cls(
             _data=storage,
-            _capabilities=frozenset({CAPABILITY_MATERIALIZE, CAPABILITY_SECOND_PASS}),
+            _capabilities=frozenset({CAPABILITY_MATERIALIZED, CAPABILITY_REPEATABLE}),
             _metadata={'n_observations': n_obs, 'source': 'arrays'},
         )
     
@@ -121,125 +201,76 @@ class DataSource:
         storage: dict[str, Any] = {}
         
         for col in df.columns:
-            arr = df[col].to_numpy()
-            if np.issubdtype(arr.dtype, np.number):
-                arr = arr.astype(np.float64)
-            storage[str(col)] = arr
+            storage[col] = df[col].to_numpy(dtype=np.float64)
         
-        metadata = {'n_observations': len(df), 'source': 'dataframe', 'columns': list(df.columns)}
+        metadata = {
+            'n_observations': len(df),
+            'source': 'dataframe',
+            'columns': list(df.columns),
+        }
         if source_path:
-            metadata['path'] = source_path
-        
+            metadata['source_path'] = source_path
+            
         return cls(
             _data=storage,
-            _capabilities=frozenset({CAPABILITY_MATERIALIZE, CAPABILITY_SECOND_PASS}),
+            _capabilities=frozenset({CAPABILITY_MATERIALIZED, CAPABILITY_REPEATABLE}),
             _metadata=metadata,
         )
     
     @classmethod
-    def from_tensors(cls, *, X: 'torch.Tensor | None' = None, y: 'torch.Tensor | None' = None, **tensors: 'torch.Tensor') -> DataSource:
-        """Construct from PyTorch tensors."""
+    def from_tensors(
+        cls,
+        *,
+        X: 'torch.Tensor | None' = None,
+        y: 'torch.Tensor | None' = None,
+        **named_tensors: 'torch.Tensor',
+    ) -> DataSource:
+        """Construct from PyTorch tensors (already on GPU)."""
         import torch
         
         storage: dict[str, Any] = {}
-        device = None
-        n_obs = None
+        n_obs: int | None = None
+        device: str | None = None
         
         if X is not None:
             storage['X'] = X
-            device = X.device
             n_obs = X.shape[0]
+            device = str(X.device)
+            
         if y is not None:
             storage['y'] = y
-            device = device or y.device
             n_obs = n_obs or y.shape[0]
-        for name, t in tensors.items():
-            storage[name] = t
-            device = device or t.device
-            n_obs = n_obs or t.shape[0]
+            device = device or str(y.device)
         
-        caps = {CAPABILITY_MATERIALIZE, CAPABILITY_SECOND_PASS}
-        if device is not None and device.type == 'cuda':
-            caps.add(CAPABILITY_GPU_NATIVE)
+        for name, tensor in named_tensors.items():
+            storage[name] = tensor
+            n_obs = n_obs or tensor.shape[0]
+            device = device or str(tensor.device)
+        
+        capabilities = {CAPABILITY_MATERIALIZED, CAPABILITY_REPEATABLE}
+        if device and device != 'cpu':
+            capabilities.add(CAPABILITY_GPU_NATIVE)
         
         return cls(
             _data=storage,
-            _capabilities=frozenset(caps),
-            _metadata={'n_observations': n_obs, 'source': 'tensors', 'device': str(device)},
+            _capabilities=frozenset(capabilities),
+            _metadata={
+                'n_observations': n_obs,
+                'source': 'tensors',
+                'device': device,
+            },
         )
     
-    @classmethod
+    @classmethod  
     def build(cls, *args, **kwargs) -> DataSource:
-        """Smart constructor - infers appropriate factory."""
-        try:
-            import torch
-            has_torch = True
-        except ImportError:
-            has_torch = False
-            torch = None
+        """
+        Convenience factory that dispatches to appropriate from_* method.
         
-        if len(args) == 1 and not kwargs:
-            arg = args[0]
-            if isinstance(arg, (str, Path)):
-                return cls.from_file(arg)
-            if hasattr(arg, 'to_numpy'):
-                return cls.from_dataframe(arg)
-            if isinstance(arg, np.ndarray):
-                return cls.from_arrays(data=arg)
-        
-        if len(args) == 2 and not kwargs:
-            X, y = args
-            if has_torch and isinstance(X, torch.Tensor):
-                return cls.from_tensors(X=X, y=y)
-            return cls.from_arrays(X=np.asarray(X), y=np.asarray(y))
-        
-        if kwargs:
-            if has_torch and any(isinstance(v, torch.Tensor) for v in kwargs.values()):
-                return cls.from_tensors(**kwargs)
+        Examples:
+            DataSource.build(X=X, y=y)  # from_arrays
+            DataSource.build("data.csv")  # from_file
+        """
+        if args and isinstance(args[0], (str, Path)):
+            return cls.from_file(args[0], **kwargs)
+        else:
             return cls.from_arrays(**kwargs)
-        
-        raise ValidationError("Could not infer DataSource type")
-    
-    # === Data Access ===
-    
-    @property
-    def n_observations(self) -> int:
-        return self._metadata.get('n_observations', 0)
-    
-    @property
-    def columns(self) -> list[str]:
-        return [k for k in self._data.keys() if not k.startswith('_')]
-    
-    @property
-    def metadata(self) -> dict[str, Any]:
-        return self._metadata.copy()
-    
-    def supports(self, capability: str) -> bool:
-        return capability in self._capabilities
-    
-    def has(self, name: str) -> bool:
-        return name in self._data
-    
-    def get(self, name: str) -> Any:
-        if name not in self._data:
-            raise KeyError(f"'{name}' not found. Available: {self.columns}")
-        return self._data[name]
-    
-    def get_columns(self, names: list[str]) -> NDArray:
-        """Stack multiple columns into matrix."""
-        arrays = []
-        for name in names:
-            arr = self.get(name)
-            if hasattr(arr, 'cpu'):
-                arr = arr.cpu().numpy()
-            arr = np.asarray(arr, dtype=np.float64)
-            if arr.ndim == 1:
-                arr = arr.reshape(-1, 1)
-            arrays.append(arr)
-        return np.hstack(arrays)
-    
-    def __repr__(self) -> str:
-        cols = ', '.join(self.columns[:5])
-        if len(self.columns) > 5:
-            cols += f', ... ({len(self.columns)} total)'
-        return f"DataSource(n={self.n_observations}, columns=[{cols}])"

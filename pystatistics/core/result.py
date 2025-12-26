@@ -9,6 +9,7 @@ Design decisions:
     - Generic over parameter payload P for type safety
     - info dict for flexible metadata (converged, iterations, diagnostics)
     - timing is optional (don't burden unit tests)
+    - provenance for reproducibility (versions, device, algorithm)
     - Immutable (frozen=True) for reproducibility
 """
 
@@ -16,6 +17,25 @@ from dataclasses import dataclass, field
 from typing import TypeVar, Generic, Any
 
 P = TypeVar('P')  # Parameter payload type
+
+
+def _default_provenance() -> dict[str, Any]:
+    """Generate minimal provenance metadata."""
+    import pystatistics
+    provenance = {
+        'pystatistics_version': pystatistics.__version__,
+    }
+    try:
+        import numpy as np
+        provenance['numpy_version'] = np.__version__
+    except ImportError:
+        pass
+    try:
+        import torch
+        provenance['torch_version'] = torch.__version__
+    except ImportError:
+        pass
+    return provenance
 
 
 @dataclass(frozen=True)
@@ -32,6 +52,7 @@ class Result(Generic[P]):
         timing: Execution timing breakdown, or None if not measured
         backend_name: Identifier of the backend that produced this result
         warnings: Non-fatal issues encountered during computation
+        provenance: Reproducibility metadata (versions, device, algorithm)
         
     The frozen=True ensures results are immutable after creation, which is
     important for reproducibility and prevents accidental modification.
@@ -58,6 +79,7 @@ class Result(Generic[P]):
     timing: dict[str, float] | None
     backend_name: str
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    provenance: dict[str, Any] = field(default_factory=_default_provenance)
     
     def has_warning(self, substring: str) -> bool:
         """Check if any warning contains the given substring."""

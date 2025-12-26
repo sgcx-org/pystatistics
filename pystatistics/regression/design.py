@@ -15,7 +15,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.datasource import DataSource, CAPABILITY_GPU_NATIVE
+from pystatistics.core.datasource import DataSource
+from pystatistics.core.capabilities import CAPABILITY_GPU_NATIVE, CAPABILITY_REPEATABLE
 from pystatistics.core.validation import check_finite, check_2d, check_1d, check_consistent_length, check_min_samples
 
 
@@ -63,26 +64,27 @@ class Design:
         """
         # Get y
         if y is not None:
-            y_arr = source.get(y)
-        elif source.has('y'):
-            y_arr = source.get('y')
+            y_arr = source[y]
+        elif 'y' in source:
+            y_arr = source['y']
         else:
             raise ValueError("Must specify y or DataSource must have 'y'")
         
         # Get X
         if x is not None:
             if isinstance(x, str):
-                X_arr = source.get(x)
+                X_arr = source[x]
             else:
-                X_arr = source.get_columns(x)
-        elif source.has('X'):
-            X_arr = source.get('X')
+                # Multiple columns - stack them
+                X_arr = _get_columns(source, x)
+        elif 'X' in source:
+            X_arr = source['X']
         elif y is not None:
             # X = all columns except y
-            x_cols = [c for c in source.columns if c != y]
+            x_cols = sorted(k for k in source.keys() if k != y)
             if not x_cols:
                 raise ValueError("No predictor columns available")
-            X_arr = source.get_columns(x_cols)
+            X_arr = _get_columns(source, x_cols)
         else:
             raise ValueError("Must specify x or DataSource must have 'X'")
         
@@ -148,34 +150,35 @@ class Design:
         return self._p
     
     @property
-    def n_observations(self) -> int:
-        """Alias for n (DataSource protocol compatibility)."""
-        return self._n
-    
-    @property
-    def metadata(self) -> dict[str, Any]:
-        """Design metadata."""
-        return {'n': self._n, 'p': self._p, 'has_source': self._source is not None}
+    def source(self) -> DataSource | None:
+        """Original DataSource, if available."""
+        return self._source
     
     def supports(self, capability: str) -> bool:
-        """Check capability (DataSource protocol compatibility)."""
-        if capability == CAPABILITY_GPU_NATIVE and self._source:
-            return self._source.supports(CAPABILITY_GPU_NATIVE)
-        return capability in {'materialize', 'second_pass', 'sufficient_stats'}
-    
-    # === Sufficient Statistics ===
+        """Check if underlying data supports a capability."""
+        if self._source is not None:
+            return self._source.supports(capability)
+        # Arrays in memory support these
+        return capability in (CAPABILITY_REPEATABLE,)
     
     def XtX(self) -> NDArray[np.floating[Any]]:
-        """X'X (p x p)."""
+        """Compute X'X (for standard errors)."""
         return self._X.T @ self._X
     
     def Xty(self) -> NDArray[np.floating[Any]]:
-        """X'y (p,)."""
+        """Compute X'y."""
         return self._X.T @ self._y
-    
-    def yty(self) -> float:
-        """y'y (scalar)."""
-        return float(self._y @ self._y)
-    
-    def __repr__(self) -> str:
-        return f"Design(n={self._n}, p={self._p})"
+
+
+def _get_columns(source: DataSource, names: list[str]) -> NDArray:
+    """Stack multiple columns from DataSource into a matrix."""
+    arrays = []
+    for name in names:
+        arr = source[name]
+        if hasattr(arr, 'cpu'):
+            arr = arr.cpu().numpy()
+        arr = np.asarray(arr, dtype=np.float64)
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        arrays.append(arr)
+    return np.hstack(arrays)

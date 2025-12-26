@@ -6,7 +6,7 @@ from typing import Literal
 import numpy as np
 from numpy.typing import ArrayLike
 
-from pystatistics.core.backends.device import select_device
+from pystatistics.core.compute.device import select_device
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearSolution
 from pystatistics.regression.backends.cpu import CPUQRBackend
