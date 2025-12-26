@@ -1,190 +1,101 @@
 """
-QR decomposition implementations.
+QR decomposition with column pivoting.
 
-Provides consistent QR decomposition interface across CPU (LAPACK via NumPy)
-and GPU (PyTorch). Used by regression, mixed models, and other domains
-requiring least squares solutions.
+CPU implementation uses SciPy's LAPACK-based QR to match R's behavior exactly.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Any, TYPE_CHECKING
+from typing import Literal, Any, Optional
 import numpy as np
 from numpy.typing import NDArray
-
-from pystatistics.core.exceptions import SingularMatrixError
-
-if TYPE_CHECKING:
-    import torch
 
 
 @dataclass(frozen=True)
 class QRResult:
     """
-    Result of QR decomposition.
+    Result of QR decomposition with column pivoting.
     
     Attributes:
         Q: Orthogonal matrix (n x k where k = min(n, p) for reduced mode)
-        R: Upper triangular matrix (k x p)
-        rank: Numerical rank determined from R diagonal
+        R: Upper triangular matrix (k x p), columns are in PIVOTED order
+        pivot: Permutation array (0-indexed). pivot[i] = original column index
+               that was moved to position i during pivoting.
+        rank: Numerical rank
     """
     Q: NDArray[np.floating[Any]]
     R: NDArray[np.floating[Any]]
+    pivot: NDArray[np.intp]
     rank: int
 
 
-def qr_cpu(
+def qr_decompose(
     X: NDArray[np.floating[Any]],
     mode: Literal['reduced', 'complete'] = 'reduced'
 ) -> QRResult:
     """
-    QR decomposition using LAPACK (via NumPy).
-    
-    Computes X = QR where Q is orthogonal and R is upper triangular.
+    QR decomposition with column pivoting using SciPy/LAPACK.
     
     Args:
         X: Matrix to decompose (n x p)
-        mode: 'reduced' for economy QR (Q is n x k, R is k x p where k = min(n,p))
-              'complete' for full QR (Q is n x n, R is n x p)
-        
-    Returns:
-        QRResult with Q, R, and numerical rank
-    """
-    Q, R = np.linalg.qr(X, mode=mode)
-    
-    # Determine numerical rank from R diagonal
-    diag_R = np.abs(np.diag(R))
-    if len(diag_R) > 0 and diag_R[0] > 0:
-        # Tolerance based on matrix size and machine epsilon
-        tol = max(X.shape) * np.finfo(X.dtype).eps * diag_R[0]
-        rank = int(np.sum(diag_R > tol))
-    else:
-        rank = 0
-    
-    return QRResult(Q=Q, R=R, rank=rank)
-
-
-def qr_gpu(
-    X: 'torch.Tensor',
-    mode: Literal['reduced', 'complete'] = 'reduced'
-) -> QRResult:
-    """
-    QR decomposition using PyTorch (GPU-accelerated).
-    
-    Args:
-        X: Tensor to decompose (n x p), must already be on desired device
         mode: 'reduced' for economy QR, 'complete' for full QR
         
     Returns:
-        QRResult with Q, R as NumPy arrays (moved to CPU), and numerical rank
+        QRResult with Q, R, pivot indices, and rank
     """
-    import torch
+    from scipy.linalg import qr
     
-    Q, R = torch.linalg.qr(X, mode=mode)
+    n, p = X.shape
+    X = np.asarray(X, dtype=np.float64)
     
-    # Determine numerical rank
-    diag_R = torch.abs(torch.diag(R))
+    scipy_mode = 'economic' if mode == 'reduced' else 'full'
+    Q, R, pivot = qr(X, mode=scipy_mode, pivoting=True)
+    
+    # Rank = number of columns with non-negligible diagonal elements
+    diag_R = np.abs(np.diag(R))
     if len(diag_R) > 0 and diag_R[0] > 0:
-        tol = max(X.shape) * torch.finfo(X.dtype).eps * diag_R[0].item()
-        rank = int(torch.sum(diag_R > tol).item())
+        threshold = max(n, p) * np.finfo(np.float64).eps * diag_R[0]
+        rank = int(np.sum(diag_R > threshold))
     else:
         rank = 0
     
-    return QRResult(
-        Q=Q.cpu().numpy(),
-        R=R.cpu().numpy(),
-        rank=rank
-    )
+    return QRResult(Q=Q, R=R, pivot=pivot, rank=rank)
 
 
-def qr_solve_cpu(
+def qr_solve(
     X: NDArray[np.floating[Any]],
     y: NDArray[np.floating[Any]],
-    check_rank: bool
-) -> NDArray[np.floating[Any]]:
+) -> tuple[NDArray[np.floating[Any]], QRResult]:
     """
-    Solve least squares via QR decomposition (CPU).
+    Solve least squares via pivoted QR decomposition.
     
-    Solves: min_β ||y - Xβ||² via QR decomposition of X.
-    
-    The solution is computed as:
-        X = QR
-        β = R⁻¹ Q'y
+    Solves: min_β ||y - Xβ||²
     
     Args:
-        X: Design matrix (n x p), must have n >= p
+        X: Design matrix (n x p)
         y: Response vector (n,)
-        check_rank: If True, raise SingularMatrixError on rank-deficient X
         
     Returns:
-        Coefficient vector β (p,)
-        
-    Raises:
-        SingularMatrixError: If X is rank-deficient and check_rank=True
+        Tuple of:
+        - coefficients: Coefficient vector β (p,) in ORIGINAL column order
+        - qr_result: The QRResult for downstream use (e.g., SE computation)
     """
     from scipy.linalg import solve_triangular
     
-    n, p = X.shape
-    qr_result = qr_cpu(X, mode='reduced')
+    p = X.shape[1]
+    X = np.asarray(X, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
     
-    if check_rank and qr_result.rank < p:
-        raise SingularMatrixError(
-            f"Design matrix is rank-deficient: rank={qr_result.rank}, expected={p}. "
-            f"This indicates perfect multicollinearity.",
-            matrix_name='X',
-            rank=qr_result.rank,
-            expected_rank=p
-        )
+    qr_result = qr_decompose(X, mode='reduced')
     
-    # β = R⁻¹ Q'y
-    # Compute Q'y first, then solve the triangular system
     Qty = qr_result.Q.T @ y
+    coef_pivoted = solve_triangular(
+        qr_result.R[:p, :p],
+        Qty[:p],
+        lower=False
+    )
     
-    # Solve R @ beta = Qty using back substitution
-    # R is p x p upper triangular (for reduced QR with n >= p)
-    beta = solve_triangular(qr_result.R[:p, :p], Qty[:p], lower=False)
+    # Unpivot to original column order
+    coef = np.empty(p, dtype=np.float64)
+    coef[qr_result.pivot] = coef_pivoted
     
-    return beta
-
-
-def qr_solve_gpu(
-    X: 'torch.Tensor',
-    y: 'torch.Tensor',
-    check_rank: bool
-) -> NDArray[np.floating[Any]]:
-    """
-    Solve least squares via QR decomposition (GPU).
-    
-    Args:
-        X: Design matrix tensor (n x p), on GPU
-        y: Response vector tensor (n,), on GPU
-        check_rank: If True, raise SingularMatrixError on rank-deficient X
-        
-    Returns:
-        Coefficient vector β as NumPy array (p,)
-        
-    Raises:
-        SingularMatrixError: If X is rank-deficient and check_rank=True
-    """
-    import torch
-    
-    n, p = X.shape
-    qr_result = qr_gpu(X, mode='reduced')
-    
-    if check_rank and qr_result.rank < p:
-        raise SingularMatrixError(
-            f"Design matrix is rank-deficient: rank={qr_result.rank}, expected={p}. "
-            f"This indicates perfect multicollinearity.",
-            matrix_name='X',
-            rank=qr_result.rank,
-            expected_rank=p
-        )
-    
-    # Move QR results back to GPU for the solve
-    Q_gpu = torch.from_numpy(qr_result.Q).to(X.device)
-    R_gpu = torch.from_numpy(qr_result.R).to(X.device)
-    
-    # β = R⁻¹ Q'y
-    Qty = Q_gpu.T @ y
-    beta = torch.linalg.solve_triangular(R_gpu[:p, :p], Qty[:p].unsqueeze(1), upper=True)
-    
-    return beta.squeeze().cpu().numpy()
+    return coef, qr_result

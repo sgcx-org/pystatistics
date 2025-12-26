@@ -1,5 +1,7 @@
 """
 CPU reference backend for linear regression.
+
+Uses pivoted QR decomposition to match R's lm() exactly.
 """
 
 from typing import Any
@@ -7,13 +9,13 @@ import numpy as np
 
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
-from pystatistics.core.compute.linalg.qr import qr_solve_cpu, qr_cpu
+from pystatistics.core.compute.linalg.qr import qr_solve
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearParams
 
 
 class CPUQRBackend:
-    """CPU backend using QR decomposition."""
+    """CPU backend using QR decomposition with column pivoting."""
     
     @property
     def name(self) -> str:
@@ -26,11 +28,8 @@ class CPUQRBackend:
         X, y = design.X, design.y
         n, p = design.n, design.p
         
-        with timer.section('qr_decomposition'):
-            qr_result = qr_cpu(X, mode='reduced')
-            
-        with timer.section('solve'):
-            coefficients = qr_solve_cpu(X, y, check_rank=True)
+        with timer.section('qr_solve'):
+            coefficients, qr_result = qr_solve(X, y)
         
         with timer.section('residuals'):
             fitted_values = X @ coefficients
@@ -54,7 +53,11 @@ class CPUQRBackend:
         
         return Result(
             params=params,
-            info={'method': 'qr', 'rank': qr_result.rank},
+            info={
+                'method': 'qr_pivoted',
+                'rank': qr_result.rank,
+                'pivot': qr_result.pivot.tolist(),
+            },
             timing=timer.result(),
             backend_name=self.name,
             warnings=(),

@@ -81,7 +81,11 @@ class Design:
             X_arr = source['X']
         elif y is not None:
             # X = all columns except y
-            x_cols = sorted(k for k in source.keys() if k != y)
+            # Preserve original column order from source
+            if 'columns' in source.metadata:
+                x_cols = [c for c in source.metadata['columns'] if c != y]
+            else:
+                x_cols = [k for k in source.keys() if k != y]
             if not x_cols:
                 raise ValueError("No predictor columns available")
             X_arr = _get_columns(source, x_cols)
