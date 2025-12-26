@@ -1,9 +1,13 @@
 """
 Regression backends.
 
-Available:
-    CPUQRBackend: CPU reference using QR decomposition
-    GPUQRBackend: GPU using PyTorch (stub)
+Available backends:
+    CPUQRBackend: CPU reference implementation using QR decomposition
+    GPUQRBackend: GPU implementation using PyTorch (stub)
 """
 
-__all__: list[str] = []
+from pystatistics.regression.backends.cpu import CPUQRBackend
+
+__all__ = [
+    "CPUQRBackend",
+]
