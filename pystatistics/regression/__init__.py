@@ -1,32 +1,28 @@
 """
 Linear and generalized linear models.
 
-This module provides linear regression (OLS) and will eventually include
-generalized linear models (GLM) with various link functions.
-
-Public API:
-    fit(X, y, ...) -> LinearSolution
+Usage:
+    from pystatistics import DataSource
+    from pystatistics.regression import Design, fit
     
-The fit() function is the only entry point. It handles:
-    - Input validation
-    - Design construction
-    - Backend selection
-    - Result wrapping
-
-Example:
-    >>> from pystatistics.regression import fit
-    >>> result = fit(X, y)
-    >>> print(result.coefficients)
-    >>> print(result.summary())
+    # From DataSource
+    ds = DataSource.from_file("data.csv")
+    design = Design.from_datasource(ds, y='target')
+    result = fit(design)
+    
+    # From arrays (convenience)
+    result = fit(X, y)
 """
 
-from pystatistics.regression.design import RegressionDesign
+from pystatistics.core.datasource import DataSource
+from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearSolution, LinearParams
 from pystatistics.regression.solvers import fit
 
 __all__ = [
     "fit",
-    "RegressionDesign",
+    "Design",
+    "DataSource",
     "LinearSolution",
     "LinearParams",
 ]
