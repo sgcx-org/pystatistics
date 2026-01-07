@@ -65,8 +65,15 @@ def _get_backend(choice: BackendChoice, design: Design):
     """Select backend."""
     if choice == 'auto':
         device = select_device('auto')
-        # GPU backend not yet implemented
-        return CPUQRBackend()
+        if device == 'cuda':
+            try:
+                from pystatistics.regression.backends.gpu import GPUQRBackend
+                return GPUQRBackend()
+            except (ImportError, RuntimeError):
+                # Fall back to CPU if GPU unavailable
+                return CPUQRBackend()
+        else:
+            return CPUQRBackend()
     elif choice in ('cpu', 'cpu_qr'):
         return CPUQRBackend()
     elif choice == 'cpu_svd':
