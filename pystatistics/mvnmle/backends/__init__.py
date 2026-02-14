@@ -2,4 +2,6 @@
 MVN MLE backends.
 """
 
-__all__: list[str] = []
+from pystatistics.mvnmle.backends.cpu import CPUMLEBackend
+
+__all__ = ['CPUMLEBackend']
