@@ -1,0 +1,6 @@
+{
+  "name": "desc_nan_columnwise",
+  "n": 60,
+  "p": 5,
+  "description": "Structured NaN with varying rates per column, 60x5"
+}

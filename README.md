@@ -82,10 +82,26 @@ Consumer GPUs (NVIDIA RTX series) execute FP32 at 5-10x the throughput of FP64. 
 ## Quick Start
 
 ```python
-from pystatistics.regression import fit
 import numpy as np
 
-# Linear regression
+# --- Descriptive statistics ---
+from pystatistics.descriptive import describe, cor, quantile
+
+data = np.random.randn(1000, 5)
+result = describe(data)
+print(result.mean, result.sd, result.skewness, result.kurtosis)
+
+# Correlation (Pearson, Spearman, Kendall)
+r = cor(data, method='spearman')
+print(r.correlation_matrix)
+
+# Quantiles (all 9 R types supported)
+q = quantile(data, type=7)
+print(q.quantiles)
+
+# --- Linear regression ---
+from pystatistics.regression import fit
+
 X = np.random.randn(1000, 5)
 y = X @ [1, 2, 3, -1, 0.5] + np.random.randn(1000) * 0.1
 result = fit(X, y)
@@ -107,7 +123,7 @@ result = fit(X, y, backend='gpu')
 | `regression/` LM | Complete | Linear models (OLS) with CPU QR and GPU Cholesky |
 | `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson) via IRLS |
 | `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
-| `descriptive/` | Planned | Descriptive statistics, correlation, quantiles |
+| `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
 | `hypothesis/` | Planned | t-tests, chi-squared, nonparametric tests |
 | `survival/` | Planned | Survival analysis (Cox PH, discrete-time, Kaplan-Meier) |
 | `anova/` | Planned | Analysis of variance (wrapper on regression/) |

@@ -1,0 +1,6 @@
+{
+  "name": "desc_basic_100x5",
+  "n": 100,
+  "p": 5,
+  "description": "Basic 100x5 normal data, no NaN, moderate correlation"
+}

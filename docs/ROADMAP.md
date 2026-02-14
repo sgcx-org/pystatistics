@@ -1,6 +1,6 @@
 # PyStatistics Roadmap
 
-**Last Updated:** February 2025
+**Last Updated:** February 2026
 
 ---
 
@@ -55,14 +55,14 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 9 fixture scenarios against R (basic, balanced, separated, zeros, large counts, scale tests)
 - **API**: `fit(X, y, family='binomial') → GLMSolution`
 
-### Planned
-
 #### `descriptive/` — Descriptive Statistics
-- **Priority**: HIGH (foundational — used by other modules and by users directly)
-- **Scope**: Mean, variance, standard deviation, covariance matrices, correlation (Pearson, Spearman, Kendall), quantiles, skewness, kurtosis, summary tables
-- **GPU applicability**: MODERATE — reduction operations (sum, sum-of-squares) parallelize well for large n; rank-based statistics (Spearman, Kendall) are harder
-- **R validation**: `cor()`, `cov()`, `var()`, `summary()`, `quantile()`
-- **Note**: Some of this overlaps with numpy. The value-add is (a) exact R matching for edge cases (e.g., Bessel correction, quantile types) and (b) GPU acceleration for large datasets
+- **CPU backend**: Mean, variance (Bessel-corrected), SD, covariance matrices, correlation (Pearson, Spearman via ranked Pearson, Kendall tau-b), all 9 R quantile types (Hyndman & Fan 1996), bias-adjusted skewness and kurtosis (e1071 type 2), six-number summary
+- **GPU backend**: PyTorch FP32 for mean/var/SD/covariance/Pearson/skewness/kurtosis; CPU fallback for Spearman (scipy rankdata), Kendall (scipy kendalltau), quantiles (exact R matching)
+- **Missing data**: R-compatible modes — `use='everything'` (propagate NaN), `'complete.obs'` (listwise deletion), `'pairwise.complete.obs'` (pairwise deletion for cov/cor)
+- **Validated**: 10 fixture scenarios against R (basic, large-scale, scattered NaN, columnwise NaN, perfect correlation, ties, single column, constant column, extreme values, negative correlation) — 190 parametrized R validation tests at rtol=1e-10
+- **API**: `describe(data)`, `cor(x)`, `cov(x)`, `var(x)`, `quantile(x, type=7)`, `summary(x)`
+
+### Planned
 
 #### `hypothesis/` — Hypothesis Testing
 - **Priority**: MEDIUM
@@ -125,8 +125,8 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 
 | Order | Module | Rationale |
 |-------|--------|-----------|
-| 1 | `regression/` GLM | Extends existing module; unlocks discrete-time survival and ANOVA |
-| 2 | `descriptive/` | Foundational; every analysis starts with descriptive stats |
+| ~~1~~ | ~~`regression/` GLM~~ | ~~Extends existing module; unlocks discrete-time survival and ANOVA~~ ✅ |
+| ~~2~~ | ~~`descriptive/`~~ | ~~Foundational; every analysis starts with descriptive stats~~ ✅ |
 | 3 | `hypothesis/` | Natural companion to descriptive stats |
 | 4 | `survival/` | Independent, high demand in biostatistics and clinical trials |
 | 5 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |

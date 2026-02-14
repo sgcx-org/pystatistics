@@ -1,0 +1,6 @@
+{
+  "name": "desc_perfect_correlation",
+  "n": 50,
+  "p": 3,
+  "description": "Cols 0 and 1 perfectly correlated (r=1), col 2 independent"
+}

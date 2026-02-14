@@ -1,0 +1,6 @@
+{
+  "name": "desc_nan_scattered",
+  "n": 50,
+  "p": 4,
+  "description": "Scattered NaN (~10%), 50x4"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "desc_constant_column",
+  "n": 40,
+  "p": 3,
+  "description": "Col 1 is constant (var=0), cols 0 and 2 normal, 40x3"
+}

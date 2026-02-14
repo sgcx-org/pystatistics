@@ -23,10 +23,12 @@ __email__ = "contact@sgcx.org"
 from pystatistics.core.datasource import DataSource
 from pystatistics import regression
 from pystatistics import mvnmle
+from pystatistics import descriptive
 
 __all__ = [
     "__version__",
     "DataSource",
     "regression",
     "mvnmle",
+    "descriptive",
 ]

@@ -1,0 +1,6 @@
+{
+  "name": "desc_negative_correlation",
+  "n": 100,
+  "p": 3,
+  "description": "Strong negative (0-1) and positive (0-2) correlations"
+}

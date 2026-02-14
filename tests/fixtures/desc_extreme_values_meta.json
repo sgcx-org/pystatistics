@@ -1,0 +1,6 @@
+{
+  "name": "desc_extreme_values",
+  "n": 50,
+  "p": 3,
+  "description": "Extreme magnitudes: col0 ~1e6, col1 ~1e-6, col2 ~1"
+}

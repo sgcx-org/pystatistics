@@ -1,0 +1,6 @@
+{
+  "name": "desc_ties",
+  "n": 80,
+  "p": 3,
+  "description": "Integer and rounded data with many ties, 80x3"
+}
