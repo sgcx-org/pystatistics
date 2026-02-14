@@ -1,0 +1,13 @@
+{
+  "name": "basic_100x3",
+  "n": 100,
+  "p": 3,
+  "beta_true": [
+    1.0,
+    2.0,
+    -0.5
+  ],
+  "condition_number": 1.1201928574859268,
+  "sigma": 0.5,
+  "description": "Basic well-conditioned regression with intercept"
+}

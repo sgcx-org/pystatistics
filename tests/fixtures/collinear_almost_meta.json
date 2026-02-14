@@ -1,0 +1,14 @@
+{
+  "name": "collinear_almost",
+  "n": 100,
+  "p": 4,
+  "beta_true": [
+    1.0,
+    2.0,
+    -1.0,
+    0.5
+  ],
+  "condition_number": 285.16315797698104,
+  "sigma": 0.5,
+  "description": "Near-collinear predictors (x3 \u2248 x1 + x2)"
+}

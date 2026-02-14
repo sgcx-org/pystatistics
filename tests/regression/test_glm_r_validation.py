@@ -34,6 +34,8 @@ def _discover_glm_fixtures():
 
 
 GLM_FIXTURE_NAMES = _discover_glm_fixtures()
+# Note: when no fixtures exist, conftest.py's collect_ignore_glob prevents
+# this module from being collected at all, avoiding NOTSET parametrize entries.
 
 
 @lru_cache(maxsize=None)

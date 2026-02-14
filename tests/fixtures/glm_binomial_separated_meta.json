@@ -1,0 +1,13 @@
+{
+  "name": "glm_binomial_separated",
+  "n": 100,
+  "p": 2,
+  "family": "binomial",
+  "link": "logit",
+  "beta_true": [
+    0.0,
+    3.0
+  ],
+  "prevalence": 0.5,
+  "description": "Near-separated logistic regression (large coefficients expected)"
+}

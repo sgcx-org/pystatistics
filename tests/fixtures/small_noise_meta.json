@@ -1,0 +1,14 @@
+{
+  "name": "small_noise",
+  "n": 100,
+  "p": 3,
+  "beta_true": [
+    1.0,
+    2.0,
+    -0.5
+  ],
+  "condition_number": 1.2139490500247256,
+  "sigma": 1e-06,
+  "expected_r2": "very close to 1.0",
+  "description": "Nearly perfect fit"
+}

@@ -71,7 +71,8 @@ def _tolerances(is_ill_conditioned):
     return dict(rtol=1e-10, atol=1e-12)
 
 
-@pytest.mark.skipif(not FIXTURE_NAMES, reason="No R fixtures found. Run generate_fixtures.py and run_r_validation.R first.")
+# Note: when no fixtures exist, conftest.py's collect_ignore_glob prevents
+# this module from being collected at all, avoiding NOTSET parametrize entries.
 class TestRValidation:
     """Validate each fixture against R reference."""
 

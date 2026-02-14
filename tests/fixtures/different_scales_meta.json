@@ -1,0 +1,14 @@
+{
+  "name": "different_scales",
+  "n": 100,
+  "p": 4,
+  "beta_true": [
+    1.0,
+    1000000.0,
+    1.0,
+    1e-06
+  ],
+  "condition_number": 866423503218.742,
+  "sigma": 0.5,
+  "description": "Predictors on vastly different scales"
+}

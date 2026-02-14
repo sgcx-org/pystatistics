@@ -1,0 +1,14 @@
+{
+  "name": "glm_gaussian_basic",
+  "n": 100,
+  "p": 3,
+  "family": "gaussian",
+  "link": "identity",
+  "beta_true": [
+    1.0,
+    2.0,
+    -0.5
+  ],
+  "sigma": 0.5,
+  "description": "Gaussian GLM with identity link (must match OLS exactly)"
+}

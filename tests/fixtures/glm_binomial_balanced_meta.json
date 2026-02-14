@@ -1,0 +1,16 @@
+{
+  "name": "glm_binomial_balanced",
+  "n": 500,
+  "p": 5,
+  "family": "binomial",
+  "link": "logit",
+  "beta_true": [
+    0.0,
+    0.8,
+    -0.6,
+    0.4,
+    -0.3
+  ],
+  "prevalence": 0.484,
+  "description": "Balanced logistic regression with 5 predictors"
+}

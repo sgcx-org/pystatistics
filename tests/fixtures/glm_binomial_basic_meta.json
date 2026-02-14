@@ -1,0 +1,14 @@
+{
+  "name": "glm_binomial_basic",
+  "n": 200,
+  "p": 3,
+  "family": "binomial",
+  "link": "logit",
+  "beta_true": [
+    0.5,
+    1.0,
+    -0.8
+  ],
+  "prevalence": 0.51,
+  "description": "Standard logistic regression"
+}

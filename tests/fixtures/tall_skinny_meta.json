@@ -1,0 +1,15 @@
+{
+  "name": "tall_skinny",
+  "n": 1000,
+  "p": 5,
+  "beta_true": [
+    0.5,
+    1.0,
+    -1.5,
+    2.0,
+    -0.25
+  ],
+  "condition_number": 1.12212942917482,
+  "sigma": 1.0,
+  "description": "Tall skinny matrix n >> p"
+}

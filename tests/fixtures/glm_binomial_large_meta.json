@@ -1,0 +1,21 @@
+{
+  "name": "glm_binomial_large",
+  "n": 5000,
+  "p": 10,
+  "family": "binomial",
+  "link": "logit",
+  "beta_true": [
+    0.2,
+    0.5,
+    -0.3,
+    0.4,
+    -0.2,
+    0.6,
+    -0.4,
+    0.3,
+    -0.5,
+    0.1
+  ],
+  "prevalence": 0.535,
+  "description": "Large logistic regression for scale testing"
+}

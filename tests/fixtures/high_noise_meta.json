@@ -1,0 +1,14 @@
+{
+  "name": "high_noise",
+  "n": 100,
+  "p": 3,
+  "beta_true": [
+    1.0,
+    2.0,
+    -0.5
+  ],
+  "condition_number": 1.2103399052441306,
+  "sigma": 5.0,
+  "expected_r2": "around 0.5 or less",
+  "description": "High residual variance"
+}

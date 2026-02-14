@@ -1,0 +1,14 @@
+{
+  "name": "no_intercept",
+  "n": 100,
+  "p": 3,
+  "beta_true": [
+    2.0,
+    -1.0,
+    0.5
+  ],
+  "condition_number": 1.4414010311375334,
+  "sigma": 0.3,
+  "centered": true,
+  "description": "Centered data, no intercept term"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "glm_poisson_zeros",
+  "n": 200,
+  "p": 3,
+  "family": "poisson",
+  "link": "log",
+  "beta_true": [
+    -0.5,
+    0.3,
+    -0.2
+  ],
+  "mean_count": 0.52,
+  "zero_fraction": 0.605,
+  "description": "Poisson regression with many zeros (low lambda)"
+}

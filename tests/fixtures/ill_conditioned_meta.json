@@ -1,0 +1,17 @@
+{
+  "name": "ill_conditioned",
+  "n": 100,
+  "p": 6,
+  "beta_true": [
+    1.0,
+    0.5,
+    -0.3,
+    0.2,
+    -0.1,
+    0.05
+  ],
+  "condition_number": 1005091.4336163155,
+  "sigma": 0.1,
+  "target_condition": 1000000.0,
+  "description": "Ill-conditioned matrix with high condition number"
+}

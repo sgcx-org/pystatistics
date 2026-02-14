@@ -1,0 +1,15 @@
+{
+  "name": "glm_poisson_large_counts",
+  "n": 300,
+  "p": 3,
+  "family": "poisson",
+  "link": "log",
+  "beta_true": [
+    3.0,
+    0.4,
+    -0.3
+  ],
+  "mean_count": 20.773333333333333,
+  "max_count": 45.0,
+  "description": "Poisson regression with large counts"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "glm_poisson_basic",
+  "n": 200,
+  "p": 3,
+  "family": "poisson",
+  "link": "log",
+  "beta_true": [
+    1.0,
+    0.5,
+    -0.3
+  ],
+  "mean_count": 3.27,
+  "description": "Standard Poisson regression with moderate counts"
+}

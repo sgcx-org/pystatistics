@@ -106,8 +106,11 @@ Thumbs.db
 .benchmarks/
 fixtures/*.pkl
 
-# big files
-*.csv
+# Large binary / data files (blacklist specific patterns, not all JSON/CSV)
 *.h5
-*.json
-!tests/**/references/*.json
+*.pkl
+
+# Fixture CSVs and JSONs ARE tracked — they're small test data.
+# Only block genuinely large generated artifacts:
+benchmarks/**/*.csv
+benchmarks/**/*.json
