@@ -110,3 +110,4 @@ fixtures/*.pkl
 *.csv
 *.h5
 *.json
+!tests/**/references/*.json
