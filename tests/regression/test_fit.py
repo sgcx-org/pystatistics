@@ -54,7 +54,9 @@ class TestFitBasic:
         ])
         y = X @ [1.0, 2.0, -0.5] + rng.standard_normal(n) * 0.1
         result = fit(X, y)
-        assert abs(result.residuals.sum()) < 1e-10
+        # GPU FP32 has looser numerical guarantees than CPU FP64
+        tol = 1e-4 if 'gpu' in result.backend_name else 1e-10
+        assert abs(result.residuals.sum()) < tol
 
 
 class TestFitProperties:
@@ -82,21 +84,25 @@ class TestFitProperties:
     def test_fitted_plus_residuals_equals_y(self, simple_regression_data):
         X, y, _ = simple_regression_data
         result = fit(X, y)
+        # GPU FP32 arithmetic introduces more rounding than CPU FP64
+        tol = 1e-4 if 'gpu' in result.backend_name else 1e-12
         np.testing.assert_allclose(
-            result.fitted_values + result.residuals, y, atol=1e-12
+            result.fitted_values + result.residuals, y, atol=tol
         )
 
     def test_rss_matches_residuals(self, simple_regression_data):
         X, y, _ = simple_regression_data
         result = fit(X, y)
         expected_rss = float(result.residuals @ result.residuals)
-        assert abs(result.rss - expected_rss) < 1e-12
+        tol = 1e-4 if 'gpu' in result.backend_name else 1e-12
+        assert abs(result.rss - expected_rss) < tol
 
     def test_r_squared_formula(self, simple_regression_data):
         X, y, _ = simple_regression_data
         result = fit(X, y)
         expected = 1.0 - result.rss / result.tss
-        assert abs(result.r_squared - expected) < 1e-15
+        tol = 1e-6 if 'gpu' in result.backend_name else 1e-15
+        assert abs(result.r_squared - expected) < tol
 
     def test_summary_runs(self, simple_regression_data):
         X, y, _ = simple_regression_data
@@ -108,27 +114,32 @@ class TestFitProperties:
 
 
 class TestFitRankDeficient:
-    """Test behavior with rank-deficient data."""
+    """Test behavior with rank-deficient data.
+
+    Uses CPU backend explicitly — rank detection via QR pivot is a CPU
+    feature. On GPU, collinear data triggers the condition number check
+    (NumericalError) before reaching rank detection.
+    """
 
     def test_collinear_rank_detection(self, collinear_data):
         X, y = collinear_data
-        result = fit(X, y)
+        result = fit(X, y, backend='cpu')
         assert result.rank < X.shape[1]
 
     def test_collinear_has_nan_se(self, collinear_data):
         X, y = collinear_data
-        result = fit(X, y)
+        result = fit(X, y, backend='cpu')
         # At least one SE should be NaN (aliased coefficient)
         assert np.any(np.isnan(result.standard_errors))
 
     def test_collinear_has_nan_t(self, collinear_data):
         X, y = collinear_data
-        result = fit(X, y)
+        result = fit(X, y, backend='cpu')
         assert np.any(np.isnan(result.t_statistics))
 
     def test_collinear_has_nan_pv(self, collinear_data):
         X, y = collinear_data
-        result = fit(X, y)
+        result = fit(X, y, backend='cpu')
         assert np.any(np.isnan(result.p_values))
 
 

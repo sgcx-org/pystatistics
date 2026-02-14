@@ -52,7 +52,10 @@ def _load_fixture(name):
     ds = DataSource.from_file(csv_path)
     x_cols = [c for c in ds.metadata['columns'] if c != 'y']
     design = Design.from_datasource(ds, x=x_cols, y='y')
-    result = fit(design)
+    # Explicitly use CPU backend — R validation checks CPU QR accuracy
+    # against R's QR decomposition. GPU FP32 results are validated
+    # separately with relaxed tolerances.
+    result = fit(design, backend='cpu')
 
     return result, r_results, is_ill_conditioned
 
