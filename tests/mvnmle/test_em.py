@@ -105,42 +105,56 @@ class TestEMMissvalsDataset:
 # =====================================================================
 
 class TestEMMatchesDirect:
-    """EM and direct BFGS should converge to the same MLE."""
+    """EM and direct BFGS should converge to the same MLE.
+
+    Both algorithms are forced to backend='cpu' so they use the same
+    FP64 precision. On GPU (FP32), direct MLE may converge to a less
+    precise solution, making the comparison unfair.
+    """
 
     def test_apple_loglik_agrees(self):
-        em = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct')
+        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=10000)
+        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
         assert abs(em.loglik - direct.loglik) < 1e-6, (
             f"EM loglik {em.loglik} differs from direct {direct.loglik} "
             f"by {abs(em.loglik - direct.loglik)}"
         )
 
     def test_apple_means_agree(self):
-        em = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct')
+        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=10000)
+        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
         np.testing.assert_allclose(em.muhat, direct.muhat, rtol=1e-4)
 
     def test_apple_covariance_agrees(self):
-        em = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct')
+        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=10000)
+        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
         np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=1e-4)
 
     def test_missvals_loglik_agrees(self):
-        em = mlest(datasets.missvals, algorithm='em', tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', max_iter=500)
+        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=100000)
+        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
+                       max_iter=500)
         assert abs(em.loglik - direct.loglik) < 1e-4, (
             f"EM loglik {em.loglik} differs from direct {direct.loglik} "
             f"by {abs(em.loglik - direct.loglik)}"
         )
 
     def test_missvals_means_agree(self):
-        em = mlest(datasets.missvals, algorithm='em', tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', max_iter=500)
+        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=100000)
+        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
+                       max_iter=500)
         np.testing.assert_allclose(em.muhat, direct.muhat, rtol=5e-3)
 
     def test_missvals_covariance_agrees(self):
-        em = mlest(datasets.missvals, algorithm='em', tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', max_iter=500)
+        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
+                   tol=1e-8, max_iter=100000)
+        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
+                       max_iter=500)
         np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=5e-3)
 
 
@@ -240,7 +254,7 @@ class TestEMSolutionInterface:
 
     def test_backend_name(self):
         result = mlest(datasets.apple, algorithm='em')
-        assert result.backend_name == 'cpu_em'
+        assert result.backend_name.endswith('_em')
 
     def test_gradient_norm_is_none(self):
         result = mlest(datasets.apple, algorithm='em')
@@ -256,17 +270,16 @@ class TestAlgorithmParameter:
 
     def test_default_is_direct(self):
         result = mlest(datasets.apple)
-        assert 'bfgs' in result.backend_name.lower() or 'cpu' in result.backend_name.lower()
-        assert result.backend_name != 'cpu_em'
+        assert '_em' not in result.backend_name
 
     def test_explicit_direct(self):
         result = mlest(datasets.apple, algorithm='direct')
         assert result.converged
-        assert result.backend_name != 'cpu_em'
+        assert '_em' not in result.backend_name
 
     def test_explicit_em(self):
         result = mlest(datasets.apple, algorithm='em')
-        assert result.backend_name == 'cpu_em'
+        assert result.backend_name.endswith('_em')
 
     def test_invalid_algorithm_raises(self):
         with pytest.raises(ValueError, match="Unknown algorithm"):
