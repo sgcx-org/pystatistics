@@ -1,0 +1,41 @@
+{
+  "generation_date": "2025-07-14",
+  "r_version": "R version 4.3.3 (2024-02-29)",
+  "package_versions": {
+    "mvnmle": "0.1.11.2",
+    "BaylorEdPsych": "0.5"
+  },
+  "datasets_processed": ["apple", "missvals", "complete", "simple_mcar", "extreme"],
+  "results_summary": {
+    "apple": {
+      "chi_square": 7.3578,
+      "p_value": 0.0067,
+      "df": 1,
+      "mcar_rejected": true
+    },
+    "missvals": {
+      "chi_square": null,
+      "p_value": null,
+      "df": null,
+      "mcar_rejected": null
+    },
+    "complete": {
+      "chi_square": 0,
+      "p_value": 1,
+      "df": 0,
+      "mcar_rejected": false
+    },
+    "simple_mcar": {
+      "chi_square": 4.3375,
+      "p_value": 0.8255,
+      "df": 8,
+      "mcar_rejected": false
+    },
+    "extreme": {
+      "chi_square": null,
+      "p_value": null,
+      "df": null,
+      "mcar_rejected": null
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "dataset_name": "complete",
+  "test_statistic": 0,
+  "p_value": 1,
+  "df": 0,
+  "n_patterns": 1,
+  "n_observations": 50,
+  "n_variables": 3,
+  "missing_rate": 0,
+  "note": "No missing data - MCAR test not applicable",
+  "patterns_info": {
+    "complete": 50
+  }
+}

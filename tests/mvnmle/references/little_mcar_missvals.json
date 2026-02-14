@@ -1,0 +1,10 @@
+{
+  "test_statistic": null,
+  "p_value": null,
+  "df": null,
+  "n_patterns": 3,
+  "note": "Calculated manually due to LittleMCAR failure",
+  "dataset_name": "missvals",
+  "method": "manual",
+  "original_error": {}
+}

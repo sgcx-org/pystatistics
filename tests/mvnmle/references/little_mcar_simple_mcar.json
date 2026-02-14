@@ -1,0 +1,50 @@
+{
+  "dataset_name": "simple_mcar",
+  "test_statistic": 4.3375267547,
+  "p_value": 0.82545937853,
+  "df": 8,
+  "n_patterns": 6,
+  "amount_missing": [
+    [11, 10, 9],
+    [0.11, 0.1, 0.09]
+  ],
+  "n_observations": 100,
+  "n_variables": 3,
+  "missing_rate": 0.1,
+  "pattern_counts": {
+    "FALSEFALSETRUE": 1,
+    "FALSETRUEFALSE": 1,
+    "FALSETRUETRUE": 9,
+    "TRUEFALSETRUE": 9,
+    "TRUETRUEFALSE": 8,
+    "TRUETRUETRUE": 72
+  },
+  "method": "BaylorEdPsych",
+  "pattern_details": {
+    "DataSet1": {
+      "n_obs": 72,
+      "observed_vars": ["V1", "V2", "V3"]
+    },
+    "DataSet2": {
+      "n_obs": 9,
+      "observed_vars": ["V2", "V3"]
+    },
+    "DataSet3": {
+      "n_obs": 9,
+      "observed_vars": ["V1", "V3"]
+    },
+    "DataSet4": {
+      "n_obs": 1,
+      "observed_vars": "V3"
+    },
+    "DataSet5": {
+      "n_obs": 8,
+      "observed_vars": ["V1", "V2"]
+    },
+    "DataSet6": {
+      "n_obs": 1,
+      "observed_vars": "V2"
+    }
+  },
+  "pooled_loglik_verify": -128.7902853088
+}

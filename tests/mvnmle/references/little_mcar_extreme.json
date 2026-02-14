@@ -1,0 +1,10 @@
+{
+  "test_statistic": null,
+  "p_value": null,
+  "df": null,
+  "n_patterns": 4,
+  "note": "Calculated manually due to LittleMCAR failure",
+  "dataset_name": "extreme",
+  "method": "manual",
+  "original_error": "infinite or missing values in 'x'"
+}
