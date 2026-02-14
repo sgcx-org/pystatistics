@@ -67,7 +67,10 @@ packages = ["pystatistics"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -m 'not slow'"
+markers = [
+    "slow: marks tests as slow (GPU stress, large-scale). Deselected by default. Run with: pytest -m slow",
+]
 
 [tool.ruff]
 target-version = "py311"

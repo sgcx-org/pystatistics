@@ -62,9 +62,10 @@ def _make_data(n, p, rng, snr=10.0):
 # Skip conditions
 # ---------------------------------------------------------------------------
 
-pytestmark = pytest.mark.skipif(
-    not _gpu_available(), reason="No GPU available"
-)
+pytestmark = [
+    pytest.mark.skipif(not _gpu_available(), reason="No GPU available"),
+    pytest.mark.slow,
+]
 
 
 # ---------------------------------------------------------------------------
