@@ -89,15 +89,22 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **R validation**: `survival::coxph()`, `survival::survfit()`, `survival::Surv()`
 - **Note**: This is a key reason discrete-time survival matters — it brings GPU acceleration to survival analysis, where Cox PH fundamentally cannot
 
-#### `longitudinal/` — Longitudinal and Mixed Models
-- **Priority**: LOW (complex, depends on `regression/` GLM)
-- **Scope**:
-  - Linear mixed models (LMM)
-  - Generalized linear mixed models (GLMM)
-  - GEE (Generalized Estimating Equations)
-- **GPU applicability**: HIGH — iterative estimation with large cross-products at each step; the inner WLS/penalized LS loop in GLMM is where GPU wins
+#### `regression/` — Linear and Generalized Linear Mixed Models (LMM / GLMM)
+- **Priority**: LOW (most complex extension of regression; depends on GLM being solid)
+- **Scope**: LMM (random intercepts, random slopes, nested/crossed designs), GLMM (Binomial, Poisson families with random effects)
+- **Algorithm**: Outer optimization over variance components (profiled deviance for LMM, penalized quasi-likelihood or adaptive Gauss-Hermite quadrature for GLMM), with an inner penalized IRLS loop reusing the existing family/link/IRLS infrastructure from GLM
+- **GPU applicability**: HIGH — the inner penalized WLS step at each iteration is dense linear algebra on (X|Z) augmented design matrices, same GPU pattern as GLM
 - **R validation**: `lme4::lmer()`, `lme4::glmer()`
-- **Note**: Most complex module. LMM/GLMM estimation involves iterative optimization over variance components with a WLS or penalized least squares inner loop
+- **Integration point**: `regression/backends/cpu_lmm.py`, `gpu_lmm.py`, `cpu_glmm.py`, `gpu_glmm.py`. Shares `families.py`, links, and IRLS convergence machinery from GLM
+- **Note**: Most complex planned extension of `regression/`. LMM is the natural entry point (profiled deviance is well-understood); GLMM adds the family/link layer on top
+
+#### `regression/` — Generalized Estimating Equations (GEE)
+- **Priority**: LOW (depends on GLM; simpler than LMM/GLMM but less commonly requested)
+- **Scope**: Marginal models for correlated data with working correlation structures (independence, exchangeable, AR(1), unstructured)
+- **Algorithm**: Modified IRLS — same score equations as GLM but with a working correlation matrix in the weight step, plus sandwich (robust) covariance estimation
+- **GPU applicability**: MODERATE — IRLS inner loop same as GLM; the sandwich covariance computation involves cluster-level sums that parallelize on GPU
+- **R validation**: `geepack::geeglm()`
+- **Note**: GEE estimates population-averaged (marginal) parameters, vs LMM/GLMM which estimate subject-specific (conditional) parameters. Different inferential targets, same `regression/` home. Not inherently longitudinal — handles any correlated data (clustered, spatial, repeated measures)
 
 #### `montecarlo/` — Monte Carlo Methods
 - **Priority**: LOW
@@ -123,7 +130,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | 3 | `hypothesis/` | Natural companion to descriptive stats |
 | 4 | `survival/` | Independent, high demand in biostatistics and clinical trials |
 | 5 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
-| 6 | `longitudinal/` | Complex; depends on GLM being solid |
+| 6 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
 | 7 | `montecarlo/` | GPU showcase; useful but not a blocker |
 | 8 | `timeseries/` | Lowest priority for v1 |
 
