@@ -66,9 +66,10 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 
 #### `hypothesis/` — Hypothesis Testing
 - **Priority**: MEDIUM
-- **Scope**: t-tests (one-sample, two-sample, paired), chi-squared tests, F-tests, Mann-Whitney U, Wilcoxon signed-rank, Kolmogorov-Smirnov, proportion tests, multiple testing corrections (Bonferroni, Holm, FDR/BH)
-- **GPU applicability**: LOW for individual tests; HIGH for permutation tests and multiple testing corrections across thousands of features
-- **R validation**: `t.test()`, `chisq.test()`, `wilcox.test()`, `ks.test()`, `p.adjust()`
+- **Scope**: t-tests (one-sample, two-sample, paired), chi-squared tests (Pearson, likelihood ratio), Fisher's exact test (2×2 and r×c), F-tests, Mann-Whitney U, Wilcoxon signed-rank, Kolmogorov-Smirnov, proportion tests, multiple testing corrections (Bonferroni, Holm, FDR/BH)
+- **GPU applicability**: LOW for individual asymptotic tests (chi-squared, t); **HIGH for exact tests on larger tables** — Fisher's exact test for r×c tables requires enumerating or simulating tables with fixed marginals, which is combinatorially expensive on CPU but parallelizes naturally on GPU. Monte Carlo exact p-values (sampling random tables under the null) are embarrassingly parallel, same pattern as permutation tests.
+- **R validation**: `t.test()`, `chisq.test()`, `fisher.test()`, `wilcox.test()`, `ks.test()`, `p.adjust()`
+- **Note**: For 2×2 tables, Fisher's exact test is trivial (direct hypergeometric computation, no GPU needed). The GPU value appears for r×c tables where the network algorithm or Monte Carlo simulation of exact p-values becomes expensive. Chi-squared remains important as the asymptotic baseline for very large tables where even GPU exact tests become infeasible.
 
 #### `anova/` — Analysis of Variance
 - **Priority**: MEDIUM (depends on `regression/`)
@@ -125,6 +126,30 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | 6 | `longitudinal/` | Complex; depends on GLM being solid |
 | 7 | `montecarlo/` | GPU showcase; useful but not a blocker |
 | 8 | `timeseries/` | Lowest priority for v1 |
+
+---
+
+## GPU Solver Improvements
+
+The current GPU backends use direct solvers: Cholesky normal equations for LM, `torch.linalg.lstsq()` for GLM. These work well for current scales but have known limitations that become important as problems grow. The two improvements below are future work — documented here so the design is captured when the need arises.
+
+### Iterative Solvers (CGLS / LSMR)
+
+- **Priority**: LOW (current Cholesky + lstsq fallback handles all existing test cases)
+- **What**: Add CGLS (Conjugate Gradient Least Squares) and LSMR as alternative GPU solvers in `core/compute/linalg/iterative.py`
+- **Why**: Cholesky requires forming X'X explicitly, which squares the condition number and uses O(p²) memory for the Gram matrix. Iterative methods solve the normal equations *implicitly* — working only with matrix-vector products X·v and X'·w — without ever materializing X'X. This is both more memory-efficient and numerically better-conditioned.
+- **Key insight**: "Exact Estimator, Different Solver." CGLS and LSMR converge to the same OLS solution as Cholesky. The statistical estimator (β = (X'X)⁻¹X'y) doesn't change; only the numerical path to computing it changes. All existing validation and tolerance specifications apply unchanged.
+- **Tradeoffs**: Iterative solvers require a convergence tolerance (e.g., `tol=1e-7`) and may need preconditioning for fast convergence. For well-conditioned, moderate-sized problems, Cholesky is simpler and faster. Iterative methods become compelling when n > 10M, when p is large enough that X'X is expensive, or as a foundation for future sparse regression support.
+- **Integration point**: GPU backends (`regression/backends/gpu.py`, `gpu_glm.py`) would gain a `solver='iterative'` option alongside the existing `'cholesky'` and `'lstsq'` paths
+
+### Batched Multi-Problem Regression
+
+- **Priority**: Implement when `montecarlo/` module begins
+- **What**: Solve X·B = Y where Y is n×k (k = thousands of resampled response vectors) in a single batched GPU call
+- **Why**: Bootstrap and permutation tests require thousands of regressions sharing the same design matrix X but with different response vectors. Currently each would require a separate `fit()` call. Batched solve runs all replicates in a single kernel launch.
+- **Key insight**: X'X and its Cholesky factorization are computed once. Only X'y changes per replicate — the marginal cost per additional replicate is one matrix-vector product (X'yᵢ) plus one triangular solve. 10,000 bootstrap replicates run in approximately the time of 2 sequential regressions.
+- **Integration point**: New batched solve primitives in `core/compute/linalg/`, consumed by the `montecarlo/` module's bootstrap and permutation infrastructure
+- **Note**: This is the GPU "killer feature" for Monte Carlo methods. The embarrassingly parallel structure of resampling-based inference maps perfectly onto GPU batch parallelism. This is a stronger argument for GPU than any single regression speedup.
 
 ---
 
