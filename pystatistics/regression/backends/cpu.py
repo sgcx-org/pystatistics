@@ -57,6 +57,7 @@ class CPUQRBackend:
                 'method': 'qr_pivoted',
                 'rank': qr_result.rank,
                 'pivot': qr_result.pivot.tolist(),
+                'R': qr_result.R,
             },
             timing=timer.result(),
             backend_name=self.name,

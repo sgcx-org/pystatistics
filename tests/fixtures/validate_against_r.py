@@ -153,7 +153,14 @@ def validate_fixture(fixture_name: str) -> tuple[bool, list[str], bool]:
         passes.append("t_statistics")
     else:
         errors.append(f"t_statistics: {msg}")
-    
+
+    # p-values
+    ok, msg = compare_arrays('p_values', result.p_values, r_results['p_values'], rtol, atol)
+    if ok:
+        passes.append("p_values")
+    else:
+        errors.append(f"p_values: {msg}")
+
     # Residuals (all)
     ok, msg = compare_arrays('residuals', result.residuals, r_results['residuals_all'], rtol, atol)
     if ok:
