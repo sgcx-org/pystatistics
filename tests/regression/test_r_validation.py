@@ -19,10 +19,15 @@ FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
 def _discover_fixtures():
-    """Find all fixture names that have both CSV and R results."""
+    """Find all LM fixture names that have both CSV and R results.
+
+    Excludes GLM fixtures (glm_*) which are handled by test_glm_r_validation.py.
+    """
     fixtures = []
     for r_file in sorted(FIXTURES_DIR.glob("*_r_results.json")):
         name = r_file.stem.replace("_r_results", "")
+        if name.startswith("glm_"):
+            continue  # GLM fixtures handled separately
         csv_file = FIXTURES_DIR / f"{name}.csv"
         if csv_file.exists():
             fixtures.append(name)
