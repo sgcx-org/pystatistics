@@ -69,6 +69,14 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 18 fixture scenarios against R 4.5.2 — 71 parametrized R validation tests; t-test/chi-squared/prop/KS/var at rtol=1e-10, Fisher OR/CI at rtol=2e-2 (Brent solver vs R exact), Wilcoxon CI algorithmically different (Walsh averages vs R's uniroot)
 - **API**: `t_test(x, y)`, `chisq_test(x)`, `fisher_test(x)`, `wilcox_test(x, y)`, `ks_test(x, y)`, `prop_test(x, n)`, `var_test(x, y)`, `p_adjust(p)`
 
+#### `montecarlo/` — Monte Carlo Methods
+- **CPU backend**: Bootstrap resampling (ordinary, balanced, parametric with ran_gen/mle), permutation testing (two-sample, Phipson-Smyth corrected p-values), five bootstrap CI methods (normal, basic, percentile, BCa, studentized), jackknife influence values for BCa acceleration
+- **GPU backend**: Falls back to CPU for arbitrary user statistics (Python functions cannot run on GPU). GPU acceleration is via the batched multi-problem OLS solver in `core/compute/linalg/batched.py` — one Cholesky factorization for X'X, then k triangular solves for k bootstrap replicates. 10,000 bootstrap regression replicates ≈ time of 2 sequential regressions.
+- **Batched solver**: `batched_ols_solve(X, Y, device)` in `core/compute/linalg/batched.py`. CPU: Cholesky + triangular solve via scipy. GPU: PyTorch Cholesky + torch.linalg.solve_triangular in FP32. Validated against individual `np.linalg.lstsq` to rtol=1e-10 (CPU) and rtol=1e-4 (GPU FP32).
+- **R `boot` API match**: `boot(data, statistic, R)` where statistic receives `(data, indices)` and returns a 1D array. Three stype modes: "i" (indices), "f" (frequencies), "w" (weights). Stratified resampling. `boot_ci()` with all 5 CI types matching R's `boot.ci()`.
+- **Validated**: 10 fixture scenarios against R's `boot` package — 37 parametrized R validation tests; t0 (observed statistic) at rtol=1e-10 (deterministic), bias/SE at moderate tolerance (stochastic — different RNGs), CI endpoints at abs=0.5 (stochastic), permutation p-values at abs=0.05 (stochastic). 133 total tests including unit tests.
+- **API**: `boot(data, statistic, R)`, `boot_ci(boot_out, type='all')`, `permutation_test(x, y, statistic, R)`
+
 ### Planned
 
 #### `anova/` — Analysis of Variance
@@ -106,13 +114,6 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **R validation**: `geepack::geeglm()`
 - **Note**: GEE estimates population-averaged (marginal) parameters, vs LMM/GLMM which estimate subject-specific (conditional) parameters. Different inferential targets, same `regression/` home. Not inherently longitudinal — handles any correlated data (clustered, spatial, repeated measures)
 
-#### `montecarlo/` — Monte Carlo Methods
-- **Priority**: LOW
-- **Scope**: Bootstrap (parametric, nonparametric), permutation tests, Monte Carlo simulation infrastructure, confidence intervals via resampling
-- **GPU applicability**: VERY HIGH — embarrassingly parallel. Running 10,000 bootstrap replicates in parallel on GPU can be 100x+ faster than sequential CPU
-- **R validation**: `boot` package
-- **Note**: This is where GPU shines most. The entire selling point is massive parallelism
-
 #### `timeseries/` — Time Series Analysis
 - **Priority**: LOW
 - **Scope**: TBD — likely ARIMA, state space models, spectral analysis, autocorrelation/partial autocorrelation
@@ -128,10 +129,10 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | ~~1~~ | ~~`regression/` GLM~~ | ~~Extends existing module; unlocks discrete-time survival and ANOVA~~ ✅ |
 | ~~2~~ | ~~`descriptive/`~~ | ~~Foundational; every analysis starts with descriptive stats~~ ✅ |
 | ~~3~~ | ~~`hypothesis/`~~ | ~~Natural companion to descriptive stats~~ ✅ |
-| 4 | `survival/` | Independent, high demand in biostatistics and clinical trials |
-| 5 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
-| 6 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
-| 7 | `montecarlo/` | GPU showcase; useful but not a blocker |
+| ~~4~~ | ~~`montecarlo/`~~ | ~~GPU showcase; general resampling inference~~ ✅ |
+| 5 | `survival/` | Independent, high demand in biostatistics and clinical trials |
+| 6 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
+| 7 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
 | 8 | `timeseries/` | Lowest priority for v1 |
 
 ---
@@ -149,14 +150,14 @@ The current GPU backends use direct solvers: Cholesky normal equations for LM, `
 - **Tradeoffs**: Iterative solvers require a convergence tolerance (e.g., `tol=1e-7`) and may need preconditioning for fast convergence. For well-conditioned, moderate-sized problems, Cholesky is simpler and faster. Iterative methods become compelling when n > 10M, when p is large enough that X'X is expensive, or as a foundation for future sparse regression support.
 - **Integration point**: GPU backends (`regression/backends/gpu.py`, `gpu_glm.py`) would gain a `solver='iterative'` option alongside the existing `'cholesky'` and `'lstsq'` paths
 
-### Batched Multi-Problem Regression
+### Batched Multi-Problem Regression ✅
 
-- **Priority**: Implement when `montecarlo/` module begins
-- **What**: Solve X·B = Y where Y is n×k (k = thousands of resampled response vectors) in a single batched GPU call
-- **Why**: Bootstrap and permutation tests require thousands of regressions sharing the same design matrix X but with different response vectors. Currently each would require a separate `fit()` call. Batched solve runs all replicates in a single kernel launch.
+- **Status**: Implemented in `core/compute/linalg/batched.py`
+- **What**: Solve X·B = Y where Y is n×k (k = thousands of resampled response vectors) in a single batched call
+- **Implementation**: `batched_ols_solve(X, Y, device='auto')` computes X'X and Cholesky factorization once, then solves k right-hand sides via triangular solve. CPU path uses scipy `solve_triangular`; GPU path uses `torch.linalg.cholesky_ex` + `torch.linalg.solve_triangular` in FP32.
 - **Key insight**: X'X and its Cholesky factorization are computed once. Only X'y changes per replicate — the marginal cost per additional replicate is one matrix-vector product (X'yᵢ) plus one triangular solve. 10,000 bootstrap replicates run in approximately the time of 2 sequential regressions.
-- **Integration point**: New batched solve primitives in `core/compute/linalg/`, consumed by the `montecarlo/` module's bootstrap and permutation infrastructure
-- **Note**: This is the GPU "killer feature" for Monte Carlo methods. The embarrassingly parallel structure of resampling-based inference maps perfectly onto GPU batch parallelism. This is a stronger argument for GPU than any single regression speedup.
+- **Validated**: CPU matches `np.linalg.lstsq` to rtol=1e-10 for all k columns. GPU matches CPU to rtol=1e-4. 11 tests including residual bootstrap use case with R=1000 replicates.
+- **Consumed by**: `montecarlo/` module's bootstrap and permutation infrastructure for regression bootstrap (residual bootstrap with shared X, k resampled response vectors)
 
 ---
 

@@ -1,0 +1,9 @@
+{
+  "fixture": "mc_boot_variance",
+  "statistic": "variance",
+  "t0": 3.2570394328373635,
+  "bias": -0.060786627890347944,
+  "se": 1.1249969356563894,
+  "R": 1999,
+  "sim": "ordinary"
+}

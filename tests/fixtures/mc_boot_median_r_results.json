@@ -1,0 +1,9 @@
+{
+  "fixture": "mc_boot_median",
+  "statistic": "median",
+  "t0": 9.6879985143593359,
+  "bias": -0.043743997322550854,
+  "se": 0.58415127563982017,
+  "R": 999,
+  "sim": "ordinary"
+}

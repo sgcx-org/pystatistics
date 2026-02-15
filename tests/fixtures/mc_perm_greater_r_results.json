@@ -1,0 +1,9 @@
+{
+  "fixture": "mc_perm_greater",
+  "observed_stat": 1.8465850861598498,
+  "p_value": 0.0001,
+  "R": 9999,
+  "alternative": "greater",
+  "perm_stats_mean": -0.004061321259797304,
+  "perm_stats_sd": 0.36543979564859075
+}

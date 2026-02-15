@@ -1,0 +1,9 @@
+{
+  "fixture": "mc_perm_not_significant",
+  "observed_stat": -0.096942688695756035,
+  "p_value": 0.63829999999999998,
+  "R": 9999,
+  "alternative": "two.sided",
+  "perm_stats_mean": -0.0024677264275447474,
+  "perm_stats_sd": 0.20441449178107968
+}

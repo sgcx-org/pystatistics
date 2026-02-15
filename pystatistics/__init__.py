@@ -25,6 +25,7 @@ from pystatistics import regression
 from pystatistics import mvnmle
 from pystatistics import descriptive
 from pystatistics import hypothesis
+from pystatistics import montecarlo
 
 __all__ = [
     "__version__",
@@ -33,4 +34,5 @@ __all__ = [
     "mvnmle",
     "descriptive",
     "hypothesis",
+    "montecarlo",
 ]

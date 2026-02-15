@@ -124,6 +124,29 @@ print(result.summary())
 
 # GPU acceleration (any model)
 result = fit(X, y, backend='gpu')
+
+# --- Monte Carlo methods ---
+from pystatistics.montecarlo import boot, boot_ci, permutation_test
+
+# Bootstrap for the mean
+data = np.random.randn(100)
+def mean_stat(data, indices):
+    return np.array([np.mean(data[indices])])
+
+result = boot(data, mean_stat, R=2000, seed=42)
+print(result.t0, result.bias, result.se)
+
+# Bootstrap confidence intervals (all 5 types)
+ci_result = boot_ci(result, type='all')
+print(ci_result.ci['perc'])  # percentile CI
+print(ci_result.ci['bca'])   # BCa CI
+
+# Permutation test
+x = np.random.randn(30)
+y = np.random.randn(30) + 1.0
+def mean_diff(x, y): return np.mean(x) - np.mean(y)
+result = permutation_test(x, y, mean_diff, R=9999, seed=42)
+print(result.p_value, result.summary())
 ```
 
 ## Modules
@@ -135,6 +158,7 @@ result = fit(X, y, backend='gpu')
 | `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
 | `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
 | `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
+| `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
 | `survival/` | Planned | Survival analysis (Cox PH, discrete-time, Kaplan-Meier) |
 | `anova/` | Planned | Analysis of variance (wrapper on regression/) |
 | `regression/` LMM/GLMM | Planned | Linear and generalized linear mixed models |
