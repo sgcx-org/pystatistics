@@ -171,6 +171,34 @@ print(cox.coefficients, cox.hazard_ratios, cox.summary())
 # Discrete-time survival (GPU-accelerated)
 dt = discrete_time(time, event, X, backend='auto')
 print(dt.coefficients, dt.hazard_ratios, dt.baseline_hazard)
+
+# --- ANOVA ---
+from pystatistics.anova import anova_oneway, anova, anova_rm, anova_posthoc, levene_test
+
+# One-way ANOVA
+y = np.concatenate([np.random.randn(20) + mu for mu in [0, 1, 3]])
+group = np.array(['A']*20 + ['B']*20 + ['C']*20)
+result = anova_oneway(y, group)
+print(result.summary())          # R-style ANOVA table
+print(result.eta_squared)        # effect sizes
+
+# Post-hoc: Tukey HSD
+posthoc = anova_posthoc(result, method='tukey')
+print(posthoc.summary())         # pairwise comparisons with adjusted p-values
+
+# Factorial ANOVA (Type II SS, matches R's car::Anova)
+result = anova(y, {'treatment': tx, 'dose': dose}, ss_type=2)
+
+# ANCOVA (continuous covariate)
+result = anova(y, {'group': group}, covariates={'age': age}, ss_type=2)
+
+# Repeated measures with sphericity correction
+result = anova_rm(y, subject=subj, within={'condition': cond}, correction='auto')
+print(result.sphericity[0].gg_epsilon)  # Greenhouse-Geisser correction
+
+# Levene's test for homogeneity of variances
+lev = levene_test(y, group, center='median')  # Brown-Forsythe variant
+print(lev.f_value, lev.p_value)
 ```
 
 ## Modules
@@ -184,7 +212,7 @@ print(dt.coefficients, dt.hazard_ratios, dt.baseline_hazard)
 | `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
 | `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
 | `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
-| `anova/` | Planned | Analysis of variance (wrapper on regression/) |
+| `anova/` | Complete | ANOVA: one-way, factorial, ANCOVA, repeated measures, Type I/II/III SS, Tukey/Bonferroni/Dunnett, Levene's test |
 | `regression/` LMM/GLMM | Planned | Linear and generalized linear mixed models |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.

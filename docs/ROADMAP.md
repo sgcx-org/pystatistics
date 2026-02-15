@@ -85,14 +85,19 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 13 fixture scenarios against R's `survival` package — 59 parametrized R validation tests; KM S(t)/SE/CI at rtol=1e-10/1e-6, log-rank statistic/p-value at rtol=1e-4/1e-3, Cox coef/SE/HR/loglik at rtol=1e-4/1e-3. 183 total tests including unit tests.
 - **API**: `kaplan_meier(time, event)`, `survdiff(time, event, group)`, `coxph(time, event, X)`, `discrete_time(time, event, X, backend='auto')`
 
-### Planned
-
 #### `anova/` — Analysis of Variance
-- **Priority**: MEDIUM (depends on `regression/`)
-- **Scope**: One-way ANOVA, two-way ANOVA, repeated measures, ANCOVA, MANOVA, post-hoc tests (Tukey HSD, Bonferroni)
-- **GPU applicability**: MODERATE — sums of squares computation on large datasets
-- **R validation**: `aov()`, `anova()`, `TukeyHSD()`
-- **Note**: ANOVA is fundamentally linear models. May be implemented as a thin wrapper on `regression/` with specialized output formatting and Type I/II/III SS
+- **One-way ANOVA**: `anova_oneway(y, group)` with Type I/II/III sums of squares, all giving identical results for one-way designs. Matches R `aov()` and `car::Anova()` to rtol=1e-10.
+- **Factorial ANOVA**: `anova(y, factors, ss_type=2)` for multi-factor designs with interactions. Type I (sequential), Type II (marginal, respects marginality), Type III (each term last, deviation coding). Matches R `anova(lm(...))`, `car::Anova(..., type="II")`, and `car::Anova(..., type="III")` with `contr.sum` to rtol=1e-10.
+- **ANCOVA**: Continuous covariates via `anova(y, factors, covariates={'age': age})`. Matches R `car::Anova(lm(y ~ group + x), type="II")`.
+- **Repeated measures**: `anova_rm(y, subject, within)` with long-format input. Mauchly's sphericity test, Greenhouse-Geisser and Huynh-Feldt epsilon corrections, mixed designs (between + within). Matches R `aov(y ~ cond + Error(subj/cond))`.
+- **Post-hoc tests**: `anova_posthoc(result, method='tukey')` — Tukey HSD (studentized range), Bonferroni pairwise (corrected t-tests), Dunnett (many-to-one vs control). Tukey matches R `TukeyHSD()` to rtol=1e-4.
+- **Effect sizes**: eta-squared and partial eta-squared for all terms. Matches R `effectsize::eta_squared()`.
+- **Levene's test**: `levene_test(y, group)` with `center='median'` (Brown-Forsythe) or `center='mean'` (original Levene). Matches R `car::leveneTest()` to rtol=1e-8.
+- **Architecture**: Thin wrapper on `regression/` — all SS computation delegates to `regression.fit()` and compares RSS values. No new solver math, no GPU backend (ANOVA designs are small).
+- **Validated**: 11 fixture scenarios against R (one-way balanced/unbalanced, factorial balanced/unbalanced, ANCOVA, Levene, Tukey HSD, Bonferroni, repeated measures within/mixed, eta-squared) — 46 parametrized R validation tests plus 135 unit tests. Total: 181 ANOVA tests.
+- **API**: `anova_oneway(y, group)`, `anova(y, factors)`, `anova_rm(y, subject, within)`, `anova_posthoc(result)`, `levene_test(y, group)`
+
+### Planned
 
 #### `regression/` — Linear and Generalized Linear Mixed Models (LMM / GLMM)
 - **Priority**: LOW (most complex extension of regression; depends on GLM being solid)
@@ -128,7 +133,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | ~~3~~ | ~~`hypothesis/`~~ | ~~Natural companion to descriptive stats~~ ✅ |
 | ~~4~~ | ~~`montecarlo/`~~ | ~~GPU showcase; general resampling inference~~ ✅ |
 | ~~5~~ | ~~`survival/`~~ | ~~Independent, high demand in biostatistics and clinical trials~~ ✅ |
-| 6 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
+| ~~6~~ | ~~`anova/`~~ | ~~Thin wrapper on `regression/`; straightforward once GLM exists~~ ✅ |
 | 7 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
 | 8 | `timeseries/` | Lowest priority for v1 |
 
