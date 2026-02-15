@@ -199,6 +199,37 @@ print(result.sphericity[0].gg_epsilon)  # Greenhouse-Geisser correction
 # Levene's test for homogeneity of variances
 lev = levene_test(y, group, center='median')  # Brown-Forsythe variant
 print(lev.f_value, lev.p_value)
+
+# --- Mixed models ---
+from pystatistics.mixed import lmm, glmm
+
+# Random intercept model (matches R lme4::lmer + lmerTest)
+result = lmm(y, X, groups={'subject': subject_ids})
+print(result.summary())         # lmerTest-style output with Satterthwaite df
+print(result.icc)               # intraclass correlation coefficient
+print(result.ranef['subject'])  # BLUPs (conditional modes) per subject
+
+# Random intercept + slope
+result = lmm(y, X, groups={'subject': subject_ids},
+             random_effects={'subject': ['1', 'time']},
+             random_data={'time': time_array})
+
+# Crossed random effects (subjects x items)
+result = lmm(y, X, groups={'subject': subj_ids, 'item': item_ids})
+
+# Model comparison via LRT (requires ML, not REML)
+m1 = lmm(y, X_reduced, groups={'subject': subj_ids}, reml=False)
+m2 = lmm(y, X_full, groups={'subject': subj_ids}, reml=False)
+print(m1.compare(m2))  # LRT chi-squared, df, p-value
+
+# GLMM — logistic with random intercept
+result = glmm(y_binary, X, groups={'subject': subject_ids},
+              family='binomial')
+print(result.summary())
+
+# GLMM — Poisson with random intercept
+result = glmm(y_count, X, groups={'subject': subject_ids},
+              family='poisson')
 ```
 
 ## Modules
@@ -213,7 +244,7 @@ print(lev.f_value, lev.p_value)
 | `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
 | `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
 | `anova/` | Complete | ANOVA: one-way, factorial, ANCOVA, repeated measures, Type I/II/III SS, Tukey/Bonferroni/Dunnett, Levene's test |
-| `regression/` LMM/GLMM | Planned | Linear and generalized linear mixed models |
+| `mixed/` LMM/GLMM | Complete | Linear and generalized linear mixed models (random intercepts/slopes, nested/crossed, REML/ML, Satterthwaite df, GLMM Laplace) |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 

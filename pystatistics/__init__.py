@@ -28,6 +28,7 @@ from pystatistics import hypothesis
 from pystatistics import montecarlo
 from pystatistics import survival
 from pystatistics import anova
+from pystatistics import mixed
 
 __all__ = [
     "__version__",
@@ -39,4 +40,5 @@ __all__ = [
     "montecarlo",
     "survival",
     "anova",
+    "mixed",
 ]

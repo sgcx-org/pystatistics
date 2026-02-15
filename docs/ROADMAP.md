@@ -97,24 +97,16 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 11 fixture scenarios against R (one-way balanced/unbalanced, factorial balanced/unbalanced, ANCOVA, Levene, Tukey HSD, Bonferroni, repeated measures within/mixed, eta-squared) — 46 parametrized R validation tests plus 135 unit tests. Total: 181 ANOVA tests.
 - **API**: `anova_oneway(y, group)`, `anova(y, factors)`, `anova_rm(y, subject, within)`, `anova_posthoc(result)`, `levene_test(y, group)`
 
+#### `mixed/` — Linear and Generalized Linear Mixed Models (LMM / GLMM)
+- **LMM**: Random intercepts, random slopes, nested and crossed random effects. Profiled REML/ML deviance optimization over variance component parameters θ (relative Cholesky factor of random effects covariance), with σ² profiled out. Inner solver: penalized least squares (PLS) via augmented system. Outer optimizer: L-BFGS-B with box constraints (diagonal elements of Λ ≥ 0), multi-start for slope models. Matches R `lme4::lmer()` fixed effects to rtol=1e-4, variance components to rtol=1e-3, log-likelihood to atol=0.5.
+- **GLMM**: Binomial and Poisson families with random intercepts. Penalized IRLS (PIRLS) inner loop with Laplace approximation to marginal likelihood. Imports `regression.families` for link/variance functions. Matches R `lme4::glmer()` fixed effects to rtol=0.05 (Laplace approximation numerical differences between dense Python and sparse C++/CHOLMOD).
+- **Satterthwaite degrees of freedom**: Numerical differentiation of Var(β̂) w.r.t. full variance parameter vector φ = (θ, σ), matching `lmerTest::summary()`. Hessian of REML deviance computed via finite differences. df match R to rtol=0.05.
+- **Post-estimation**: BLUPs (conditional modes of random effects), ICC (intraclass correlation), likelihood ratio tests for nested model comparison (requires ML), R-style `summary()` output matching `lmerTest`.
+- **CPU only for v1**: Dense Z matrices via numpy. Typical applied statistics datasets (n < 100K, J < 5K) fit comfortably. Clean boundary for future sparse backend (scipy.sparse) swap.
+- **Validated**: 7 fixture scenarios against R (lme4 + lmerTest) — 77 parametrized R validation tests + 74 unit tests = 151 total tests.
+- **API**: `lmm(y, X, groups)`, `glmm(y, X, groups, family='binomial')`, `LMMSolution`, `GLMMSolution`
+
 ### Planned
-
-#### `regression/` — Linear and Generalized Linear Mixed Models (LMM / GLMM)
-- **Priority**: LOW (most complex extension of regression; depends on GLM being solid)
-- **Scope**: LMM (random intercepts, random slopes, nested/crossed designs), GLMM (Binomial, Poisson families with random effects)
-- **Algorithm**: Outer optimization over variance components (profiled deviance for LMM, penalized quasi-likelihood or adaptive Gauss-Hermite quadrature for GLMM), with an inner penalized IRLS loop reusing the existing family/link/IRLS infrastructure from GLM
-- **GPU applicability**: HIGH — the inner penalized WLS step at each iteration is dense linear algebra on (X|Z) augmented design matrices, same GPU pattern as GLM
-- **R validation**: `lme4::lmer()`, `lme4::glmer()`
-- **Integration point**: `regression/backends/cpu_lmm.py`, `gpu_lmm.py`, `cpu_glmm.py`, `gpu_glmm.py`. Shares `families.py`, links, and IRLS convergence machinery from GLM
-- **Note**: Most complex planned extension of `regression/`. LMM is the natural entry point (profiled deviance is well-understood); GLMM adds the family/link layer on top
-
-#### `regression/` — Generalized Estimating Equations (GEE)
-- **Priority**: LOW (depends on GLM; simpler than LMM/GLMM but less commonly requested)
-- **Scope**: Marginal models for correlated data with working correlation structures (independence, exchangeable, AR(1), unstructured)
-- **Algorithm**: Modified IRLS — same score equations as GLM but with a working correlation matrix in the weight step, plus sandwich (robust) covariance estimation
-- **GPU applicability**: MODERATE — IRLS inner loop same as GLM; the sandwich covariance computation involves cluster-level sums that parallelize on GPU
-- **R validation**: `geepack::geeglm()`
-- **Note**: GEE estimates population-averaged (marginal) parameters, vs LMM/GLMM which estimate subject-specific (conditional) parameters. Different inferential targets, same `regression/` home. Not inherently longitudinal — handles any correlated data (clustered, spatial, repeated measures)
 
 #### `timeseries/` — Time Series Analysis
 - **Priority**: LOW
@@ -134,7 +126,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | ~~4~~ | ~~`montecarlo/`~~ | ~~GPU showcase; general resampling inference~~ ✅ |
 | ~~5~~ | ~~`survival/`~~ | ~~Independent, high demand in biostatistics and clinical trials~~ ✅ |
 | ~~6~~ | ~~`anova/`~~ | ~~Thin wrapper on `regression/`; straightforward once GLM exists~~ ✅ |
-| 7 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
+| ~~7~~ | ~~`mixed/` LMM/GLMM~~ | ~~Core primitive — any clustered/nested/longitudinal data. Own module, imports `regression.families`~~ ✅ |
 | 8 | `timeseries/` | Lowest priority for v1 |
 
 ---

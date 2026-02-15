@@ -1,0 +1,66 @@
+{
+  "lmm_intercept": {
+    "type": "lmm",
+    "name": "lmm_intercept",
+    "n": 120,
+    "n_groups": 15,
+    "formula": "y ~ x + (1|group)",
+    "true_beta": [
+      5.0,
+      2.0
+    ],
+    "true_sigma_group": 3.0,
+    "true_sigma_resid": 1.0
+  },
+  "lmm_slope": {
+    "type": "lmm",
+    "name": "lmm_slope",
+    "n": 180,
+    "n_subjects": 18,
+    "formula": "y ~ days + (1 + days|subject)"
+  },
+  "lmm_crossed": {
+    "type": "lmm",
+    "name": "lmm_crossed",
+    "n": 160,
+    "n_subjects": 20,
+    "n_items": 8,
+    "formula": "y ~ x + (1|subject) + (1|item)"
+  },
+  "lmm_ml": {
+    "type": "lmm",
+    "name": "lmm_ml",
+    "n": 120,
+    "n_groups": 15,
+    "formula": "y ~ x + (1|group)",
+    "true_beta": [
+      5.0,
+      2.0
+    ],
+    "true_sigma_group": 3.0,
+    "true_sigma_resid": 1.0
+  },
+  "lmm_no_effect": {
+    "type": "lmm",
+    "name": "lmm_no_effect",
+    "n": 100,
+    "n_groups": 10,
+    "formula": "y ~ x + (1|group)"
+  },
+  "glmm_binomial": {
+    "type": "glmm",
+    "name": "glmm_binomial",
+    "family": "binomial",
+    "n": 400,
+    "n_groups": 20,
+    "formula": "y ~ x + (1|group)"
+  },
+  "glmm_poisson": {
+    "type": "glmm",
+    "name": "glmm_poisson",
+    "family": "poisson",
+    "n": 300,
+    "n_groups": 15,
+    "formula": "y ~ x + (1|group)"
+  }
+}
