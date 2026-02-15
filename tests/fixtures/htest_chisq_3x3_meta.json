@@ -1,0 +1,26 @@
+{
+  "test": "chisq.test",
+  "data": {
+    "table": [
+      [
+        10,
+        20,
+        30
+      ],
+      [
+        40,
+        50,
+        60
+      ],
+      [
+        70,
+        80,
+        90
+      ]
+    ]
+  },
+  "params": {
+    "correct": false
+  },
+  "description": "3x3 independence test without correction"
+}

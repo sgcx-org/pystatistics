@@ -1,0 +1,20 @@
+{
+  "test": "chisq.test",
+  "data": {
+    "x": [
+      30,
+      20,
+      10,
+      40
+    ]
+  },
+  "params": {
+    "p": [
+      0.3,
+      0.2,
+      0.1,
+      0.4
+    ]
+  },
+  "description": "GOF test with unequal expected proportions"
+}

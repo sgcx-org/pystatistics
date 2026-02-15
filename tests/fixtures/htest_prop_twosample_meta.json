@@ -1,0 +1,19 @@
+{
+  "test": "prop.test",
+  "data": {
+    "x": [
+      30,
+      50
+    ],
+    "n": [
+      100,
+      120
+    ]
+  },
+  "params": {
+    "alternative": "two.sided",
+    "conf.level": 0.95,
+    "correct": true
+  },
+  "description": "Two-sample proportion test (equality)"
+}

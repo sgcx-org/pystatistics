@@ -1,0 +1,27 @@
+{
+  "test": "fisher.test",
+  "data": {
+    "table": [
+      [
+        5,
+        10,
+        15
+      ],
+      [
+        10,
+        5,
+        20
+      ],
+      [
+        15,
+        20,
+        5
+      ]
+    ]
+  },
+  "params": {
+    "simulate.p.value": true,
+    "B": 10000
+  },
+  "description": "Fisher 3x3 test with Monte Carlo"
+}

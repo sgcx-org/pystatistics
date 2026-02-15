@@ -1,0 +1,19 @@
+{
+  "statistic": 0.81000000000000005,
+  "statistic_name": "X-squared",
+  "parameter": {
+    "df": 1
+  },
+  "p_value": 0.36812025069351895,
+  "conf_int": [0.35142811025335685, 0.55245736877011509],
+  "conf_level": 0.94999999999999996,
+  "estimate": {
+    "p": 0.45000000000000001
+  },
+  "null_value": {
+    "p": 0.5
+  },
+  "alternative": "two.sided",
+  "method": "1-sample proportions test with continuity correction",
+  "data_name": "45L out of 100L, null probability 0.5"
+}

@@ -1,0 +1,10 @@
+{
+  "statistic": 2,
+  "statistic_name": "X-squared",
+  "parameter": {
+    "df": 5
+  },
+  "p_value": 0.84914503608460967,
+  "method": "Chi-squared test for given probabilities",
+  "data_name": "c(16L, 18L, 16L, 14L, 12L, 12L)"
+}

@@ -62,14 +62,14 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 10 fixture scenarios against R (basic, large-scale, scattered NaN, columnwise NaN, perfect correlation, ties, single column, constant column, extreme values, negative correlation) — 190 parametrized R validation tests at rtol=1e-10
 - **API**: `describe(data)`, `cor(x)`, `cov(x)`, `var(x)`, `quantile(x, type=7)`, `summary(x)`
 
-### Planned
-
 #### `hypothesis/` — Hypothesis Testing
-- **Priority**: MEDIUM
-- **Scope**: t-tests (one-sample, two-sample, paired), chi-squared tests (Pearson, likelihood ratio), Fisher's exact test (2×2 and r×c), F-tests, Mann-Whitney U, Wilcoxon signed-rank, Kolmogorov-Smirnov, proportion tests, multiple testing corrections (Bonferroni, Holm, FDR/BH)
-- **GPU applicability**: LOW for individual asymptotic tests (chi-squared, t); **HIGH for exact tests on larger tables** — Fisher's exact test for r×c tables requires enumerating or simulating tables with fixed marginals, which is combinatorially expensive on CPU but parallelizes naturally on GPU. Monte Carlo exact p-values (sampling random tables under the null) are embarrassingly parallel, same pattern as permutation tests.
-- **R validation**: `t.test()`, `chisq.test()`, `fisher.test()`, `wilcox.test()`, `ks.test()`, `p.adjust()`
-- **Note**: For 2×2 tables, Fisher's exact test is trivial (direct hypergeometric computation, no GPU needed). The GPU value appears for r×c tables where the network algorithm or Monte Carlo simulation of exact p-values becomes expensive. Chi-squared remains important as the asymptotic baseline for very large tables where even GPU exact tests become infeasible.
+- **CPU backend**: t-test (one-sample, two-sample Welch/pooled, paired), Pearson's chi-squared (independence with Yates, GOF), Fisher's exact test (2×2 with conditional MLE OR + CI, r×c Monte Carlo), Wilcoxon signed-rank and rank-sum (exact + normal approximation, Hodges-Lehmann CI), Kolmogorov-Smirnov (one-sample against distributions, two-sample), proportion test (chi-squared based with Wilson score CI), F-test for variances, p.adjust (8 methods: none, bonferroni, holm, hochberg, hommel, BH, BY, fdr)
+- **GPU backend**: Monte Carlo simulation only (chi-squared independence/GOF, Fisher r×c). Hybrid approach: Patefield's algorithm on CPU for table generation, batched statistic computation on GPU. All scalar tests (t, Wilcoxon, KS, prop, var) are CPU-only by design — GPU overhead would dominate O(n) operations.
+- **R `htest` structure**: All tests return `HTestParams` matching R's `htest` class (statistic, parameter, p.value, conf.int, estimate, null.value, alternative, method, data.name)
+- **Validated**: 18 fixture scenarios against R 4.5.2 — 71 parametrized R validation tests; t-test/chi-squared/prop/KS/var at rtol=1e-10, Fisher OR/CI at rtol=2e-2 (Brent solver vs R exact), Wilcoxon CI algorithmically different (Walsh averages vs R's uniroot)
+- **API**: `t_test(x, y)`, `chisq_test(x)`, `fisher_test(x)`, `wilcox_test(x, y)`, `ks_test(x, y)`, `prop_test(x, n)`, `var_test(x, y)`, `p_adjust(p)`
+
+### Planned
 
 #### `anova/` — Analysis of Variance
 - **Priority**: MEDIUM (depends on `regression/`)
@@ -127,7 +127,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 |-------|--------|-----------|
 | ~~1~~ | ~~`regression/` GLM~~ | ~~Extends existing module; unlocks discrete-time survival and ANOVA~~ ✅ |
 | ~~2~~ | ~~`descriptive/`~~ | ~~Foundational; every analysis starts with descriptive stats~~ ✅ |
-| 3 | `hypothesis/` | Natural companion to descriptive stats |
+| ~~3~~ | ~~`hypothesis/`~~ | ~~Natural companion to descriptive stats~~ ✅ |
 | 4 | `survival/` | Independent, high demand in biostatistics and clinical trials |
 | 5 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
 | 6 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |

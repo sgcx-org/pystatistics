@@ -1,0 +1,6 @@
+{
+  "p_value": 0.00019998000199980003,
+  "alternative": "two.sided",
+  "method": "Fisher's Exact Test for Count Data with simulated p-value\n\t (based on 10000 replicates)",
+  "data_name": "structure(c(5L, 10L, 15L, 10L, 5L, 20L, 15L, 20L, 5L), dim = c(3L, 3L))"
+}

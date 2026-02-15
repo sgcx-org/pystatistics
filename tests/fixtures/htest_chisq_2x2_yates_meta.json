@@ -1,0 +1,19 @@
+{
+  "test": "chisq.test",
+  "data": {
+    "table": [
+      [
+        10,
+        20
+      ],
+      [
+        30,
+        40
+      ]
+    ]
+  },
+  "params": {
+    "correct": true
+  },
+  "description": "2x2 independence test with Yates correction"
+}

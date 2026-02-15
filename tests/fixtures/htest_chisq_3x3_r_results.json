@@ -1,0 +1,10 @@
+{
+  "statistic": 4.6875,
+  "statistic_name": "X-squared",
+  "parameter": {
+    "df": 4
+  },
+  "p_value": 0.32088994396296361,
+  "method": "Pearson's Chi-squared test",
+  "data_name": ["structure(c(10L, 40L, 70L, 20L, 50L, 80L, 30L, 60L, 90L), dim = c(3L, ", "3L))"]
+}

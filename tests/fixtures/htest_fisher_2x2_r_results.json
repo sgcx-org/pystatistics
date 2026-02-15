@@ -1,0 +1,14 @@
+{
+  "p_value": 0.002759456185220084,
+  "conf_int": [0.00064382838836529472, 0.42588403811507702],
+  "conf_level": 0.94999999999999996,
+  "estimate": {
+    "odds ratio": 0.037233117250979178
+  },
+  "null_value": {
+    "odds ratio": 1
+  },
+  "alternative": "two.sided",
+  "method": "Fisher's Exact Test for Count Data",
+  "data_name": "structure(c(1L, 11L, 9L, 3L), dim = c(2L, 2L))"
+}

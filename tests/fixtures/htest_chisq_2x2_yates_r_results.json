@@ -1,0 +1,10 @@
+{
+  "statistic": 0.4464285714285714,
+  "statistic_name": "X-squared",
+  "parameter": {
+    "df": 1
+  },
+  "p_value": 0.50403586645250475,
+  "method": "Pearson's Chi-squared test with Yates' continuity correction",
+  "data_name": "structure(c(10L, 30L, 20L, 40L), dim = c(2L, 2L))"
+}

@@ -99,6 +99,16 @@ print(r.correlation_matrix)
 q = quantile(data, type=7)
 print(q.quantiles)
 
+# --- Hypothesis testing ---
+from pystatistics.hypothesis import t_test, chisq_test, p_adjust
+
+result = t_test([1,2,3,4,5], [3,4,5,6,7])
+print(result.statistic, result.p_value, result.conf_int)
+print(result.summary())  # R-style print.htest output
+
+# Multiple testing correction
+p_adjusted = p_adjust([0.01, 0.04, 0.03, 0.005], method='BH')
+
 # --- Linear regression ---
 from pystatistics.regression import fit
 
@@ -124,10 +134,10 @@ result = fit(X, y, backend='gpu')
 | `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson) via IRLS |
 | `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
 | `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
-| `hypothesis/` | Planned | t-tests, chi-squared, nonparametric tests |
+| `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
 | `survival/` | Planned | Survival analysis (Cox PH, discrete-time, Kaplan-Meier) |
 | `anova/` | Planned | Analysis of variance (wrapper on regression/) |
-| `longitudinal/` | Planned | Mixed effects models (LMM, GLMM) |
+| `regression/` LMM/GLMM | Planned | Linear and generalized linear mixed models |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 

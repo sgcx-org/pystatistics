@@ -1,0 +1,16 @@
+{
+  "statistic": 42,
+  "statistic_name": "V",
+  "p_value": 0.15304188415882009,
+  "conf_int": [2.6500014677954304, 4.4999940074659976],
+  "conf_level": 0.94999999999999996,
+  "estimate": {
+    "(pseudo)median": 3.649961533786839
+  },
+  "null_value": {
+    "location": 3
+  },
+  "alternative": "two.sided",
+  "method": "Wilcoxon signed rank test with continuity correction",
+  "data_name": "c(1.5, 2.3, 3.1, 4, 5.2, 3.8, 2.9, 4.5, 5, 3.5)"
+}

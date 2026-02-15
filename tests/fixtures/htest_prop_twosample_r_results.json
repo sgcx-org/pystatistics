@@ -1,0 +1,17 @@
+{
+  "statistic": 2.723973214285714,
+  "statistic_name": "X-squared",
+  "parameter": {
+    "df": 1
+  },
+  "p_value": 0.098851674062595818,
+  "conf_int": [-0.25172136329854089, 0.01838802996520747],
+  "conf_level": 0.94999999999999996,
+  "estimate": {
+    "prop 1": 0.29999999999999999,
+    "prop 2": 0.41666666666666669
+  },
+  "alternative": "two.sided",
+  "method": "2-sample test for equality of proportions with continuity correction",
+  "data_name": "c(30L, 50L) out of c(100L, 120L)"
+}

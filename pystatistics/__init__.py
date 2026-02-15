@@ -24,6 +24,7 @@ from pystatistics.core.datasource import DataSource
 from pystatistics import regression
 from pystatistics import mvnmle
 from pystatistics import descriptive
+from pystatistics import hypothesis
 
 __all__ = [
     "__version__",
@@ -31,4 +32,5 @@ __all__ = [
     "regression",
     "mvnmle",
     "descriptive",
+    "hypothesis",
 ]
