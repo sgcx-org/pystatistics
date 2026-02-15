@@ -1,0 +1,13 @@
+{
+  "coefficients": 0.6884378263195361,
+  "hazard_ratios": 1.99060343476278,
+  "standard_errors": 0.3243434442637148,
+  "z_statistics": 2.122558166336133,
+  "p_values": 0.03379089364421495,
+  "loglik_null": -63.025751648802299,
+  "loglik_model": -60.496124385334539,
+  "concordance": 0.6685393258426966,
+  "n_events": 26,
+  "n_observations": 30,
+  "n_iter": 4
+}

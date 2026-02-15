@@ -49,11 +49,17 @@ def check_array(
         raise ValidationError(
             f"{name}: converted to object dtype, indicating mixed types or non-numeric data"
         )
-    
+
+    # Reject non-numeric dtypes (strings, bytes, datetime, etc.)
+    if not np.issubdtype(result.dtype, np.number):
+        raise ValidationError(
+            f"{name}: non-numeric dtype {result.dtype}, expected numeric data"
+        )
+
     # Ensure floating point for numerical stability
     if not np.issubdtype(result.dtype, np.floating):
         result = result.astype(np.float64)
-    
+
     return result
 
 

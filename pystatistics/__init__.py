@@ -26,6 +26,7 @@ from pystatistics import mvnmle
 from pystatistics import descriptive
 from pystatistics import hypothesis
 from pystatistics import montecarlo
+from pystatistics import survival
 
 __all__ = [
     "__version__",
@@ -35,4 +36,5 @@ __all__ = [
     "descriptive",
     "hypothesis",
     "montecarlo",
+    "survival",
 ]

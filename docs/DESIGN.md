@@ -1,10 +1,10 @@
 # PyStatistics Architecture Document
 
 **Software Version:** 1.0
-**Document Version:** 1.2  
-**Date:** December 26, 2025  
-**Author:** PyStatistics Team  
-**Status:** Final Design Specification
+**Document Version:** 1.3
+**Date:** February 2026
+**Author:** PyStatistics Team
+**Status:** Final Design Specification (updated to reflect completed modules)
 
 ---
 
@@ -26,60 +26,71 @@ This section tracks what has been built vs. what is planned. The architecture de
 | Component | Status | Notes |
 |-----------|--------|-------|
 | `datasource.py` | ✅ | `DataSource` class with factory methods |
-| `capabilities.py` | 📋 | Capability constants (needs creation) |
+| `capabilities.py` | ✅ | Capability constants |
 | `result.py` | ✅ | `Result[P]` generic envelope |
 | `protocols.py` | ✅ | `DataSource`, `Backend` protocols |
 | `exceptions.py` | ✅ | Full exception hierarchy |
 | `validation.py` | ✅ | Input validators |
-| `compute/device.py` | 🔨 | Rename from `backends/device.py` |
-| `compute/timing.py` | 🔨 | Rename from `backends/timing.py` |
-| `compute/linalg/qr.py` | 🔨 | Rename from `backends/linalg/qr.py` |
-| `compute/linalg/cholesky.py` | 📋 | Cholesky decomposition |
-| `compute/linalg/svd.py` | 📋 | SVD decomposition |
-
-**Pending Refactor:** Rename `core/backends/` → `core/compute/` to reserve "backend" for domain-specific Backend protocol implementations.
+| `compute/device.py` | ✅ | GPU detection, device selection |
+| `compute/timing.py` | ✅ | `Timer` class, `timed` decorator |
+| `compute/linalg/qr.py` | ✅ | QR decomposition with column pivoting |
+| `compute/linalg/cholesky.py` | ✅ | Cholesky decomposition |
+| `compute/linalg/svd.py` | ✅ | SVD decomposition |
+| `compute/linalg/batched.py` | ✅ | Batched multi-problem OLS solver |
+| `compute/linalg/determinant.py` | ✅ | Matrix determinant |
+| `compute/linalg/solve.py` | ✅ | Linear system solving |
+| `compute/optimization/convergence.py` | ✅ | Convergence checking |
 
 ### Regression (`pystatistics/regression/`)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | `design.py` | ✅ | `Design` wrapper class |
-| `solution.py` | ✅ | `LinearSolution`, `LinearParams` |
-| `solvers.py` | ✅ | `fit()` dispatcher |
-| `backends/cpu.py` | ✅ | CPU QR backend, validated against R |
-| `backends/gpu.py` | 📋 | GPU PyTorch backend |
-| GLM support | 📋 | Generalized linear models |
-| Ridge regression | 📋 | L2 regularization |
-| Streaming designs | 📋 | HDF5/chunked data |
+| `solution.py` | ✅ | `LinearSolution`, `LinearParams`, `GLMSolution`, `GLMParams` |
+| `solvers.py` | ✅ | `fit()` dispatcher (LM + GLM) |
+| `families.py` | ✅ | Gaussian, Binomial, Poisson with link functions |
+| `backends/cpu.py` | ✅ | CPU QR backend, validated against R `lm()` |
+| `backends/cpu_glm.py` | ✅ | CPU IRLS backend, validated against R `glm.fit()` |
+| `backends/gpu.py` | ✅ | GPU Cholesky normal equations (PyTorch FP32) |
+| `backends/gpu_glm.py` | ✅ | GPU IRLS with torch WLS step |
 
 ### MVN MLE (`pystatistics/mvnmle/`)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `data.py` | 📋 | `MVNData` wrapper class (not yet ported) |
-| `solution.py` | 📋 | `MVNSolution`, `MVNParams` |
-| `backends/cpu.py` | 📋 | Stub exists; port from PyMVNMLE |
-| `backends/gpu.py` | 📋 | Stub exists |
-| `datasets.py` | 📋 | Reference datasets (apple, missvals) |
-
-**Note:** PyMVNMLE exists as a standalone validated package. The work here is to **port** it into the PyStatistics umbrella architecture, refactoring to use `DataSource` → `MVNData` → `Result[MVNParams]` pattern.
+| `design.py` | ✅ | `MVNDesign` wrapper class |
+| `solution.py` | ✅ | `MVNSolution`, `MVNParams` |
+| `solvers.py` | ✅ | `mlest()` dispatcher |
+| `backends/cpu.py` | ✅ | CPU direct optimization (L-BFGS-B) |
+| `backends/em.py` | ✅ | EM algorithm |
+| `backends/gpu.py` | ✅ | GPU direct optimization (PyTorch) |
+| `datasets.py` | ✅ | Reference datasets (apple, missvals) |
+| `mcar_test.py` | ✅ | Little's MCAR test |
+| `patterns.py` | ✅ | Missingness pattern analysis |
 
 ### Future Domains
 
 | Domain | Status | Notes |
 |--------|--------|-------|
-| `survival/` | 📋 | Cox PH, Kaplan-Meier |
+| `descriptive/` | ✅ | Descriptive statistics, correlation, quantiles |
+| `hypothesis/` | ✅ | t-test, chi-squared, Fisher, Wilcoxon, KS, prop, var, p.adjust |
+| `montecarlo/` | ✅ | Bootstrap, permutation tests, batched GPU solver |
+| `survival/` | 🔨 | Cox PH (CPU), discrete-time (GPU), Kaplan-Meier, log-rank |
+| `anova/` | 📋 | Analysis of variance |
 | `mixed/` | 📋 | LMM, GLMM |
-| `timeseries/` | ❌ | Not planned for v1.0 |
-| `hypothesis/` | ❌ | Not planned for v1.0 |
+| `timeseries/` | 📋 | Not planned for v1.0 |
 
 ### Validation Status
 
 | Test Suite | Status | Notes |
 |------------|--------|-------|
-| Regression vs R `lm()` | ✅ | Coefficients match to 1e-12 |
-| MVN MLE vs R `mvnmle` | ✅ | In PyMVNMLE standalone; needs port |
-| GPU ≡ CPU equivalence | 📋 | Pending GPU backend implementation |
+| Regression LM vs R `lm()` | ✅ | 10 fixtures, coefficients match to rtol=1e-10 |
+| Regression GLM vs R `glm.fit()` | ✅ | 9 fixtures, match to rtol=1e-7 |
+| MVN MLE vs R `mvnmle`/`norm` | ✅ | Validated for direct + EM |
+| Descriptive vs R | ✅ | 10 fixtures, 190 tests at rtol=1e-10 |
+| Hypothesis vs R | ✅ | 18 fixtures, 71 tests |
+| Monte Carlo vs R `boot` | ✅ | 10 fixtures, 37 tests |
+| GPU ≡ CPU equivalence | ✅ | All modules validated per README tolerances |
 
 ---
 
@@ -157,8 +168,11 @@ pystatistics/                 # Umbrella package (pip install pystatistics)
 ├── core/                     # Shared infrastructure
 ├── regression/               # Linear/GLM models
 ├── mvnmle/                   # Multivariate normal MLE
-├── survival/                 # Survival analysis (planned)
-├── timeseries/               # Time series (planned)
+├── descriptive/              # Descriptive statistics
+├── hypothesis/               # Hypothesis testing
+├── montecarlo/               # Monte Carlo methods (bootstrap, permutation)
+├── survival/                 # Survival analysis (in progress)
+├── anova/                    # Analysis of variance (planned)
 └── mixed/                    # Mixed models (planned)
 ```
 
@@ -182,57 +196,71 @@ This section tracks what has been built vs. what is planned. The architecture de
 | Component | Status | Notes |
 |-----------|--------|-------|
 | `datasource.py` | ✅ | `DataSource` class with factory methods |
+| `capabilities.py` | ✅ | Capability constants |
 | `result.py` | ✅ | `Result[P]` generic envelope |
 | `protocols.py` | ✅ | `DataSource`, `Backend` protocols |
 | `exceptions.py` | ✅ | Full exception hierarchy |
 | `validation.py` | ✅ | Input validators |
-| `backends/device.py` | ✅ | GPU detection, device selection |
-| `backends/timing.py` | ✅ | `Timer` class |
-| `backends/linalg/qr.py` | ✅ | QR decomposition (CPU) |
-| `backends/linalg/cholesky.py` | 📋 | Cholesky decomposition |
-| `backends/linalg/svd.py` | 📋 | SVD decomposition |
+| `compute/device.py` | ✅ | GPU detection, device selection |
+| `compute/timing.py` | ✅ | `Timer` class, `timed` decorator |
+| `compute/linalg/qr.py` | ✅ | QR decomposition with column pivoting |
+| `compute/linalg/cholesky.py` | ✅ | Cholesky decomposition |
+| `compute/linalg/svd.py` | ✅ | SVD decomposition |
+| `compute/linalg/batched.py` | ✅ | Batched multi-problem OLS solver |
+| `compute/linalg/determinant.py` | ✅ | Matrix determinant |
+| `compute/linalg/solve.py` | ✅ | Linear system solving |
+| `compute/optimization/convergence.py` | ✅ | Convergence checking |
 
 ### Regression (`pystatistics/regression/`)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | `design.py` | ✅ | `Design` wrapper class |
-| `solution.py` | ✅ | `LinearSolution`, `LinearParams` |
-| `solvers.py` | ✅ | `fit()` dispatcher |
-| `backends/cpu.py` | ✅ | CPU QR backend, validated against R |
-| `backends/gpu.py` | 📋 | GPU PyTorch backend |
-| GLM support | 📋 | Generalized linear models |
-| Ridge regression | 📋 | L2 regularization |
-| Streaming designs | 📋 | HDF5/chunked data |
+| `solution.py` | ✅ | `LinearSolution`, `LinearParams`, `GLMSolution`, `GLMParams` |
+| `solvers.py` | ✅ | `fit()` dispatcher (LM + GLM) |
+| `families.py` | ✅ | Gaussian, Binomial, Poisson with link functions |
+| `backends/cpu.py` | ✅ | CPU QR backend, validated against R `lm()` |
+| `backends/cpu_glm.py` | ✅ | CPU IRLS backend, validated against R `glm.fit()` |
+| `backends/gpu.py` | ✅ | GPU Cholesky normal equations (PyTorch FP32) |
+| `backends/gpu_glm.py` | ✅ | GPU IRLS with torch WLS step |
 
 ### MVN MLE (`pystatistics/mvnmle/`)
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| `data.py` | 📋 | `MVNData` wrapper class (not yet ported) |
-| `solution.py` | 📋 | `MVNSolution`, `MVNParams` |
-| `backends/cpu.py` | 📋 | Stub exists; port from PyMVNMLE |
-| `backends/gpu.py` | 📋 | Stub exists |
-| `datasets.py` | 📋 | Reference datasets (apple, missvals) |
-
-**Note:** PyMVNMLE exists as a standalone validated package. The work here is to **port** it into the PyStatistics umbrella architecture, refactoring to use `DataSource` → `MVNData` → `Result[MVNParams]` pattern.
+| `design.py` | ✅ | `MVNDesign` wrapper class |
+| `solution.py` | ✅ | `MVNSolution`, `MVNParams` |
+| `solvers.py` | ✅ | `mlest()` dispatcher |
+| `backends/cpu.py` | ✅ | CPU direct optimization (L-BFGS-B) |
+| `backends/em.py` | ✅ | EM algorithm |
+| `backends/gpu.py` | ✅ | GPU direct optimization (PyTorch) |
+| `datasets.py` | ✅ | Reference datasets (apple, missvals) |
+| `mcar_test.py` | ✅ | Little's MCAR test |
+| `patterns.py` | ✅ | Missingness pattern analysis |
 
 ### Future Domains
 
 | Domain | Status | Notes |
 |--------|--------|-------|
-| `survival/` | 📋 | Cox PH, Kaplan-Meier |
+| `descriptive/` | ✅ | Descriptive statistics, correlation, quantiles |
+| `hypothesis/` | ✅ | t-test, chi-squared, Fisher, Wilcoxon, KS, prop, var, p.adjust |
+| `montecarlo/` | ✅ | Bootstrap, permutation tests, batched GPU solver |
+| `survival/` | 🔨 | Cox PH (CPU), discrete-time (GPU), Kaplan-Meier, log-rank |
+| `anova/` | 📋 | Analysis of variance |
 | `mixed/` | 📋 | LMM, GLMM |
-| `timeseries/` | ❌ | Not planned for v1.0 |
-| `hypothesis/` | ❌ | Not planned for v1.0 |
+| `timeseries/` | 📋 | Not planned for v1.0 |
 
 ### Validation Status
 
 | Test Suite | Status | Notes |
 |------------|--------|-------|
-| Regression vs R `lm()` | ✅ | Coefficients match to 1e-12 |
-| MVN MLE vs R `mvnmle` | ✅ | In PyMVNMLE standalone; needs port |
-| GPU ≡ CPU equivalence | 📋 | Pending GPU backend implementation |
+| Regression LM vs R `lm()` | ✅ | 10 fixtures, coefficients match to rtol=1e-10 |
+| Regression GLM vs R `glm.fit()` | ✅ | 9 fixtures, match to rtol=1e-7 |
+| MVN MLE vs R `mvnmle`/`norm` | ✅ | Validated for direct + EM |
+| Descriptive vs R | ✅ | 10 fixtures, 190 tests at rtol=1e-10 |
+| Hypothesis vs R | ✅ | 18 fixtures, 71 tests |
+| Monte Carlo vs R `boot` | ✅ | 10 fixtures, 37 tests |
+| GPU ≡ CPU equivalence | ✅ | All modules validated per README tolerances |
 
 ---
 
@@ -589,15 +617,60 @@ pystatistics/
 │       ├── cpu.py                  # NumPy/SciPy reference
 │       └── gpu.py                  # PyTorch GPU implementation
 │
-├── survival/                       # Survival analysis (planned)
-│   ├── __init__.py
-│   ├── data.py                     # SurvivalData
-│   └── backends/                   # Domain-specific backends
+├── descriptive/                   # Descriptive statistics
+│   ├── __init__.py                # Public: describe, cor, cov, var, quantile, summary
+│   ├── _missing.py                # Missing data handling
+│   ├── _quantile_types.py         # All 9 R quantile types
+│   ├── design.py                  # DescriptiveDesign
+│   ├── solution.py                # DescriptiveSolution, DescriptiveParams
+│   ├── solvers.py                 # describe(), cor(), cov(), var(), quantile(), summary()
+│   └── backends/
+│       ├── cpu.py                 # CPUDescriptiveBackend
+│       └── gpu.py                 # GPUDescriptiveBackend
 │
-└── mixed/                          # Mixed models (planned)
-    ├── __init__.py
-    ├── data.py                     # MixedData
-    └── backends/                   # Domain-specific backends
+├── hypothesis/                    # Hypothesis testing
+│   ├── __init__.py                # Public: t_test, chisq_test, etc.
+│   ├── _common.py                 # HTestParams (matches R htest class)
+│   ├── _p_adjust.py               # p.adjust (8 methods)
+│   ├── design.py                  # HypothesisDesign
+│   ├── solution.py                # HTestSolution
+│   ├── solvers.py                 # t_test(), chisq_test(), etc.
+│   └── backends/
+│       ├── cpu.py                 # CPUHypothesisBackend
+│       ├── gpu.py                 # GPUHypothesisBackend (Monte Carlo)
+│       ├── _t_test.py             # t-test implementation
+│       ├── _chisq_test.py         # Chi-squared test
+│       ├── _fisher_test.py        # Fisher exact test
+│       ├── _wilcox_test.py        # Wilcoxon tests
+│       ├── _ks_test.py            # KS test
+│       ├── _prop_test.py          # Proportion test
+│       └── _var_test.py           # F-test for variances
+│
+├── montecarlo/                    # Monte Carlo methods
+│   ├── __init__.py                # Public: boot, boot_ci, permutation_test
+│   ├── _common.py                 # BootParams, PermutationParams
+│   ├── _ci.py                     # Bootstrap CI (5 types)
+│   ├── _influence.py              # Jackknife influence values
+│   ├── design.py                  # BootstrapDesign, PermutationDesign
+│   ├── solution.py                # BootstrapSolution, PermutationSolution
+│   ├── solvers.py                 # boot(), boot_ci(), permutation_test()
+│   └── backends/
+│       ├── cpu.py                 # CPUBootstrapBackend, CPUPermutationBackend
+│       └── gpu.py                 # GPUBootstrapBackend, GPUPermutationBackend
+│
+├── survival/                      # Survival analysis (in progress)
+│   ├── __init__.py                # Public: coxph, kaplan_meier, survdiff, discrete_time
+│   ├── _common.py                 # CoxParams, KMParams, etc.
+│   ├── _km.py                     # Kaplan-Meier estimator
+│   ├── _logrank.py                # Log-rank test
+│   ├── _cox.py                    # Cox PH (CPU only)
+│   ├── _discrete.py               # Discrete-time (person-period logistic)
+│   ├── design.py                  # SurvivalDesign
+│   ├── solution.py                # CoxSolution, KMSolution, etc.
+│   ├── solvers.py                 # coxph(), kaplan_meier(), survdiff(), discrete_time()
+│   └── backends/
+│       ├── cpu.py                 # CPUCoxBackend
+│       └── gpu.py                 # GPUDiscreteTimeBackend
 ```
 
 **Critical Naming Convention:**
@@ -802,12 +875,14 @@ result = mlest(ds, backend='gpu')
 
 ### Future Extensions
 
-| Domain | Wrapper Name | Purpose | Key Data Elements |
-|--------|--------------|---------|-------------------|
-| `survival` | `SurvivalData` | Survival analysis | Time, event, censoring indicator |
-| `mixed` | `MixedData` | Mixed-effects models | Fixed effects, random effects, groups |
-| `timeseries` | `TimeSeriesData` | Time series | Temporal ordering, lags, frequency |
-| `hypothesis` | `TestData` | Hypothesis tests | Sample(s), null hypothesis specification |
+| Domain | Wrapper Name | Status | Key Data Elements |
+|--------|--------------|--------|-------------------|
+| `descriptive` | `DescriptiveDesign` | ✅ | Data matrix, missing data modes |
+| `hypothesis` | `HypothesisDesign` | ✅ | Sample(s), null hypothesis, test type |
+| `montecarlo` | `BootstrapDesign` | ✅ | Data, statistic function, resampling config |
+| `survival` | `SurvivalDesign` | 🔨 | Time, event, covariates, strata |
+| `anova` | `AnovaDesign` | 📋 | Factors, response, SS type |
+| `mixed` | `MixedDesign` | 📋 | Fixed effects, random effects, groups |
 
 ---
 
@@ -1012,8 +1087,12 @@ import pystatistics
 
 pystatistics.__version__     # "0.1.0"
 pystatistics.DataSource      # Universal data container
-pystatistics.regression      # Regression submodule
-pystatistics.mvnmle          # MVN MLE submodule
+pystatistics.regression      # Linear/GLM models
+pystatistics.mvnmle          # MVN MLE
+pystatistics.descriptive     # Descriptive statistics
+pystatistics.hypothesis      # Hypothesis testing
+pystatistics.montecarlo      # Monte Carlo methods
+pystatistics.survival        # Survival analysis
 ```
 
 ### DataSource API
@@ -1451,12 +1530,15 @@ result = fit(design)  # Still exact OLS, just computed differently
 
 ### Planned Domains
 
-| Domain | Target Version | Key Features |
-|--------|----------------|--------------|
-| `survival` | v0.3 | Cox PH, Kaplan-Meier, log-rank test |
-| `mixed` | v0.4 | LMM, GLMM, REML estimation |
-| `timeseries` | v0.5 | ARIMA, state space, Kalman filter |
-| `hypothesis` | v0.6 | t-tests, ANOVA, chi-square |
+| Domain | Status | Key Features |
+|--------|--------|--------------|
+| `descriptive` | ✅ Complete | Mean, var, SD, cor (3 methods), quantiles (9 types), skew/kurtosis |
+| `hypothesis` | ✅ Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, prop, var, p.adjust |
+| `montecarlo` | ✅ Complete | Bootstrap (3 types), permutation test, 5 CI methods, batched GPU solver |
+| `survival` | 🔨 In progress | Cox PH (CPU), discrete-time (GPU), Kaplan-Meier, log-rank |
+| `anova` | 📋 Planned | One-way, two-way, ANCOVA, post-hoc tests |
+| `mixed` | 📋 Planned | LMM, GLMM, REML estimation |
+| `timeseries` | 📋 Planned | ARIMA, state space, Kalman filter |
 
 ### Planned Features
 
@@ -1582,6 +1664,6 @@ This is the modern pattern for large-scale, hardware-accelerated scientific comp
 
 ---
 
-**Document Status:** Final Design Specification  
-**Next Steps:** Complete regression CPU backend, retrofit mvnmle integration  
+**Document Status:** Final Design Specification (updated to reflect completed modules)
+**Next Steps:** Implement survival module (Cox PH, Kaplan-Meier, discrete-time, log-rank)
 **Review Cycle:** Quarterly architecture review

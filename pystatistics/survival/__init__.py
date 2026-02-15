@@ -2,14 +2,32 @@
 Survival analysis.
 
 Public API:
-    coxph(...) -> CoxSolution
-    kaplan_meier(...) -> KMSolution
+    kaplan_meier(time, event, ...) -> KMSolution
+    survdiff(time, event, group, ...) -> LogRankSolution
+    coxph(time, event, X, ...) -> CoxSolution           # CPU only
+    discrete_time(time, event, X, ...) -> DiscreteTimeSolution  # GPU accelerated
 """
 
-__all__ = ["coxph", "kaplan_meier"]
+from pystatistics.survival.solvers import (
+    coxph,
+    discrete_time,
+    kaplan_meier,
+    survdiff,
+)
+from pystatistics.survival.solution import (
+    CoxSolution,
+    DiscreteTimeSolution,
+    KMSolution,
+    LogRankSolution,
+)
 
-def coxph(*args, **kwargs):
-    raise NotImplementedError("Survival module not yet implemented")
-
-def kaplan_meier(*args, **kwargs):
-    raise NotImplementedError("Survival module not yet implemented")
+__all__ = [
+    "coxph",
+    "discrete_time",
+    "kaplan_meier",
+    "survdiff",
+    "CoxSolution",
+    "DiscreteTimeSolution",
+    "KMSolution",
+    "LogRankSolution",
+]

@@ -147,6 +147,30 @@ y = np.random.randn(30) + 1.0
 def mean_diff(x, y): return np.mean(x) - np.mean(y)
 result = permutation_test(x, y, mean_diff, R=9999, seed=42)
 print(result.p_value, result.summary())
+
+# --- Survival analysis ---
+from pystatistics.survival import kaplan_meier, survdiff, coxph, discrete_time
+
+time = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+event = np.array([1, 0, 1, 1, 0, 1, 1, 0, 1, 1])
+
+# Kaplan-Meier survival curve
+km = kaplan_meier(time, event)
+print(km.survival, km.se, km.ci_lower, km.ci_upper)
+
+# Log-rank test (compare groups)
+group = np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 1])
+lr = survdiff(time, event, group)
+print(lr.statistic, lr.p_value, lr.summary())
+
+# Cox proportional hazards (CPU only)
+X = np.column_stack([np.random.randn(10)])
+cox = coxph(time, event, X)
+print(cox.coefficients, cox.hazard_ratios, cox.summary())
+
+# Discrete-time survival (GPU-accelerated)
+dt = discrete_time(time, event, X, backend='auto')
+print(dt.coefficients, dt.hazard_ratios, dt.baseline_hazard)
 ```
 
 ## Modules
@@ -159,7 +183,7 @@ print(result.p_value, result.summary())
 | `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
 | `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
 | `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
-| `survival/` | Planned | Survival analysis (Cox PH, discrete-time, Kaplan-Meier) |
+| `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
 | `anova/` | Planned | Analysis of variance (wrapper on regression/) |
 | `regression/` LMM/GLMM | Planned | Linear and generalized linear mixed models |
 

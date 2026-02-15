@@ -77,6 +77,14 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 10 fixture scenarios against R's `boot` package — 37 parametrized R validation tests; t0 (observed statistic) at rtol=1e-10 (deterministic), bias/SE at moderate tolerance (stochastic — different RNGs), CI endpoints at abs=0.5 (stochastic), permutation p-values at abs=0.05 (stochastic). 133 total tests including unit tests.
 - **API**: `boot(data, statistic, R)`, `boot_ci(boot_out, type='all')`, `permutation_test(x, y, statistic, R)`
 
+#### `survival/` — Survival Analysis
+- **Kaplan-Meier estimator**: Product-limit S(t) = ∏(1 - d_j/n_j), Greenwood standard errors, three CI transformations (plain, log, log-log). Matches R `survival::survfit()` to rtol=1e-10.
+- **Log-rank test (G-rho family)**: Standard log-rank (rho=0, Mantel-Haenszel), Peto & Peto (rho=1, Gehan-Wilcoxon modification). Supports K-group comparisons with chi-squared statistic via variance-covariance matrix. Matches R `survival::survdiff()`.
+- **Cox PH**: CPU only — no `backend=` parameter. Partial likelihood with Newton-Raphson, Efron's (default) and Breslow's approximations for tied event times. Numerical stability via eta centering and step-size limiting. Harrell's C-statistic. Matches R `survival::coxph()` to rtol=1e-4.
+- **Discrete-time survival**: GPU-accelerated. Converts time-to-event data into person-period format, fits logistic regression via `regression.fit(X, y, family='binomial', backend=backend)`. This is the GPU pathway for survival analysis — Cox PH's sequential risk-set updates do not parallelize, but discrete-time reduces to standard GLM.
+- **Validated**: 13 fixture scenarios against R's `survival` package — 59 parametrized R validation tests; KM S(t)/SE/CI at rtol=1e-10/1e-6, log-rank statistic/p-value at rtol=1e-4/1e-3, Cox coef/SE/HR/loglik at rtol=1e-4/1e-3. 183 total tests including unit tests.
+- **API**: `kaplan_meier(time, event)`, `survdiff(time, event, group)`, `coxph(time, event, X)`, `discrete_time(time, event, X, backend='auto')`
+
 ### Planned
 
 #### `anova/` — Analysis of Variance
@@ -85,17 +93,6 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **GPU applicability**: MODERATE — sums of squares computation on large datasets
 - **R validation**: `aov()`, `anova()`, `TukeyHSD()`
 - **Note**: ANOVA is fundamentally linear models. May be implemented as a thin wrapper on `regression/` with specialized output formatting and Type I/II/III SS
-
-#### `survival/` — Survival Analysis
-- **Priority**: MEDIUM-HIGH
-- **Scope**:
-  - Kaplan-Meier estimation and plotting
-  - Cox proportional hazards (CPU only)
-  - Discrete-time survival models (GPU-friendly)
-  - Log-rank test, Schoenfeld residuals
-- **GPU applicability**: Cox PH — **NO** (partial likelihood involves sorting and sequential risk-set updates that do not parallelize). Discrete-time survival — **YES** (reduces to logistic regression on person-period data, directly leverages `regression/` GLM infrastructure)
-- **R validation**: `survival::coxph()`, `survival::survfit()`, `survival::Surv()`
-- **Note**: This is a key reason discrete-time survival matters — it brings GPU acceleration to survival analysis, where Cox PH fundamentally cannot
 
 #### `regression/` — Linear and Generalized Linear Mixed Models (LMM / GLMM)
 - **Priority**: LOW (most complex extension of regression; depends on GLM being solid)
@@ -130,7 +127,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 | ~~2~~ | ~~`descriptive/`~~ | ~~Foundational; every analysis starts with descriptive stats~~ ✅ |
 | ~~3~~ | ~~`hypothesis/`~~ | ~~Natural companion to descriptive stats~~ ✅ |
 | ~~4~~ | ~~`montecarlo/`~~ | ~~GPU showcase; general resampling inference~~ ✅ |
-| 5 | `survival/` | Independent, high demand in biostatistics and clinical trials |
+| ~~5~~ | ~~`survival/`~~ | ~~Independent, high demand in biostatistics and clinical trials~~ ✅ |
 | 6 | `anova/` | Thin wrapper on `regression/`; straightforward once GLM exists |
 | 7 | `regression/` LMM/GLMM | Complex; extends GLM with random effects. Reuses IRLS infrastructure |
 | 8 | `timeseries/` | Lowest priority for v1 |
