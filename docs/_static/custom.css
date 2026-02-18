@@ -1,0 +1,5 @@
+/* SGCX branding overrides for Furo theme */
+:root {
+    --color-brand-primary: #27ae60;
+    --color-brand-content: #1a7a3a;
+}

@@ -50,17 +50,17 @@ dev = [
 ]
 docs = [
     "sphinx>=6.0",
-    "sphinx-rtd-theme>=1.0",
+    "furo",
 ]
 all = [
     "pystatistics[gpu,dev,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/haishuo/pystatistics"
-Documentation = "https://pystatistics.readthedocs.io"
-Repository = "https://github.com/haishuo/pystatistics"
-Issues = "https://github.com/haishuo/pystatistics/issues"
+Homepage = "https://sgcx.org/technology/pystatistics/"
+Documentation = "https://sgcx.org/docs/pystatistics/"
+Repository = "https://github.com/sgcx-org/pystatistics"
+Issues = "https://github.com/sgcx-org/pystatistics/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pystatistics"]
