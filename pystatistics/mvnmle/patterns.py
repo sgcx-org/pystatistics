@@ -181,7 +181,7 @@ def pattern_summary(patterns: List[PatternInfo],
     -------
     PatternSummary
     """
-    if not patterns:
+    if len(patterns) == 0:
         raise ValueError("No patterns provided")
 
     n_patterns = len(patterns)
