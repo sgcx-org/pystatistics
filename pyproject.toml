@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pystatistics"
-version = "1.0.1"
+version = "1.0.2"
 description = "GPU-accelerated statistical computing for Python"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
-    { name = "Hai-Shuo", email = "contact@sgcx.org" },
+    { name = "Hai-Shuo Shu", email = "contact@sgcx.org" },
 ]
 keywords = [
     "statistics",
