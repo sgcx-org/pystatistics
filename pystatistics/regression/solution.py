@@ -43,6 +43,9 @@ class LinearSolution:
     _result: Result[LinearParams]
     _design: 'Design'
 
+    # Optional variable names (set by fit() via names= kwarg)
+    _names: tuple[str, ...] | None = None
+
     # Cached computations
     _standard_errors: NDArray[np.floating[Any]] | None = None
     _t_statistics: NDArray[np.floating[Any]] | None = None
@@ -51,6 +54,16 @@ class LinearSolution:
     @property
     def coefficients(self) -> NDArray[np.floating[Any]]:
         return self._result.params.coefficients
+
+    @property
+    def coef(self) -> dict[str, float]:
+        """Named coefficient mapping (like R's coef() or statsmodels .params).
+
+        Returns dict mapping variable names to coefficient values.
+        Falls back to 'B[0]', 'B[1]'... when names are not available.
+        """
+        names = self._names or tuple(f"B[{i}]" for i in range(len(self.coefficients)))
+        return dict(zip(names, self.coefficients.tolist()))
 
     @property
     def residuals(self) -> NDArray[np.floating[Any]]:
@@ -226,39 +239,68 @@ class LinearSolution:
 
     def summary(self) -> str:
         """Generate R-style summary output."""
+        p = len(self.coefficients)
+        names = self._names or tuple(f"B[{i}]" for i in range(p))
+        max_name_len = max(len(n) for n in names)
+        col_w = max(max_name_len + 2, 15)
+
+        # Residual quantiles (like R's summary.lm)
+        rq = np.quantile(self.residuals, [0.0, 0.25, 0.5, 0.75, 1.0])
+
         lines = [
             "Linear Regression Results",
             "=" * 72,
             f"Observations: {self._design.n}",
             f"Predictors: {self._design.p}",
             f"Rank: {self.rank}",
-            f"R-squared: {self.r_squared:.6f}",
-            f"Adj. R-squared: {self.adjusted_r_squared:.6f}",
-            f"Residual Std. Error: {self.residual_std_error:.6f} on {self.df_residual} DF",
+            "",
+            "Residuals:",
+            f"  {'Min':>10s} {'1Q':>10s} {'Median':>10s} {'3Q':>10s} {'Max':>10s}",
+            f"  {rq[0]:10.4f} {rq[1]:10.4f} {rq[2]:10.4f} {rq[3]:10.4f} {rq[4]:10.4f}",
             "",
             "Coefficients:",
             "-" * 72,
-            f"{'Index':<8} {'Estimate':>14} {'Std.Error':>12} {'t value':>10} {'Pr(>|t|)':>12}",
+            f"  {'':<{col_w}s} {'Estimate':>14s} {'Std.Error':>12s} {'t value':>10s} {'Pr(>|t|)':>12s}",
             "-" * 72,
         ]
 
-        for i, (coef, se, t, pv) in enumerate(zip(
-            self.coefficients, self.standard_errors,
+        for name, coef, se, t, pv in zip(
+            names, self.coefficients, self.standard_errors,
             self.t_statistics, self.p_values
-        )):
+        ):
             if np.isnan(coef):
-                lines.append(f"  B[{i}]:         (aliased)")
+                lines.append(f"  {name:<{col_w}s} (aliased)")
             else:
                 se_str = f"{se:12.6f}" if not np.isnan(se) else "         NA"
                 t_str = f"{t:10.3f}" if not np.isnan(t) else "        NA"
                 pv_str = f"{pv:12.4e}" if not np.isnan(pv) else "          NA"
                 sig = _significance_stars(pv)
                 lines.append(
-                    f"  B[{i}]: {coef:14.6f} {se_str} {t_str} {pv_str} {sig}"
+                    f"  {name:<{col_w}s} {coef:14.6f} {se_str} {t_str} {pv_str} {sig}"
                 )
 
         lines.append("-" * 72)
         lines.append("Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1")
+        lines.append("")
+        lines.append(
+            f"Residual standard error: {self.residual_std_error:.4f} on {self.df_residual} degrees of freedom"
+        )
+        lines.append(
+            f"Multiple R-squared: {self.r_squared:.6f},  "
+            f"Adjusted R-squared: {self.adjusted_r_squared:.6f}"
+        )
+
+        # F-statistic (overall model test)
+        df_model = self.rank - 1  # subtract intercept df
+        if df_model > 0 and self.df_residual > 0 and self.tss > 0:
+            from scipy import stats as sp_stats
+            f_stat = (self.r_squared / df_model) / ((1.0 - self.r_squared) / self.df_residual)
+            f_pval = sp_stats.f.sf(f_stat, df_model, self.df_residual)
+            lines.append(
+                f"F-statistic: {f_stat:.2f} on {df_model} and {self.df_residual} DF,  "
+                f"p-value: {f_pval:.4e}"
+            )
+
         lines.append(f"Backend: {self.backend_name}")
         if self.timing:
             lines.append(f"Time: {self.timing.get('total_seconds', 0):.4f}s")
@@ -330,6 +372,9 @@ class GLMSolution:
     _result: Result[GLMParams]
     _design: 'Design'
 
+    # Optional variable names (set by fit() via names= kwarg)
+    _names: tuple[str, ...] | None = None
+
     # Cached computations
     _standard_errors: NDArray[np.floating[Any]] | None = None
     _test_statistics: NDArray[np.floating[Any]] | None = None
@@ -340,6 +385,12 @@ class GLMSolution:
     @property
     def coefficients(self) -> NDArray[np.floating[Any]]:
         return self._result.params.coefficients
+
+    @property
+    def coef(self) -> dict[str, float]:
+        """Named coefficient mapping (like R's coef() or statsmodels .params)."""
+        names = self._names or tuple(f"B[{i}]" for i in range(len(self.coefficients)))
+        return dict(zip(names, self.coefficients.tolist()))
 
     @property
     def fitted_values(self) -> NDArray[np.floating[Any]]:
@@ -550,6 +601,11 @@ class GLMSolution:
     def summary(self) -> str:
         """Generate R-style GLM summary output."""
         stat_name = "z value" if self._uses_z_test else "t value"
+        p_header = "Pr(>|z|)" if self._uses_z_test else "Pr(>|t|)"
+        p = len(self.coefficients)
+        names = self._names or tuple(f"B[{i}]" for i in range(p))
+        max_name_len = max(len(n) for n in names)
+        col_w = max(max_name_len + 2, 15)
 
         lines = [
             "GLM Results",
@@ -565,20 +621,20 @@ class GLMSolution:
             "",
             "Coefficients:",
             "-" * 72,
-            f"{'Index':<8} {'Estimate':>14} {'Std.Error':>12} {stat_name:>10} {'Pr(>|z|)':>12}",
+            f"  {'':<{col_w}s} {'Estimate':>14s} {'Std.Error':>12s} {stat_name:>10s} {p_header:>12s}",
             "-" * 72,
         ]
 
-        for i, (coef, se, stat, pv) in enumerate(zip(
-            self.coefficients, self.standard_errors,
+        for name, coef, se, stat, pv in zip(
+            names, self.coefficients, self.standard_errors,
             self.test_statistics, self.p_values
-        )):
+        ):
             se_str = f"{se:12.6f}" if not np.isnan(se) else "         NA"
             stat_str = f"{stat:10.3f}" if not np.isnan(stat) else "        NA"
             pv_str = f"{pv:12.4e}" if not np.isnan(pv) else "          NA"
             sig = _significance_stars(pv)
             lines.append(
-                f"  B[{i}]: {coef:14.6f} {se_str} {stat_str} {pv_str} {sig}"
+                f"  {name:<{col_w}s} {coef:14.6f} {se_str} {stat_str} {pv_str} {sig}"
             )
 
         lines.append("-" * 72)

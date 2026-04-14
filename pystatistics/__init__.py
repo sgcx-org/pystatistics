@@ -16,7 +16,7 @@ Usage:
     result = fit(design)
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 __author__ = "Hai-Shuo"
 __email__ = "contact@sgcx.org"
 

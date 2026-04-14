@@ -161,6 +161,7 @@ def coxph(
     event,
     X,
     *,
+    names: list[str] | None = None,
     strata=None,
     ties: Literal["efron", "breslow"] = "efron",
     tol: float = 1e-9,
@@ -236,7 +237,18 @@ def coxph(
         warnings=tuple(warnings_list),
     )
 
-    return CoxSolution(_result=result)
+    # Resolve names
+    resolved_names = None
+    if names is not None:
+        p = design.X.shape[1]
+        if len(names) != p:
+            raise ValueError(
+                f"names must have {p} elements to match X with "
+                f"{p} columns, got {len(names)}"
+            )
+        resolved_names = tuple(names)
+
+    return CoxSolution(_result=result, _names=resolved_names)
 
 
 def discrete_time(
@@ -244,6 +256,7 @@ def discrete_time(
     event,
     X,
     *,
+    names: list[str] | None = None,
     intervals=None,
     backend: Literal["auto", "cpu", "gpu"] = "auto",
 ) -> DiscreteTimeSolution:
@@ -302,4 +315,15 @@ def discrete_time(
         warnings=(),
     )
 
-    return DiscreteTimeSolution(_result=result)
+    # Resolve names
+    resolved_names = None
+    if names is not None:
+        p = design.X.shape[1]
+        if len(names) != p:
+            raise ValueError(
+                f"names must have {p} elements to match X with "
+                f"{p} columns, got {len(names)}"
+            )
+        resolved_names = tuple(names)
+
+    return DiscreteTimeSolution(_result=result, _names=resolved_names)

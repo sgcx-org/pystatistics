@@ -124,7 +124,7 @@ class KMSolution:
         lines.append(
             f"  {'time':>8s}  {'n.risk':>8s}  {'n.event':>8s}  "
             f"{'survival':>10s}  {'se':>10s}  "
-            f"{'lower {ci_pct}%':>10s}  {'upper {ci_pct}%':>10s}"
+            f"{'lower ' + str(ci_pct) + '%':>14s}  {'upper ' + str(ci_pct) + '%':>14s}"
         )
 
         # Show up to 20 rows
@@ -244,14 +244,27 @@ class CoxSolution:
     Properties mirror R's coxph() output.
     """
 
-    __slots__ = ('_result',)
+    __slots__ = ('_result', '_names')
 
-    def __init__(self, _result: Result[CoxParams]) -> None:
+    def __init__(self, _result: Result[CoxParams], _names: tuple[str, ...] | None = None) -> None:
         self._result = _result
+        self._names = _names
 
     @property
     def coefficients(self):
         return self._result.params.coefficients
+
+    @property
+    def coef(self) -> dict[str, float]:
+        """Named coefficient mapping (like R's coef())."""
+        names = self._names or tuple(f"x{i}" for i in range(len(self.coefficients)))
+        return dict(zip(names, self.coefficients.tolist()))
+
+    @property
+    def hr(self) -> dict[str, float]:
+        """Named hazard ratio mapping (exp(coef))."""
+        names = self._names or tuple(f"x{i}" for i in range(len(self.hazard_ratios)))
+        return dict(zip(names, self.hazard_ratios.tolist()))
 
     @property
     def hazard_ratios(self):
@@ -307,6 +320,13 @@ class CoxSolution:
 
     def summary(self) -> str:
         """R-style summary of Cox PH fit."""
+        import numpy as np
+
+        p = len(self.coefficients)
+        names = self._names or tuple(f"x{i}" for i in range(p))
+        max_name_len = max(len(n) for n in names)
+        col_w = max(max_name_len, 10)
+
         lines = []
         lines.append("Call: coxph()")
         lines.append("")
@@ -318,18 +338,31 @@ class CoxSolution:
 
         # Coefficient table
         lines.append(
-            f"  {'':>10s}  {'coef':>10s}  {'exp(coef)':>10s}  "
+            f"  {'':{col_w}s}  {'coef':>10s}  {'exp(coef)':>10s}  "
             f"{'se(coef)':>10s}  {'z':>10s}  {'Pr(>|z|)':>12s}"
         )
-        p = len(self.coefficients)
-        for i in range(p):
-            name = f"x{i}"
+        for i, name in enumerate(names):
             lines.append(
-                f"  {name:>10s}  {self.coefficients[i]:10.6f}  "
+                f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
                 f"{self.hazard_ratios[i]:10.6f}  "
                 f"{self.standard_errors[i]:10.6f}  "
                 f"{self.z_statistics[i]:10.4f}  "
                 f"{self.p_values[i]:12.4g}"
+            )
+
+        # HR confidence intervals (like R's summary.coxph)
+        lines.append("")
+        lines.append(
+            f"  {'':{col_w}s}  {'exp(coef)':>10s}  {'exp(-coef)':>10s}  "
+            f"{'lower .95':>10s}  {'upper .95':>10s}"
+        )
+        for i, name in enumerate(names):
+            ci_lower = np.exp(self.coefficients[i] - 1.96 * self.standard_errors[i])
+            ci_upper = np.exp(self.coefficients[i] + 1.96 * self.standard_errors[i])
+            lines.append(
+                f"  {name:>{col_w}s}  {self.hazard_ratios[i]:10.4f}  "
+                f"{1.0 / self.hazard_ratios[i]:10.4f}  "
+                f"{ci_lower:10.4f}  {ci_upper:10.4f}"
             )
 
         lines.append("")
@@ -361,14 +394,27 @@ class DiscreteTimeSolution:
     Properties mirror the logistic regression on person-period data.
     """
 
-    __slots__ = ('_result',)
+    __slots__ = ('_result', '_names')
 
-    def __init__(self, _result: Result[DiscreteTimeParams]) -> None:
+    def __init__(self, _result: Result[DiscreteTimeParams], _names: tuple[str, ...] | None = None) -> None:
         self._result = _result
+        self._names = _names
 
     @property
     def coefficients(self):
         return self._result.params.coefficients
+
+    @property
+    def coef(self) -> dict[str, float]:
+        """Named coefficient mapping."""
+        names = self._names or tuple(f"x{i}" for i in range(len(self.coefficients)))
+        return dict(zip(names, self.coefficients.tolist()))
+
+    @property
+    def hr(self) -> dict[str, float]:
+        """Named hazard ratio mapping (exp(coef))."""
+        names = self._names or tuple(f"x{i}" for i in range(len(self.hazard_ratios)))
+        return dict(zip(names, self.hazard_ratios.tolist()))
 
     @property
     def standard_errors(self):
@@ -438,15 +484,18 @@ class DiscreteTimeSolution:
         )
         lines.append("")
 
+        p = len(self.coefficients)
+        names = self._names or tuple(f"x{i}" for i in range(p))
+        max_name_len = max(len(n) for n in names)
+        col_w = max(max_name_len, 10)
+
         lines.append(
-            f"  {'':>10s}  {'coef':>10s}  {'exp(coef)':>10s}  "
+            f"  {'':{col_w}s}  {'coef':>10s}  {'exp(coef)':>10s}  "
             f"{'se(coef)':>10s}  {'z':>10s}  {'Pr(>|z|)':>12s}"
         )
-        p = len(self.coefficients)
-        for i in range(p):
-            name = f"x{i}"
+        for i, name in enumerate(names):
             lines.append(
-                f"  {name:>10s}  {self.coefficients[i]:10.6f}  "
+                f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
                 f"{self.hazard_ratios[i]:10.6f}  "
                 f"{self.standard_errors[i]:10.6f}  "
                 f"{self.z_statistics[i]:10.4f}  "

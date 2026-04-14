@@ -30,6 +30,7 @@ def fit(
     force: bool = False,
     tol: float = 1e-8,
     max_iter: int = 25,
+    names: list[str] | None = None,
 ) -> Union[LinearSolution, GLMSolution]:
     """
     Fit a linear or generalized linear model.
@@ -54,24 +55,26 @@ def fit(
             matches R's glm.control().
         max_iter: Maximum IRLS iterations (GLM only). Default 25
             matches R's glm.control().
+        names: Optional list of predictor names for output labeling.
+            If len(names) == p - 1 (one fewer than columns in X),
+            "(Intercept)" is prepended automatically.
+            If len(names) == p, used as-is.
 
     Returns:
         LinearSolution when family is None.
         GLMSolution when family is specified.
 
     Examples:
-        # OLS (unchanged from before)
-        >>> result = fit(X, y)
-        >>> result = fit(X, y, backend='gpu')
+        # OLS with named output
+        >>> result = fit(X, y, names=['albumin', 'copper', 'protime'])
+        >>> result.coef['copper']
+        0.005255
 
         # Logistic regression
         >>> result = fit(X, y, family='binomial')
 
         # Poisson regression
         >>> result = fit(X, y, family='poisson')
-
-        # Gaussian GLM (equivalent to OLS)
-        >>> result = fit(X, y, family='gaussian')
     """
     # Get or build Design
     if isinstance(X_or_design, Design):
@@ -81,17 +84,43 @@ def fit(
             raise ValueError("y required when passing arrays")
         design = Design.from_arrays(np.asarray(X_or_design), np.asarray(y))
 
+    # Resolve names: auto-prepend "(Intercept)" if needed
+    resolved_names = _resolve_names(names, design.p)
+
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:
-        return _fit_glm(design, family, backend, tol, max_iter)
+        return _fit_glm(design, family, backend, tol, max_iter, resolved_names)
     else:
-        return _fit_lm(design, backend, force)
+        return _fit_lm(design, backend, force, resolved_names)
+
+
+def _resolve_names(
+    names: list[str] | None,
+    p: int,
+) -> tuple[str, ...] | None:
+    """Resolve user-provided names into a tuple matching the number of columns.
+
+    If names has p-1 elements, prepend '(Intercept)'.
+    If names has p elements, use as-is.
+    If None, return None (Solutions will fall back to generic labels).
+    """
+    if names is None:
+        return None
+    if len(names) == p:
+        return tuple(names)
+    if len(names) == p - 1:
+        return ("(Intercept)",) + tuple(names)
+    raise ValueError(
+        f"names must have {p} or {p - 1} elements to match X with "
+        f"{p} columns, got {len(names)}"
+    )
 
 
 def _fit_lm(
     design: Design,
     backend: BackendChoice,
     force: bool,
+    names: tuple[str, ...] | None,
 ) -> LinearSolution:
     """Fit ordinary least squares (existing LM path, unchanged)."""
     backend_impl = _get_lm_backend(backend, design)
@@ -102,7 +131,7 @@ def _fit_lm(
     else:
         result = backend_impl.solve(design)
 
-    return LinearSolution(_result=result, _design=design)
+    return LinearSolution(_result=result, _design=design, _names=names)
 
 
 def _fit_glm(
@@ -111,6 +140,7 @@ def _fit_glm(
     backend: BackendChoice,
     tol: float,
     max_iter: int,
+    names: tuple[str, ...] | None,
 ) -> GLMSolution:
     """Fit GLM via IRLS."""
     from pystatistics.regression.families import Family, resolve_family
@@ -120,7 +150,7 @@ def _fit_glm(
 
     result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter)
 
-    return GLMSolution(_result=result, _design=design)
+    return GLMSolution(_result=result, _design=design, _names=names)
 
 
 # =====================================================================

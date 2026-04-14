@@ -2,6 +2,16 @@
 
 GPU-accelerated statistical computing for Python.
 
+## What's New in 1.1
+
+- **Named coefficients**: Pass `names=` to `fit()`, `coxph()`, and `discrete_time()` to get labeled output matching R
+- **`result.coef` dict**: Access coefficients by name — `result.coef["albumin"]` instead of `result.coefficients[1]`
+- **`result.hr` dict** (Cox/discrete-time): Access hazard ratios by name
+- **Intercept auto-detection**: Pass p-1 names and `"(Intercept)"` is prepended automatically
+- **OLS summary improvements**: Now prints residual quantiles and F-statistic, matching R's `summary(lm())`
+- **Cox summary improvements**: Now prints hazard ratio confidence intervals, matching R's `summary(coxph())`
+- **Bug fix**: Kaplan-Meier summary now correctly displays confidence level percentage
+
 ---
 
 ## Design Philosophy
@@ -114,8 +124,10 @@ from pystatistics.regression import fit
 
 X = np.random.randn(1000, 5)
 y = X @ [1, 2, 3, -1, 0.5] + np.random.randn(1000) * 0.1
-result = fit(X, y)
-print(result.summary())
+result = fit(X, y, names=['x1', 'x2', 'x3', 'x4', 'x5'])
+print(result.summary())          # R-style output with variable names
+print(result.coef)                # {'x1': 1.00, 'x2': 2.00, ...}
+print(result.coef['x3'])          # 3.00
 
 # Logistic regression
 y_binary = (X @ [1, -1, 0.5, 0, 0] + np.random.randn(1000) > 0).astype(float)
