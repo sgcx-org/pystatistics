@@ -2,12 +2,12 @@
 
 GPU-accelerated statistical computing for Python.
 
-## What's New in 1.2
+## What's New in 1.2.1
 
 - **No silent model switches.** PyStatistics now raises explicit errors instead of silently falling back to ridge regularization, different solvers, or CPU backends. You always know exactly what model you're running.
 - **`backend='gpu'` is honest.** Explicitly requesting GPU now errors if GPU is unavailable or the operation has no GPU implementation. `backend='auto'` still falls back silently.
 - **Reproducible Monte Carlo.** `chisq_test()` and `fisher_test()` accept `seed=` for deterministic Monte Carlo p-values.
-- **Module structure.** Large files split per CLAUDE.md Rule 4 (500 code-line limit). All backward-compatible.
+- **Module structure.** Large files split to stay under 500 code lines. All backward-compatible.
 
 ### What's New in 1.1
 

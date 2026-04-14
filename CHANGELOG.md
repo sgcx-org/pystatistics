@@ -1,10 +1,11 @@
 # Changelog
 
-## 1.2.0
+## 1.2.1
 
-### CLAUDE.md Compliance
+### Code Quality Audit
 
-Full codebase audit and refactor to comply with all 7 rules in CLAUDE.md.
+Full codebase audit and refactor to enforce strict adherence to the
+project's seven coding rules.
 
 ### Breaking Changes (by design)
 
@@ -31,13 +32,13 @@ Full codebase audit and refactor to comply with all 7 rules in CLAUDE.md.
   `fisher_test()` now accept `seed` parameter for deterministic results
   when `simulate_p_value=True`
 
-### Module Structure (Rule 3/4)
+### Module Structure
 
 - Split `regression/solution.py` into `_linear.py`, `_glm.py`, and
   `_formatting.py` (backward-compatible re-export shim maintained)
 - Split `hypothesis/design.py` factory methods into `_design_factories.py`
   (classmethods still work via thin wrappers)
-- All files now under 500 code lines (Rule 4 hard limit)
+- All files now under 500 code lines
 
 ### Code Quality
 
