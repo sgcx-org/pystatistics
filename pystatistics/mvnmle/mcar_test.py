@@ -76,27 +76,28 @@ def regularized_inverse(matrix: np.ndarray,
     was_regularized : bool
         Whether regularization was applied
     """
+    from pystatistics.core.exceptions import NumericalError
+
     cond = np.linalg.cond(matrix)
 
     if cond < condition_threshold:
         try:
             return np.linalg.inv(matrix), False
         except np.linalg.LinAlgError:
-            pass
+            raise NumericalError(
+                f"Matrix inversion failed despite acceptable condition number "
+                f"({cond:.1f} < {condition_threshold:.0f}). The covariance matrix "
+                f"for this missingness pattern may be numerically singular. "
+                f"Consider removing near-collinear variables or scaling your data."
+            )
 
-    # Need regularization
-    n = matrix.shape[0]
-    reg_matrix = matrix + regularization * np.eye(n)
-
-    try:
-        return np.linalg.inv(reg_matrix), True
-    except np.linalg.LinAlgError:
-        # Use eigendecomposition
-        eigenvals, eigenvecs = np.linalg.eigh(matrix)
-        min_eigenval = np.max(eigenvals) * regularization
-        eigenvals_reg = np.maximum(eigenvals, min_eigenval)
-        inv_matrix = eigenvecs @ np.diag(1/eigenvals_reg) @ eigenvecs.T
-        return inv_matrix, True
+    # Matrix is ill-conditioned — hard stop, do not silently regularize
+    raise NumericalError(
+        f"Covariance matrix is ill-conditioned (condition number: {cond:.2e}, "
+        f"threshold: {condition_threshold:.0e}). Cannot reliably invert. "
+        f"Consider removing near-collinear variables, reducing the number "
+        f"of variables, or using a different missing data strategy."
+    )
 
 
 def little_mcar_test(data,
@@ -165,17 +166,9 @@ def little_mcar_test(data,
         mu_obs_k = mu_ml[obs_idx]
         sigma_obs_k = sigma_ml[np.ix_(obs_idx, obs_idx)]
 
-        try:
-            sigma_inv_k, was_regularized = regularized_inverse(sigma_obs_k)
-
-            if was_regularized:
-                msg = f"Pattern {pattern.pattern_id}: Covariance regularized (near-singular)"
-                convergence_warnings.append(msg)
-
-        except Exception as e:
-            msg = f"Pattern {pattern.pattern_id}: Failed to invert covariance: {e}"
-            convergence_warnings.append(msg)
-            continue
+        # regularized_inverse raises NumericalError if inversion fails —
+        # we let it propagate rather than silently continuing.
+        sigma_inv_k, _ = regularized_inverse(sigma_obs_k)
 
         diff = y_bar_k - mu_obs_k
         contribution = n_k * (diff @ sigma_inv_k @ diff)

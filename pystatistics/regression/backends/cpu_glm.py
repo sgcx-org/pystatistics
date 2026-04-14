@@ -105,7 +105,7 @@ class CPUIRLSBackend:
                 # Working weights: w = (dμ/dη)² / V(μ)
                 w = wt * (mu_eta_val ** 2) / var_mu
 
-                # Guard against zero or negative weights
+                # NUMERICAL GUARD: prevents division by zero in weighted regression
                 w = np.maximum(w, 1e-30)
 
                 # WLS via QR: transform to √w·X and √w·z

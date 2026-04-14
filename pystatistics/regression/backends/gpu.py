@@ -161,6 +161,14 @@ class GPUQRBackend:
                 cholesky_succeeded = True
                 effective_rank = p
             except torch._C._LinAlgError:
+                if not force:
+                    raise NumericalError(
+                        "GPU Cholesky decomposition failed — the design matrix X'X is "
+                        "ill-conditioned or singular. Suggestions:\n"
+                        "  - Use backend='cpu' (QR decomposition is more numerically stable)\n"
+                        "  - Check for collinear predictors in your design matrix\n"
+                        "  - Use force=True to attempt least-squares solve despite ill-conditioning"
+                    )
                 # Cholesky failed — X'X not positive definite
                 # lstsq may not be supported on MPS; fall back to CPU
                 if self.device.type == 'mps':

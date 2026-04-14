@@ -19,9 +19,10 @@ from pystatistics.hypothesis.backends.cpu import CPUHypothesisBackend
 from pystatistics.hypothesis._p_adjust import p_adjust  # re-export
 
 
-BackendChoice = Literal['cpu', 'gpu']
+BackendChoice = Literal['cpu', 'gpu', 'auto']
 # GPU is only useful for Monte Carlo simulation (chisq/Fisher).
-# All other tests fall back to CPU automatically.
+# All other tests use CPU. backend='auto' routes to CPU since
+# GPU only helps in specific Monte Carlo scenarios.
 
 
 def _get_backend(backend: str = 'cpu'):
@@ -31,6 +32,10 @@ def _get_backend(backend: str = 'cpu'):
     CPU is the default and correct choice for all scalar tests.
     GPU only helps for Monte Carlo simulations (chi-squared and
     Fisher r×c with simulate_p_value=True).
+
+    backend='auto' uses CPU — GPU is only instantiated when
+    explicitly requested, so that non-GPU-accelerated tests
+    raise NotImplementedError instead of silently falling back.
     """
     if backend in ('cpu', 'auto'):
         return CPUHypothesisBackend()
@@ -38,7 +43,7 @@ def _get_backend(backend: str = 'cpu'):
         from pystatistics.hypothesis.backends.gpu import GPUHypothesisBackend
         return GPUHypothesisBackend()
     raise ValidationError(
-        f"Unknown backend: {backend!r}. Use 'cpu' or 'gpu'."
+        f"Unknown backend: {backend!r}. Use 'cpu', 'gpu', or 'auto'."
     )
 
 
@@ -109,6 +114,7 @@ def chisq_test(
     rescale_p: bool = False,
     simulate_p_value: bool = False,
     B: int = 2000,
+    seed: int | None = None,
     backend: str = 'cpu',
 ) -> HTestSolution:
     """
@@ -153,6 +159,7 @@ def chisq_test(
             rescale_p=rescale_p,
             simulate_p_value=simulate_p_value,
             B=B,
+            seed=seed,
         )
 
     be = _get_backend(backend)
@@ -225,6 +232,7 @@ def fisher_test(
     conf_level: float = 0.95,
     simulate_p_value: bool = False,
     B: int = 2000,
+    seed: int | None = None,
     backend: str = 'cpu',
 ) -> HTestSolution:
     """
@@ -266,6 +274,7 @@ def fisher_test(
             conf_level=conf_level,
             simulate_p_value=simulate_p_value,
             B=B,
+            seed=seed,
         )
 
     be = _get_backend(backend)

@@ -213,9 +213,11 @@ def _full_deviance_hessian(
         pls_local = solve_pls(X, Z, y, Lam, reml=reml)
 
         sig_sq = sig ** 2
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_L = 2.0 * np.sum(
             np.log(np.maximum(np.diag(pls_local.L), 1e-20))
         )
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_RX = 2.0 * np.sum(
             np.log(np.maximum(np.abs(np.diag(pls_local.RX)), 1e-20))
         )

@@ -228,19 +228,6 @@ def _signed_rank_exact_p(V: float, n: int, alternative: str) -> float:
     # The signed-rank statistic V has support 0..n(n+1)/2
     # Under H0, the distribution is symmetric around n(n+1)/4
 
-    # Use scipy's distribution (available in recent scipy)
-    try:
-        # scipy.stats.wilcoxon gives exact p for small n
-        # But we need to handle the V statistic properly
-        # V = sum of positive ranks; T+ in R
-        max_V = n * (n + 1) / 2.0
-        mean_V = max_V / 2.0
-
-        # Use scipy's signedrank distribution if available
-        dist = sp_stats.signaltonoise  # dummy - not available
-    except AttributeError:
-        pass
-
     # Generate exact distribution via enumeration for small n
     # Each of n ranks can be + or -, giving 2^n equally likely outcomes
     if n <= 20:

@@ -41,6 +41,7 @@ def fisher_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     return _fisher_rxc(
         table, simulate, B,
         design.data_name, warnings_list,
+        seed=design.seed,
     )
 
 
@@ -96,10 +97,12 @@ def _fisher_rxc(
     B: int,
     data_name: str,
     warnings_list: list[str],
+    *,
+    seed: int | None = None,
 ) -> tuple[HTestParams, list[str]]:
     """Fisher's exact test for r x c tables (r > 2 or c > 2)."""
     if simulate:
-        p_value = _monte_carlo_fisher(table, B)
+        p_value = _monte_carlo_fisher(table, B, seed=seed)
         method = (
             f"Fisher's Exact Test for Count Data "
             f"with simulated p-value\n\t(based on {B} replicates)"
@@ -110,7 +113,7 @@ def _fisher_rxc(
         # or fall back to Monte Carlo with a large B
         # Actually, let's use the exact method from scipy if possible
         # scipy doesn't have a general r x c Fisher test, so use Monte Carlo
-        p_value = _monte_carlo_fisher(table, 10000)
+        p_value = _monte_carlo_fisher(table, 10000, seed=seed)
         method = (
             "Fisher's Exact Test for Count Data "
             "with simulated p-value\n\t(based on 10000 replicates)"
@@ -340,7 +343,9 @@ def _log_table_prob(table: np.ndarray) -> float:
     return log_p
 
 
-def _monte_carlo_fisher(table: np.ndarray, B: int) -> float:
+def _monte_carlo_fisher(
+    table: np.ndarray, B: int, *, seed: int | None = None,
+) -> float:
     """
     Monte Carlo p-value for Fisher's exact test using random tables.
 
@@ -358,13 +363,15 @@ def _monte_carlo_fisher(table: np.ndarray, B: int) -> float:
 
     # Distribution over tables with these marginals
     dist = random_table(row_sums, col_sums)
+    # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
+    rng = np.random.default_rng(seed)
 
     # Log-probability of the observed table
     observed_log_prob = _log_table_prob(table)
 
     count = 0
     for _ in range(B):
-        sim_table = dist.rvs()
+        sim_table = dist.rvs(random_state=rng)
         sim_log_prob = _log_table_prob(sim_table)
         # Count tables with prob <= observed (i.e., log_prob <= observed)
         if sim_log_prob <= observed_log_prob + 1e-7:

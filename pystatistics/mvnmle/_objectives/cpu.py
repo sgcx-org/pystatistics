@@ -12,6 +12,7 @@ import numpy as np
 from typing import Tuple, Dict, Any
 from .base import MLEObjectiveBase, PatternData
 from .parameterizations import InverseCholeskyParameterization
+from pystatistics.core.exceptions import NumericalError
 
 
 class CPUObjectiveFP64(MLEObjectiveBase):
@@ -57,33 +58,15 @@ class CPUObjectiveFP64(MLEObjectiveBase):
         )
 
     def get_initial_parameters(self) -> np.ndarray:
-        """Get R-compatible initial parameters."""
-        sample_cov_regularized = self.sample_cov.copy()
+        """Get R-compatible initial parameters.
 
-        # Check condition number
-        try:
-            eigenvals = np.linalg.eigvalsh(sample_cov_regularized)
-            min_eig = np.min(eigenvals)
-            max_eig = np.max(eigenvals)
-
-            # If poorly conditioned or non-PD, regularize
-            if min_eig < 1e-6 or max_eig / min_eig > 1e10:
-                reg_amount = max(1e-4, abs(min_eig) + 1e-4)
-                sample_cov_regularized += reg_amount * np.eye(self.n_vars)
-
-                # Shrink off-diagonals for stability
-                for i in range(self.n_vars):
-                    for j in range(i + 1, self.n_vars):
-                        sample_cov_regularized[i, j] *= 0.95
-                        sample_cov_regularized[j, i] *= 0.95
-        except np.linalg.LinAlgError:
-            # If eigenvalue computation fails, use diagonal
-            sample_cov_regularized = np.diag(np.diag(self.sample_cov))
-            sample_cov_regularized += 0.1 * np.eye(self.n_vars)
-
+        Uses sample_cov (already regularized by base class if needed)
+        as the starting point for optimization. Starting values do not
+        affect the final MLE result.
+        """
         return self.parameterization.get_initial_parameters(
             self.sample_mean,
-            sample_cov_regularized
+            self.sample_cov.copy()
         )
 
     def _reconstruct_delta_matrix(self, theta: np.ndarray) -> np.ndarray:

@@ -213,7 +213,7 @@ def _compute_ci(
             f"Choose from 'log', 'plain', 'log-log'."
         )
 
-    # Clip to [0, 1]
+    # NUMERICAL GUARD: CI values are probabilities, must be in [0,1]
     ci_lower = np.clip(ci_lower, 0.0, 1.0)
     ci_upper = np.clip(ci_upper, 0.0, 1.0)
 

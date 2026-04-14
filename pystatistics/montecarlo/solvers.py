@@ -26,16 +26,15 @@ BackendChoice = Literal['auto', 'cpu', 'gpu']
 def _get_boot_backend(backend: BackendChoice):
     """Select bootstrap backend."""
     if backend in ('cpu', 'auto'):
-        # auto defaults to CPU for bootstrap (GPU requires special handling)
+        # auto defaults to CPU for bootstrap — GPU bootstrap is not yet
+        # implemented, so there is nothing to auto-select.
         return CPUBootstrapBackend()
 
     if backend == 'gpu':
-        try:
-            from pystatistics.montecarlo.backends.gpu import GPUBootstrapBackend
-            return GPUBootstrapBackend()
-        except (ImportError, RuntimeError):
-            # Fall back to CPU if GPU unavailable
-            return CPUBootstrapBackend()
+        # Let ImportError/RuntimeError propagate — the user explicitly
+        # asked for GPU, so silent fallback would be deceptive.
+        from pystatistics.montecarlo.backends.gpu import GPUBootstrapBackend
+        return GPUBootstrapBackend()
 
     raise ValueError(f"Unknown backend: {backend!r}")
 
@@ -43,14 +42,14 @@ def _get_boot_backend(backend: BackendChoice):
 def _get_perm_backend(backend: BackendChoice):
     """Select permutation backend."""
     if backend in ('cpu', 'auto'):
+        # auto defaults to CPU — GPU permutation is not yet implemented.
         return CPUPermutationBackend()
 
     if backend == 'gpu':
-        try:
-            from pystatistics.montecarlo.backends.gpu import GPUPermutationBackend
-            return GPUPermutationBackend()
-        except (ImportError, RuntimeError):
-            return CPUPermutationBackend()
+        # Let ImportError/RuntimeError propagate — the user explicitly
+        # asked for GPU, so silent fallback would be deceptive.
+        from pystatistics.montecarlo.backends.gpu import GPUPermutationBackend
+        return GPUPermutationBackend()
 
     raise ValueError(f"Unknown backend: {backend!r}")
 

@@ -11,6 +11,7 @@ Supports CPU (numpy/scipy) and GPU (torch) execution.
 import numpy as np
 from typing import List, Optional
 
+from pystatistics.core.exceptions import NumericalError
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
 from pystatistics.mvnmle.design import MVNDesign
@@ -309,13 +310,21 @@ class EMBackend:
         return np.concatenate([mu, sigma[np.tril_indices(p)]])
 
     def _ensure_pd(self, sigma: np.ndarray, p: int) -> np.ndarray:
-        """Ensure positive definiteness with minimal ridge if needed."""
+        """Check positive definiteness — raise on failure instead of silent ridge."""
         try:
             eigvals = np.linalg.eigvalsh(sigma)
             min_eig = np.min(eigvals)
             if min_eig < 1e-10:
-                ridge = abs(min_eig) + 1e-8
-                sigma = sigma + ridge * np.eye(p)
-        except np.linalg.LinAlgError:
-            sigma = sigma + 1e-6 * np.eye(p)
+                raise NumericalError(
+                    f"EM algorithm encountered a non-positive-definite covariance matrix "
+                    f"(min eigenvalue={min_eig:.2e}). "
+                    f"Check data quality: look for constant columns, collinear variables, "
+                    f"or insufficient observations for the number of variables."
+                )
+        except np.linalg.LinAlgError as e:
+            raise NumericalError(
+                f"EM algorithm: eigenvalue decomposition of covariance failed: {e}. "
+                f"Check data quality: look for constant columns, collinear variables, "
+                f"or insufficient observations for the number of variables."
+            ) from e
         return sigma

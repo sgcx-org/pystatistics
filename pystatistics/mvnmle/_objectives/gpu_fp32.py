@@ -8,6 +8,7 @@ Uses PyTorch autodiff for analytical gradients.
 import numpy as np
 import warnings
 from typing import Tuple, Optional, Dict, Any
+from pystatistics.core.exceptions import NumericalError
 
 from .base import MLEObjectiveBase
 from .parameterizations import (
@@ -76,7 +77,15 @@ class GPUObjectiveFP32(MLEObjectiveBase):
         self._prepare_gpu_data()
 
     def _select_device(self, requested_device: Optional[str]) -> Any:
-        """Select appropriate GPU device."""
+        """Select appropriate GPU device.
+
+        Note: The caller (solvers._get_backend) handles the backend='gpu' vs
+        'auto' distinction before instantiating this class. When backend='gpu',
+        the solver calls select_device('gpu') which raises RuntimeError if no
+        GPU is available — so this class is never constructed with an invalid
+        explicit GPU request. The warnings below are therefore only reachable
+        in 'auto' mode, where silent CPU fallback is the intended behavior.
+        """
         torch = self.torch
 
         if requested_device:
@@ -88,7 +97,8 @@ class GPUObjectiveFP32(MLEObjectiveBase):
                     return torch.device('cpu')
             return device
 
-        # Auto-select
+        # Auto-select: silent fallback to CPU is acceptable here because this
+        # code path is only reached when backend='auto' (best available).
         if torch.cuda.is_available():
             return torch.device('cuda')
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -120,7 +130,7 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             self.gpu_patterns.append(gpu_pattern)
 
     def get_initial_parameters(self) -> np.ndarray:
-        """Get initial parameters with same regularization strategy as CPU."""
+        """Get initial parameters — raises on ill-conditioned covariance."""
         sample_cov_regularized = self.sample_cov.copy()
 
         try:
@@ -129,16 +139,18 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             max_eig = np.max(eigenvals)
 
             if min_eig < 1e-6 or max_eig / min_eig > 1e10:
-                reg_amount = max(1e-4, abs(min_eig) + 1e-4)
-                sample_cov_regularized += reg_amount * np.eye(self.n_vars)
-
-                for i in range(self.n_vars):
-                    for j in range(i + 1, self.n_vars):
-                        sample_cov_regularized[i, j] *= 0.95
-                        sample_cov_regularized[j, i] *= 0.95
-        except np.linalg.LinAlgError:
-            sample_cov_regularized = np.diag(np.diag(self.sample_cov))
-            sample_cov_regularized += 0.1 * np.eye(self.n_vars)
+                raise NumericalError(
+                    f"Initial sample covariance is ill-conditioned "
+                    f"(min eigenvalue={min_eig:.2e}, condition number={max_eig/min_eig:.2e}). "
+                    f"Check for collinear variables, remove constant columns, "
+                    f"or scale your data before fitting."
+                )
+        except np.linalg.LinAlgError as e:
+            raise NumericalError(
+                f"Eigenvalue decomposition of the sample covariance failed: {e}. "
+                f"Check for collinear variables, remove constant columns, "
+                f"or scale your data before fitting."
+            ) from e
 
         return self.parameterization.get_initial_parameters(
             self.sample_mean,

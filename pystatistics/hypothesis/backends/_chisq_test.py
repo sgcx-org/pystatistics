@@ -60,7 +60,7 @@ def chisq_independence(design: HypothesisDesign) -> tuple[HTestParams, list[str]
 
     if simulate:
         # Monte Carlo p-value
-        p_value = _monte_carlo_independence(table, chisq, B)
+        p_value = _monte_carlo_independence(table, chisq, B, seed=design.seed)
         method += (
             f" with simulated p-value\n\t(based on {B} replicates)"
         )
@@ -127,7 +127,7 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         )
 
     if simulate:
-        p_value = _monte_carlo_gof(observed, p, chisq, B)
+        p_value = _monte_carlo_gof(observed, p, chisq, B, seed=design.seed)
         method = (
             "Chi-squared test for given probabilities with simulated p-value"
             f"\n\t(based on {B} replicates)"
@@ -158,7 +158,8 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
 
 
 def _monte_carlo_independence(
-    table: np.ndarray, observed_stat: float, B: int
+    table: np.ndarray, observed_stat: float, B: int,
+    *, seed: int | None = None,
 ) -> float:
     """Monte Carlo p-value for independence test using random tables."""
     from scipy.stats import random_table
@@ -168,10 +169,12 @@ def _monte_carlo_independence(
     expected = np.outer(row_sums, col_sums) / float(table.sum())
 
     dist = random_table(row_sums, col_sums)
+    # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
+    rng = np.random.default_rng(seed)
 
     count = 0
     for _ in range(B):
-        sim_table = dist.rvs()
+        sim_table = dist.rvs(random_state=rng)
         sim_stat = np.sum((sim_table - expected) ** 2 / expected)
         if sim_stat >= observed_stat - 1e-12:
             count += 1
@@ -180,10 +183,12 @@ def _monte_carlo_independence(
 
 
 def _monte_carlo_gof(
-    observed: np.ndarray, p: np.ndarray, observed_stat: float, B: int
+    observed: np.ndarray, p: np.ndarray, observed_stat: float, B: int,
+    *, seed: int | None = None,
 ) -> float:
     """Monte Carlo p-value for GOF test."""
-    rng = np.random.default_rng()
+    # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
+    rng = np.random.default_rng(seed)
     n = int(np.sum(observed))
     expected = n * p
 

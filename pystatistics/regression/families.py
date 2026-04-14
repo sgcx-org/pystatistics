@@ -81,6 +81,7 @@ class LogitLink(Link):
         return 'logit'
 
     def link(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents log(0) and division by zero in logit transform
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         return np.log(mu / (1 - mu))
 
@@ -92,6 +93,7 @@ class LogitLink(Link):
     def mu_eta(self, eta: NDArray) -> NDArray:
         eta = np.clip(eta, -500, 500)
         p = 1.0 / (1.0 + np.exp(-eta))
+        # NUMERICAL GUARD: prevents zero derivative in IRLS weights
         return np.maximum(p * (1.0 - p), 1e-10)
 
 
@@ -103,6 +105,7 @@ class LogLink(Link):
         return 'log'
 
     def link(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents log(0) in log link function
         return np.log(np.maximum(mu, 1e-10))
 
     def linkinv(self, eta: NDArray) -> NDArray:
@@ -123,12 +126,15 @@ class InverseLink(Link):
         return 'inverse'
 
     def link(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents division by zero in inverse link
         return 1.0 / np.maximum(mu, 1e-10)
 
     def linkinv(self, eta: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents division by zero in inverse link
         return 1.0 / np.maximum(eta, 1e-10)
 
     def mu_eta(self, eta: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents division by zero in derivative
         return -1.0 / np.maximum(eta ** 2, 1e-20)
 
 
@@ -141,6 +147,7 @@ class ProbitLink(Link):
 
     def link(self, mu: NDArray) -> NDArray:
         from scipy.stats import norm
+        # NUMERICAL GUARD: prevents Inf from ppf(0) or ppf(1)
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         return norm.ppf(mu)
 
@@ -150,6 +157,7 @@ class ProbitLink(Link):
 
     def mu_eta(self, eta: NDArray) -> NDArray:
         from scipy.stats import norm
+        # NUMERICAL GUARD: prevents zero derivative in IRLS weights
         return np.maximum(norm.pdf(eta), 1e-10)
 
 
@@ -345,6 +353,7 @@ class Binomial(Family):
         return LogitLink()
 
     def variance(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents zero variance in IRLS weights
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         return mu * (1.0 - mu)
 
@@ -353,6 +362,7 @@ class Binomial(Family):
         return (y + 0.5) / 2.0
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
+        # NUMERICAL GUARD: prevents log(0) in deviance computation
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         # Unit deviance: 2 * [y*log(y/mu) + (1-y)*log((1-y)/(1-mu))]
         # with 0*log(0) = 0. np.where evaluates both branches, so
@@ -367,6 +377,7 @@ class Binomial(Family):
     ) -> float:
         # Binomial log-likelihood for binary data:
         # Σ wt_i * [y_i * log(μ_i) + (1 - y_i) * log(1 - μ_i)]
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         ll = float(np.sum(wt * (y * np.log(mu) + (1 - y) * np.log(1 - mu))))
         return ll
@@ -391,6 +402,7 @@ class Poisson(Family):
         return LogLink()
 
     def variance(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents zero variance in IRLS weights
         return np.maximum(mu, 1e-10)
 
     def initialize(self, y: NDArray) -> NDArray:
@@ -398,6 +410,7 @@ class Poisson(Family):
         return np.maximum(y, 0.1)
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
+        # NUMERICAL GUARD: prevents log(0) in deviance computation
         mu = np.maximum(mu, 1e-10)
         # Unit deviance: 2 * [y*log(y/mu) - (y - mu)]
         # with 0*log(0) = 0
@@ -411,6 +424,7 @@ class Poisson(Family):
         # Poisson log-likelihood:
         # Σ wt_i * [y_i * log(μ_i) - μ_i - log(y_i!)]
         from scipy.special import gammaln
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         mu = np.maximum(mu, 1e-10)
         ll = float(np.sum(
             wt * (y * np.log(mu) - mu - gammaln(y + 1))

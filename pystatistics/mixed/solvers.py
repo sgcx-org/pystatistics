@@ -372,6 +372,7 @@ def glmm(
         # For GLMM, dispersion = 1.
         cond_ll = family_obj.log_likelihood(design.y, pirls.mu, wt, 1.0)
         penalty = float(pirls.pls.u @ pirls.pls.u)
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pirls.pls.L), 1e-20)))
         ll = cond_ll - 0.5 * penalty - 0.5 * log_det_L
         aic = -2.0 * ll + 2.0 * n_params
@@ -484,6 +485,7 @@ def _extract_var_components(
             # Correlation with first term (only for 2nd+ terms)
             if i > 0 and cov_matrix[0, 0] > 0 and var_i > 0:
                 corr = cov_matrix[i, 0] / (np.sqrt(cov_matrix[0, 0]) * sd_i)
+                # NUMERICAL GUARD: floating-point arithmetic can produce |r| > 1
                 corr = np.clip(corr, -1.0, 1.0)
             else:
                 corr = None
@@ -571,7 +573,9 @@ def _compute_fit_stats(pls, theta, n, p, specs, reml):
     if reml:
         df = n - p
         # REML log-likelihood
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pls.L), 1e-20)))
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_RX = 2.0 * np.sum(np.log(np.maximum(np.abs(np.diag(pls.RX)), 1e-20)))
 
         ll = -0.5 * (
@@ -586,6 +590,7 @@ def _compute_fit_stats(pls, theta, n, p, specs, reml):
         bic = -2.0 * ll + np.log(n) * n_params
     else:
         # ML log-likelihood
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pls.L), 1e-20)))
 
         ll = -0.5 * (

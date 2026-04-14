@@ -249,29 +249,22 @@ class TestGPUPermutation:
 class TestGPUFallback:
     """Tests for GPU fallback behavior."""
 
-    def test_gpu_fallback_when_no_gpu(self):
-        """backend='gpu' falls back gracefully when no GPU available."""
-        # This test always runs — if GPU is available, it uses GPU (with
-        # cpu_fallback); if not, it falls back to pure CPU. Either way,
-        # the result should be valid.
+    def test_gpu_raises_when_not_implemented(self):
+        """backend='gpu' raises NotImplementedError for bootstrap."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=100, seed=42, backend='gpu')
+        with pytest.raises((NotImplementedError, ModuleNotFoundError)):
+            boot(data, mean_stat, R=100, seed=42, backend='gpu')
 
-        assert result.t0[0] == pytest.approx(5.5, rel=1e-10)
-        assert result.t.shape == (100, 1)
-
-    def test_gpu_perm_fallback_when_no_gpu(self):
-        """permutation_test(backend='gpu') falls back gracefully."""
+    def test_gpu_perm_raises_when_not_implemented(self):
+        """permutation_test(backend='gpu') raises NotImplementedError."""
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
-        result = permutation_test(
-            x, y, mean_diff, R=100,
-            seed=42, backend='gpu',
-        )
-
-        assert result.p_value < 0.10
-        assert result.R == 100
+        with pytest.raises((NotImplementedError, ModuleNotFoundError)):
+            permutation_test(
+                x, y, mean_diff, R=100,
+                seed=42, backend='gpu',
+            )
 
     def test_auto_backend_uses_cpu(self):
         """backend='auto' uses CPU for bootstrap (default behavior)."""

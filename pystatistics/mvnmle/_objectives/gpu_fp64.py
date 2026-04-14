@@ -63,7 +63,15 @@ class GPUObjectiveFP64(MLEObjectiveBase):
         self._prepare_gpu_data()
 
     def _select_device(self, requested_device: Optional[str]) -> Any:
-        """Select appropriate GPU device for FP64."""
+        """Select appropriate GPU device for FP64.
+
+        Note: The caller (solvers._get_backend) handles the backend='gpu' vs
+        'auto' distinction before instantiating this class. When backend='gpu',
+        the solver calls select_device('gpu') which raises RuntimeError if no
+        GPU is available — so this class is never constructed with an invalid
+        explicit GPU request. The warnings below are therefore only reachable
+        in 'auto' mode, where silent CPU fallback is the intended behavior.
+        """
         torch = self.torch
 
         if requested_device:
@@ -80,7 +88,8 @@ class GPUObjectiveFP64(MLEObjectiveBase):
                 )
             return device
 
-        # Auto-select: prefer CUDA for FP64
+        # Auto-select: prefer CUDA for FP64. Silent fallback to CPU is
+        # acceptable here because this path is only reached via backend='auto'.
         if torch.cuda.is_available():
             return torch.device('cuda')
         else:

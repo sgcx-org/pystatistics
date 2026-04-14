@@ -72,18 +72,13 @@ class GPUHypothesisBackend:
             with timer.section("gpu_fisher_monte_carlo"):
                 params, warnings_list = self._fisher_mc(design)
         else:
-            # Fall back to CPU for everything else
-            from pystatistics.hypothesis.backends.cpu import CPUHypothesisBackend
-            cpu = CPUHypothesisBackend()
-            timer.stop()
-            result = cpu.solve(design)
-            # Override backend name
-            return Result(
-                params=result.params,
-                info=result.info,
-                timing=result.timing,
-                backend_name=self.name + " (cpu_fallback)",
-                warnings=result.warnings,
+            # This test type has no GPU implementation. Raise so the user
+            # knows GPU was not used. The solver should route backend='auto'
+            # to the CPU backend and never reach here for non-GPU tests.
+            raise NotImplementedError(
+                f"GPU acceleration for '{test_type}' is not implemented. "
+                f"Only chi-squared and Fisher tests with simulate_p_value=True "
+                f"support GPU. Use backend='cpu'."
             )
 
         timer.stop()

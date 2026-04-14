@@ -78,6 +78,7 @@ def p_adjust(
     lp = len(pv)
 
     if method == "bonferroni":
+        # NUMERICAL GUARD: adjusted p-values must be valid probabilities
         adjusted = np.minimum(pv * n_tests, 1.0)
 
     elif method == "holm":
@@ -98,6 +99,7 @@ def p_adjust(
     else:
         raise ValidationError(f"Unknown method: {method!r}")
 
+    # NUMERICAL GUARD: adjusted p-values must be valid probabilities
     result[valid_idx] = np.clip(adjusted, 0.0, 1.0)
     return result
 

@@ -147,6 +147,7 @@ class GPUIRLSBackend:
 
                 # Working weights: w = wt * (dμ/dη)² / V(μ)
                 w_np = wt_np * (mu_eta_val ** 2) / var_mu
+                # NUMERICAL GUARD: prevents division by zero in weighted regression
                 w_np = np.maximum(w_np, 1e-30)
 
                 # Transfer to GPU
@@ -166,11 +167,10 @@ class GPUIRLSBackend:
                     )
                     coef_gpu = lstsq_result.solution.squeeze(1)
                 except (NotImplementedError, RuntimeError):
-                    # Fallback: solve on CPU
-                    lstsq_result = torch.linalg.lstsq(
-                        X_tilde.cpu(), z_tilde.unsqueeze(1).cpu()
+                    raise RuntimeError(
+                        "GPU LSTSQ failed on this device. The operation is not supported "
+                        "on your GPU backend. Use backend='cpu' instead."
                     )
-                    coef_gpu = lstsq_result.solution.squeeze(1).to(self.device)
 
                 # Update η = X @ β and μ = linkinv(η)
                 eta_gpu = X_gpu @ coef_gpu
@@ -254,6 +254,7 @@ class GPUIRLSBackend:
         # ------------------------------------------------------------------
         with timer.section('XtWX'):
             w_final = wt_np * (mu_eta_final ** 2) / family.variance(mu_final)
+            # NUMERICAL GUARD: prevents division by zero in weighted regression
             w_final = np.maximum(w_final, 1e-30)
             XtWX = (X_np * w_final[:, np.newaxis]).T @ X_np
 

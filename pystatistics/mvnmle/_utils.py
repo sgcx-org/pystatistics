@@ -8,6 +8,7 @@ Core functions needed by the objective functions:
 
 import numpy as np
 from typing import Tuple
+from pystatistics.core.exceptions import NumericalError
 
 
 def mysort_data(data: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -134,8 +135,6 @@ def extract_parameters(theta: np.ndarray, n_vars: int) -> Tuple[np.ndarray, np.n
     -----
     Converts from inverse Cholesky parameterization back to mu, Sigma.
     """
-    import warnings
-
     # Extract mean parameters
     mu = theta[:n_vars]
 
@@ -146,9 +145,11 @@ def extract_parameters(theta: np.ndarray, n_vars: int) -> Tuple[np.ndarray, np.n
     try:
         Delta_inv = np.linalg.inv(Delta)
         sigma = Delta_inv.T @ Delta_inv
-    except np.linalg.LinAlgError:
-        # Fallback for numerical issues
-        sigma = np.eye(n_vars)
-        warnings.warn("Numerical issues in parameter extraction, using identity covariance")
+    except np.linalg.LinAlgError as e:
+        raise NumericalError(
+            f"Failed to invert Delta matrix during parameter extraction: {e}. "
+            f"The optimizer may have diverged. Try different starting values, "
+            f"scale your data, or use algorithm='em'."
+        ) from e
 
     return mu, sigma

@@ -52,30 +52,14 @@ class GPUBootstrapBackend:
         """
         Run bootstrap with GPU acceleration where possible.
 
-        For arbitrary user statistic functions, falls back to CPU loop
-        since user Python functions cannot execute on GPU. The GPU
-        value comes from batched operations (e.g., batched OLS).
+        Raises NotImplementedError because GPU bootstrap is not yet
+        implemented. The solver dispatches to CPU for backend='auto';
+        this method is only reached when backend='gpu' was explicitly
+        requested.
         """
-        # For now, fall back to CPU for all bootstrap operations.
-        # GPU acceleration for bootstrap requires either:
-        # 1. Batched regression (via core/compute/linalg/batched.py)
-        # 2. Known vectorizable statistic (mean, variance, etc.)
-        #
-        # Since user statistic functions are arbitrary Python, we
-        # cannot automatically GPU-accelerate them. The GPU backend
-        # provides a consistent interface and will be extended when
-        # specific vectorizable patterns are detected.
-        from pystatistics.montecarlo.backends.cpu import CPUBootstrapBackend
-        cpu = CPUBootstrapBackend()
-        result = cpu.solve(design)
-
-        # Override backend name to indicate GPU was requested
-        return Result(
-            params=result.params,
-            info=result.info,
-            timing=result.timing,
-            backend_name=self.name + " (cpu_fallback)",
-            warnings=result.warnings,
+        raise NotImplementedError(
+            "GPU acceleration for bootstrap is not yet implemented. "
+            "Use backend='cpu'."
         )
 
 
@@ -111,16 +95,12 @@ class GPUPermutationBackend:
         """
         Run permutation test with GPU acceleration where possible.
 
-        Falls back to CPU for arbitrary user statistics.
+        Raises NotImplementedError because GPU permutation testing is
+        not yet implemented. The solver dispatches to CPU for
+        backend='auto'; this method is only reached when backend='gpu'
+        was explicitly requested.
         """
-        from pystatistics.montecarlo.backends.cpu import CPUPermutationBackend
-        cpu = CPUPermutationBackend()
-        result = cpu.solve(design)
-
-        return Result(
-            params=result.params,
-            info=result.info,
-            timing=result.timing,
-            backend_name=self.name + " (cpu_fallback)",
-            warnings=result.warnings,
+        raise NotImplementedError(
+            "GPU acceleration for permutation testing is not yet implemented. "
+            "Use backend='cpu'."
         )

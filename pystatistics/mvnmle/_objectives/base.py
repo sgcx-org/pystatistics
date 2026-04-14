@@ -9,6 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Any
 from dataclasses import dataclass
 import warnings
+from pystatistics.core.exceptions import NumericalError
 
 
 @dataclass
@@ -206,32 +207,22 @@ class MLEObjectiveBase:
                     # Not enough data for this variable, use unit variance
                     cov[i, i] = 1.0
 
-        # Proper regularization for positive definiteness
-        try:
-            eigenvals = np.linalg.eigvalsh(cov)
-            min_eigenval = np.min(eigenvals)
-            max_eigenval = np.max(eigenvals)
+        # Pairwise-complete sample covariance is frequently non-PD when
+        # data has missing values — that is EXPECTED and is the reason
+        # MVN-MLE exists. We need a PD starting point for the optimizer,
+        # so we apply minimal regularization to the INITIAL covariance only.
+        # This does NOT change the model or the final result — it only
+        # affects the optimizer's starting point.
+        eigenvals = np.linalg.eigvalsh(cov)
+        min_eig = np.min(eigenvals)
 
-            if min_eigenval <= 0:
-                # Add enough regularization to ensure positive definiteness
-                regularization = max(0.01, 0.01 * max_eigenval, abs(min_eigenval) + 0.01)
-                cov += regularization * np.eye(self.n_vars)
-
-                # Shrink off-diagonal elements to improve conditioning
-                shrink_factor = 0.95
-                for i in range(self.n_vars):
-                    for j in range(i + 1, self.n_vars):
-                        cov[i, j] *= shrink_factor
-                        cov[j, i] *= shrink_factor
-
-            elif min_eigenval < 1e-4:
-                # Even if positive definite, ensure reasonable conditioning
-                regularization = 1e-4
-                cov += regularization * np.eye(self.n_vars)
-
-        except np.linalg.LinAlgError:
-            # If eigenvalue computation fails, use diagonal matrix
-            cov = np.diag(np.maximum(np.diag(cov), 1.0))
+        if min_eig < 1e-6:
+            # NUMERICAL GUARD: ensure PD starting point for optimizer.
+            # The final MLE result is not affected by starting values
+            # (optimizer converges to the same likelihood maximum).
+            max_eig = np.max(eigenvals)
+            reg_amount = max(1e-4, abs(min_eig) + 1e-4)
+            cov += reg_amount * np.eye(self.n_vars)
 
         return cov
 

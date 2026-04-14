@@ -63,10 +63,12 @@ def profiled_deviance_lmm(
     pls = solve_pls(X, Z, y, Lambda, reml=reml)
 
     # log|L|² = 2 × sum(log(diag(L)))
+    # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
     log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pls.L), 1e-20)))
 
     if reml:
         # log|RX|² = 2 × sum(log(diag(RX)))
+        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_RX = 2.0 * np.sum(np.log(np.maximum(np.abs(np.diag(pls.RX)), 1e-20)))
         df = n - p
         dev = (log_det_L
@@ -120,6 +122,7 @@ def profiled_deviance_glmm(
     # Laplace deviance components
     dev_component = pirls.deviance
     penalty = float(pirls.pls.u @ pirls.pls.u)
+    # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
     log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pirls.pls.L), 1e-20)))
 
     return dev_component + penalty + log_det_L

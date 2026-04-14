@@ -25,6 +25,8 @@ import numpy as np
 from numpy.typing import NDArray
 import scipy.linalg as sla
 
+from pystatistics.core.exceptions import NumericalError
+
 
 @dataclass(frozen=True)
 class PLSResult:
@@ -112,9 +114,13 @@ def solve_pls(
     try:
         L = np.linalg.cholesky(LtL)  # lower triangular
     except np.linalg.LinAlgError:
-        # Add small ridge if not PD (shouldn't happen with + I, but be safe)
-        LtL += 1e-10 * np.eye(q)
-        L = np.linalg.cholesky(LtL)
+        raise NumericalError(
+            "Random effects covariance matrix (L'L) is near-singular — Cholesky "
+            "decomposition failed. This typically means the random effects structure "
+            "is too complex for the data. Suggestions:\n"
+            "  - Simplify the random effects (e.g., remove random slopes)\n"
+            "  - Check for groups with very few observations"
+        )
 
     # Solve the system using the augmented approach:
     # We need to find β and u that minimize ‖yw - Xw β - ZΛ u‖² + ‖u‖²
@@ -149,12 +155,13 @@ def solve_pls(
         tmp = sla.solve_triangular(RX, rhs_beta, lower=True)
         beta = sla.solve_triangular(RX.T, tmp, lower=False)
     except np.linalg.LinAlgError:
-        # Fallback to lstsq if Cholesky fails
-        beta, _, _, _ = np.linalg.lstsq(RtR, rhs_beta, rcond=None)
-        # Compute RX via eigendecomposition for the deviance calculation
-        eigvals = np.linalg.eigvalsh(RtR)
-        eigvals = np.maximum(eigvals, 1e-20)
-        RX = np.diag(np.sqrt(eigvals))
+        raise NumericalError(
+            "Fixed effects system (R'R) is singular — Cholesky solve failed. "
+            "This typically means the design matrix has collinear predictors. "
+            "Suggestions:\n"
+            "  - Check for collinearity in the fixed effects design matrix\n"
+            "  - Remove redundant predictors"
+        )
 
     # Solve for u: L L' u = Λ'Z'(y - Xβ)
     ZLam_t_resid = ZLam_t_y - ZLam_t_X @ beta  # (q,)
