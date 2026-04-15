@@ -182,6 +182,37 @@ the design is wrong.
 
 ---
 
+## 8. Release Tracking — Log Every Change
+
+Every functional change must be recorded in `.release/UNRELEASED.md` **at the time
+the change is made**, not retroactively before a release.
+
+**Rules:**
+- When you modify any source file in the package (bug fix, new feature, performance
+  improvement, API change), add a bullet to `.release/UNRELEASED.md` under
+  `## Changes` describing what changed, why, and the impact.
+- Be specific: include function names, file paths, benchmark numbers, and what the
+  change means to a user. "Fixed a bug" is not acceptable. "Fixed `power_crossover_be`
+  TOST alpha convention to match R PowerTOST — was using `alpha/2` per test instead
+  of `alpha`, resulting in overly conservative sample sizes" is.
+- This file is committed to git and synced across all machines / sessions. If you
+  make a change on Mac and someone else makes a change on Linux, both changes appear
+  in the same file.
+- When ready to release, run `python .release/release.py <version>`. This script:
+  1. Bumps the version in `pyproject.toml` and `__init__.py`
+  2. Prepends the UNRELEASED.md content into `CHANGELOG.md`
+  3. Resets UNRELEASED.md for the next cycle
+  4. Prints a checklist of remaining manual steps (commit, push, create release)
+- The script refuses to release if UNRELEASED.md is empty.
+
+**Corollary — No Surprise Releases:**
+If a release goes out and someone asks "what changed?", the answer must already
+be written down. The UNRELEASED.md file is the single source of truth for in-progress
+changes. If it's empty, nothing has changed. If something changed but isn't in the
+file, that's a process failure.
+
+---
+
 ## Meta-Rule
 
 If any of these rules feel inconvenient, that feeling is the point. These rules exist
