@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.3.0 (unreleased)
+
+### GPU Backends — Permutation Test and Bootstrap
+
+Linux/NVIDIA validation on RTX 5070 Ti exposed that the GPU backends for
+Monte Carlo methods were stubs raising `NotImplementedError`. This release
+implements working GPU acceleration for the two most common workloads.
+
+#### Permutation Test GPU (`permutation_test(backend='gpu')`)
+
+- **Implemented** vectorized GPU backend for mean-difference statistic.
+- Generates random permutations directly on GPU via `torch.rand` + `argsort`
+  (random-key sorting), avoiding the CPU bottleneck of sequential
+  `rng.permutation()` calls.
+- Chunked processing keeps VRAM usage under ~1 GB regardless of problem size.
+- Auto-detects whether the user's statistic is mean-difference; falls back
+  transparently to CPU for non-vectorizable statistics.
+- **Benchmarks** (RTX 5070 Ti, R=50,000 permutations):
+  - n=1,000: 5x speedup (CPU 1.4s, GPU 0.28s)
+  - n=10,000: 23x speedup (CPU 6.7s, GPU 0.29s)
+  - n=50,000: 23x speedup (CPU 33s, GPU 1.4s)
+- `backend='auto'` now selects GPU when CUDA is available (was CPU-only before).
+
+#### Bootstrap GPU (`boot(backend='gpu')`)
+
+- **Implemented** vectorized GPU backend for simple mean statistic on 1-D data.
+- Generates bootstrap index sets via `torch.randint` on GPU; computes all R
+  means in a single vectorized pass.
+- Auto-detects if the user's statistic computes a simple mean; falls back to
+  CPU for multivariate statistics, balanced/parametric sim, or non-mean functions.
+- `backend='auto'` now selects GPU when CUDA is available and statistic is
+  vectorizable (was CPU-only before).
+
+#### Notes
+
+- GPU RNG (PyTorch) differs from CPU RNG (NumPy). P-values and bootstrap
+  replicates are statistically equivalent but not bitwise identical across
+  backends. Observed statistics (t0, observed_stat) remain identical since
+  they are computed on the original data.
+- Tests updated to reflect GPU auto-selection behavior. Backend name assertions
+  now check for `'bootstrap'` / `'permutation'` rather than hardcoding `'cpu'`.
+
 ## 1.2.1
 
 ### Code Quality Audit

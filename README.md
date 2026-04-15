@@ -94,6 +94,10 @@ The boundary zone exists because a ~1% relative difference in a test statistic n
 
 Consumer GPUs (NVIDIA RTX series) execute FP32 at 5-10x the throughput of FP64. Apple Silicon GPUs (MPS) do not support FP64 at all. FP32 is the only path to practical GPU acceleration on hardware that researchers actually have. The tolerances above are the honest cost of that acceleration.
 
+### CUDA vs MPS: Not All GPU Backends Are Equal
+
+Certain operations (notably `scatter_add_` with sparse targets) are 1000x slower on Apple MPS than on NVIDIA CUDA due to Metal's weaker atomic memory support. PyStatistics detects these cases and either fails fast or routes to CPU. See [docs/GPU_BACKEND_NOTES.md](docs/GPU_BACKEND_NOTES.md) for detailed benchmarks and guidance on when GPU helps vs hurts.
+
 ---
 
 ## Quick Start
