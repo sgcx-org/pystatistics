@@ -1,0 +1,30 @@
+# Copy this file into .github/workflows/ in both the pystatistics and
+# pystatsbio repos. It fires a repository_dispatch event to the sgcx
+# repo on every push to main, which triggers a docs rebuild.
+#
+# Requires a repository secret named SGCX_DISPATCH_TOKEN containing a
+# GitHub personal access token (classic) with `repo` scope on sgcx-org/sgcx.
+# Create one at: https://github.com/settings/tokens
+# Then add it as a secret in each library repo's Settings → Secrets.
+
+name: Trigger website docs rebuild
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.py"          # only when Python source changes
+      - "docs/**"        # or when Sphinx source changes
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch docs-rebuild to sgcx repo
+        run: |
+          curl -s -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.SGCX_DISPATCH_TOKEN }}" \
+            https://api.github.com/repos/sgcx-org/sgcx/dispatches \
+            -d '{"event_type":"docs-rebuild"}'
+          echo "Triggered docs rebuild on sgcx-org/sgcx"
