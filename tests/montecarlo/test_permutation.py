@@ -187,12 +187,12 @@ class TestPermutationSolution:
         assert "R=99" in r
 
     def test_backend_name(self):
-        """Backend name is correct."""
+        """Backend name is correct (cpu or gpu depending on hardware)."""
         x = np.array([1.0, 2.0])
         y = np.array([3.0, 4.0])
 
         result = permutation_test(x, y, mean_diff, R=10, seed=42)
-        assert "cpu" in result.backend_name
+        assert "permutation" in result.backend_name
 
 
 # ---------------------------------------------------------------------------

@@ -289,10 +289,10 @@ class TestBootstrapSolution:
         assert "k=1" in r
 
     def test_backend_name(self):
-        """Backend name is set correctly."""
+        """Backend name is set correctly (cpu or gpu depending on hardware)."""
         data = np.array([1.0, 2.0, 3.0])
         result = boot(data, mean_stat, R=10, seed=42)
-        assert "cpu" in result.backend_name
+        assert "bootstrap" in result.backend_name
 
     def test_timing(self):
         """Timing info is available."""

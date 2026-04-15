@@ -25,14 +25,19 @@ BackendChoice = Literal['auto', 'cpu', 'gpu']
 
 def _get_boot_backend(backend: BackendChoice):
     """Select bootstrap backend."""
-    if backend in ('cpu', 'auto'):
-        # auto defaults to CPU for bootstrap — GPU bootstrap is not yet
-        # implemented, so there is nothing to auto-select.
+    if backend == 'cpu':
         return CPUBootstrapBackend()
 
+    if backend == 'auto':
+        # Try GPU — the GPU backend handles fallback to CPU internally
+        # for non-vectorizable statistics.
+        try:
+            from pystatistics.montecarlo.backends.gpu import GPUBootstrapBackend
+            return GPUBootstrapBackend()
+        except (ImportError, RuntimeError):
+            return CPUBootstrapBackend()
+
     if backend == 'gpu':
-        # Let ImportError/RuntimeError propagate — the user explicitly
-        # asked for GPU, so silent fallback would be deceptive.
         from pystatistics.montecarlo.backends.gpu import GPUBootstrapBackend
         return GPUBootstrapBackend()
 
@@ -41,13 +46,19 @@ def _get_boot_backend(backend: BackendChoice):
 
 def _get_perm_backend(backend: BackendChoice):
     """Select permutation backend."""
-    if backend in ('cpu', 'auto'):
-        # auto defaults to CPU — GPU permutation is not yet implemented.
+    if backend == 'cpu':
         return CPUPermutationBackend()
 
+    if backend == 'auto':
+        # Try GPU — the GPU backend handles fallback to CPU internally
+        # when the statistic is not vectorizable (mean-difference).
+        try:
+            from pystatistics.montecarlo.backends.gpu import GPUPermutationBackend
+            return GPUPermutationBackend()
+        except (ImportError, RuntimeError):
+            return CPUPermutationBackend()
+
     if backend == 'gpu':
-        # Let ImportError/RuntimeError propagate — the user explicitly
-        # asked for GPU, so silent fallback would be deceptive.
         from pystatistics.montecarlo.backends.gpu import GPUPermutationBackend
         return GPUPermutationBackend()
 
