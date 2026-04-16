@@ -28,7 +28,7 @@ from pystatistics.regression.solution import (
 )
 from pystatistics.regression.solvers import fit
 from pystatistics.regression.families import (
-    Family, Gaussian, Binomial, Poisson,
+    Family, Gaussian, Binomial, Poisson, GammaFamily, NegativeBinomial,
 )
 
 __all__ = [
@@ -46,4 +46,6 @@ __all__ = [
     "Gaussian",
     "Binomial",
     "Poisson",
+    "GammaFamily",
+    "NegativeBinomial",
 ]

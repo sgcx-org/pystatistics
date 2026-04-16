@@ -436,6 +436,157 @@ class Poisson(Family):
         return True
 
 
+class GammaFamily(Family):
+    """Gamma family. Default link: inverse.
+
+    V(μ) = μ²
+    Deviance = 2 * Σ wt_i * [(y_i - μ_i)/μ_i - log(y_i/μ_i)]
+
+    Used for positive continuous data with variance proportional to mean².
+    Typical applications: cost data, survival times, insurance claims.
+
+    References:
+        R: stats::Gamma()
+        McCullagh & Nelder (1989), Ch. 8
+    """
+
+    @property
+    def name(self) -> str:
+        return 'Gamma'
+
+    def _default_link(self) -> Link:
+        return InverseLink()
+
+    def variance(self, mu: NDArray) -> NDArray:
+        # NUMERICAL GUARD: prevents zero variance when mu is near zero
+        return np.maximum(mu, 1e-10) ** 2
+
+    def initialize(self, y: NDArray) -> NDArray:
+        # NUMERICAL GUARD: Gamma requires positive μ
+        return np.maximum(y, 1e-10)
+
+    def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
+        # NUMERICAL GUARD: prevents division by zero and log(0)
+        mu = np.maximum(mu, 1e-10)
+        y_safe = np.maximum(y, 1e-10)
+        # Unit deviance: -2 * (log(y/μ) - (y - μ)/μ)
+        return 2.0 * float(np.sum(wt * ((y - mu) / mu - np.log(y_safe / mu))))
+
+    def log_likelihood(
+        self, y: NDArray, mu: NDArray, wt: NDArray, dispersion: float
+    ) -> float:
+        # Gamma log-likelihood (shape-rate parameterization):
+        # shape = 1/dispersion, rate = shape/μ
+        # loglik = Σ wt * (shape*log(rate) + (shape-1)*log(y) - rate*y - lgamma(shape))
+        from scipy.special import gammaln
+        shape = 1.0 / dispersion
+        # NUMERICAL GUARD: prevents log(0) in Gamma log-likelihood
+        mu = np.maximum(mu, 1e-10)
+        y_safe = np.maximum(y, 1e-10)
+        rate = shape / mu
+        ll = float(np.sum(wt * (
+            shape * np.log(rate) + (shape - 1.0) * np.log(y_safe)
+            - rate * y - gammaln(shape)
+        )))
+        return ll
+
+    @property
+    def dispersion_is_fixed(self) -> bool:
+        return False
+
+
+class NegativeBinomial(Family):
+    """Negative binomial family. Default link: log.
+
+    V(μ) = μ + μ²/θ  (where θ is the dispersion parameter)
+
+    For fixed θ, this is a standard GLM with known variance function.
+    When θ is unknown, it must be estimated via profile likelihood
+    (see regression._nb_theta).
+
+    Args:
+        theta: The dispersion parameter (> 0). Larger θ means less
+            overdispersion; θ → ∞ recovers Poisson. If None, theta must
+            be estimated externally (e.g., via fit(family='negative.binomial')).
+        link: Link function (default: log).
+
+    References:
+        R: MASS::negative.binomial(), MASS::glm.nb()
+        Venables & Ripley (2002), Modern Applied Statistics with S, Ch. 7.4
+    """
+
+    def __init__(
+        self, theta: float | None = None, link: str | Link | None = None
+    ):
+        if theta is not None and theta <= 0:
+            raise ValueError(f"theta must be positive, got {theta}")
+        self.theta = theta
+        super().__init__(link)
+
+    @property
+    def name(self) -> str:
+        return 'negative.binomial'
+
+    def _default_link(self) -> Link:
+        return LogLink()
+
+    def variance(self, mu: NDArray) -> NDArray:
+        if self.theta is None:
+            raise ValueError(
+                "Cannot compute variance without theta. "
+                "Set theta or use fit(family='negative.binomial') for "
+                "automatic theta estimation."
+            )
+        # NUMERICAL GUARD: prevents zero variance when mu is near zero
+        mu = np.maximum(mu, 1e-10)
+        return mu + mu ** 2 / self.theta
+
+    def initialize(self, y: NDArray) -> NDArray:
+        # Same as Poisson: y + 0.1 to avoid log(0)
+        return np.maximum(y, 0.1)
+
+    def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
+        if self.theta is None:
+            raise ValueError("Cannot compute deviance without theta.")
+        theta = self.theta
+        # NUMERICAL GUARD: prevents log(0) in deviance computation
+        mu = np.maximum(mu, 1e-10)
+        # Unit deviance: 2 * (y*log(max(y,1)/mu) - (y+θ)*log((y+θ)/(μ+θ)))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            term1 = np.where(y > 0, y * np.log(y / mu), 0.0)
+            term2 = (y + theta) * np.log((y + theta) / (mu + theta))
+        return 2.0 * float(np.sum(wt * (term1 - term2)))
+
+    def log_likelihood(
+        self, y: NDArray, mu: NDArray, wt: NDArray, dispersion: float
+    ) -> float:
+        if self.theta is None:
+            raise ValueError("Cannot compute log-likelihood without theta.")
+        theta = self.theta
+        from scipy.special import gammaln
+        # NUMERICAL GUARD: prevents log(0) in NB log-likelihood
+        mu = np.maximum(mu, 1e-10)
+        # NB log-likelihood:
+        # Σ wt * (lgamma(y+θ) - lgamma(θ) - lgamma(y+1)
+        #         + θ*log(θ/(μ+θ)) + y*log(μ/(μ+θ)))
+        ll = float(np.sum(wt * (
+            gammaln(y + theta) - gammaln(theta) - gammaln(y + 1)
+            + theta * np.log(theta / (mu + theta))
+            + y * np.log(mu / (mu + theta))
+        )))
+        return ll
+
+    @property
+    def dispersion_is_fixed(self) -> bool:
+        # For a given theta, the NB GLM has phi=1 (dispersion is "fixed"
+        # in the sense that it's not estimated from Pearson residuals)
+        return True
+
+    def __repr__(self) -> str:
+        theta_str = f'{self.theta:.4g}' if self.theta is not None else 'None'
+        return f"NegativeBinomial(theta={theta_str}, link={self._link.name!r})"
+
+
 # =====================================================================
 # Family name → class mapping + resolver
 # =====================================================================
@@ -445,6 +596,9 @@ _FAMILY_CLASSES: dict[str, type[Family]] = {
     'normal': Gaussian,
     'binomial': Binomial,
     'poisson': Poisson,
+    'gamma': GammaFamily,
+    'negative.binomial': NegativeBinomial,
+    'nb': NegativeBinomial,
 }
 
 

@@ -20,17 +20,17 @@ import numpy as np
 from pystatistics.regression import Design, fit, GLMSolution
 
 
-def _gpu_available():
+def _cuda_available():
+    """Check for CUDA specifically — MPS does not support torch.linalg.lstsq."""
     try:
         import torch
-        return (torch.cuda.is_available() or
-                (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()))
+        return torch.cuda.is_available()
     except ImportError:
         return False
 
 
 pytestmark = pytest.mark.skipif(
-    not _gpu_available(), reason="No GPU available"
+    not _cuda_available(), reason="CUDA GPU required (MPS does not support lstsq)"
 )
 
 

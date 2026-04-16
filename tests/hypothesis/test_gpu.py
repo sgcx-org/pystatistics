@@ -77,13 +77,17 @@ class TestGPUChisqMonteCarlo:
                             backend='gpu')
         assert "gpu" in result.backend_name
 
-    def test_non_mc_falls_back_to_cpu(self):
-        """Non-Monte Carlo chi-squared falls back to CPU."""
+    def test_non_mc_raises_not_implemented(self):
+        """Non-Monte Carlo chi-squared with backend='gpu' raises explicitly.
+
+        As of v1.2.1, GPU backend raises NotImplementedError instead of
+        silently falling back to CPU (Rule 1: fail loud, no silent fallbacks).
+        """
         from pystatistics.hypothesis import chisq_test
 
         table = np.array([[10, 20], [30, 40]])
-        result = chisq_test(table, backend='gpu')
-        assert "cpu_fallback" in result.backend_name
+        with pytest.raises(NotImplementedError, match="GPU acceleration"):
+            chisq_test(table, backend='gpu')
 
 
 class TestGPUFisherMonteCarlo:
@@ -108,37 +112,43 @@ class TestGPUFisherMonteCarlo:
             cpu_result.p_value, abs=0.05,
         )
 
-    def test_fisher_2x2_falls_back_to_cpu(self):
-        """Fisher 2x2 (exact, no MC) falls back to CPU."""
+    def test_fisher_2x2_raises_not_implemented(self):
+        """Fisher 2x2 (exact, no MC) with backend='gpu' raises explicitly.
+
+        As of v1.2.1, GPU backend raises NotImplementedError instead of
+        silently falling back to CPU (Rule 1: fail loud, no silent fallbacks).
+        """
         from pystatistics.hypothesis import fisher_test
 
         table = np.array([[1, 9], [11, 3]])
-        result = fisher_test(table, backend='gpu')
-        assert "cpu_fallback" in result.backend_name
+        with pytest.raises(NotImplementedError, match="GPU acceleration"):
+            fisher_test(table, backend='gpu')
 
 
-class TestGPUFallback:
-    """Tests that non-MC tests correctly fall back to CPU."""
+class TestGPUNoSilentFallback:
+    """Tests that non-MC hypothesis tests raise explicitly on backend='gpu'.
 
-    def test_t_test_fallback(self):
-        """t-test falls back to CPU on GPU backend."""
+    As of v1.2.1, GPU backend raises NotImplementedError instead of
+    silently falling back to CPU (Rule 1: fail loud, no silent fallbacks).
+    """
+
+    def test_t_test_raises(self):
+        """t-test with backend='gpu' raises NotImplementedError."""
         from pystatistics.hypothesis import t_test
 
-        result = t_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
-        assert "cpu_fallback" in result.backend_name
-        assert result.statistic is not None
+        with pytest.raises(NotImplementedError, match="GPU acceleration"):
+            t_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
 
-    def test_wilcox_fallback(self):
-        """Wilcoxon falls back to CPU."""
+    def test_wilcox_raises(self):
+        """Wilcoxon with backend='gpu' raises NotImplementedError."""
         from pystatistics.hypothesis import wilcox_test
 
-        result = wilcox_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
-        assert "cpu_fallback" in result.backend_name
+        with pytest.raises(NotImplementedError, match="GPU acceleration"):
+            wilcox_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
 
-    def test_var_test_fallback(self):
-        """var.test falls back to CPU."""
+    def test_var_test_raises(self):
+        """var.test with backend='gpu' raises NotImplementedError."""
         from pystatistics.hypothesis import var_test
 
-        result = var_test([1, 2, 3, 4, 5], [6, 7, 8, 9, 10],
-                          backend='gpu')
-        assert "cpu_fallback" in result.backend_name
+        with pytest.raises(NotImplementedError, match="GPU acceleration"):
+            var_test([1, 2, 3, 4, 5], [6, 7, 8, 9, 10], backend='gpu')

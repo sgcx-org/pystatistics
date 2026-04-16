@@ -142,15 +142,86 @@ def _fit_glm(
     max_iter: int,
     names: tuple[str, ...] | None,
 ) -> GLMSolution:
-    """Fit GLM via IRLS."""
-    from pystatistics.regression.families import Family, resolve_family
+    """Fit GLM via IRLS.
+
+    For NegativeBinomial with unknown theta (theta=None), runs the
+    alternating estimation loop matching R's MASS::glm.nb():
+        1. Fit Poisson GLM for initial μ
+        2. Estimate θ via profile likelihood
+        3. Refit NB GLM with new θ
+        4. Repeat until θ converges
+    """
+    from pystatistics.regression.families import (
+        Family, NegativeBinomial, Poisson, resolve_family,
+    )
 
     family_obj = resolve_family(family) if not isinstance(family, Family) else family
     backend_impl = _get_glm_backend(backend)
 
+    # NB with unknown theta: alternating estimation loop
+    if isinstance(family_obj, NegativeBinomial) and family_obj.theta is None:
+        return _fit_nb(design, family_obj, backend_impl, tol, max_iter, names)
+
     result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter)
 
     return GLMSolution(_result=result, _design=design, _names=names)
+
+
+def _fit_nb(
+    design: Design,
+    family: 'NegativeBinomial',
+    backend_impl: object,
+    tol: float,
+    max_iter: int,
+    names: tuple[str, ...] | None,
+    theta_max_iter: int = 25,
+    theta_tol: float = 1e-6,
+) -> GLMSolution:
+    """Fit negative binomial GLM with theta estimation.
+
+    Alternates between GLM fitting (given theta) and theta estimation
+    (given mu), matching R's MASS::glm.nb() algorithm.
+    """
+    from pystatistics.core.exceptions import ConvergenceError
+    from pystatistics.regression.families import NegativeBinomial, Poisson
+    from pystatistics.regression._nb_theta import theta_ml
+
+    y = design.y
+    wt = np.ones(design.n)
+
+    # Step 1: Initial Poisson fit for starting mu
+    poisson_result = backend_impl.solve(
+        design, Poisson(), tol=tol, max_iter=max_iter,
+    )
+    mu = poisson_result.params.fitted_values
+
+    # Step 2: Initial theta from Poisson mu
+    theta = theta_ml(y, mu, wt)
+
+    # Step 3: Iterate: refit NB with new theta → re-estimate theta
+    for iteration in range(theta_max_iter):
+        nb_family = NegativeBinomial(theta=theta, link=family._link)
+        result = backend_impl.solve(
+            design, nb_family, tol=tol, max_iter=max_iter,
+        )
+        mu = result.params.fitted_values
+        theta_new = theta_ml(y, mu, wt)
+
+        if abs(theta_new - theta) / (theta + 1e-10) < theta_tol:
+            # Converged — final result uses the converged theta
+            nb_final = NegativeBinomial(theta=theta_new, link=family._link)
+            result = backend_impl.solve(
+                design, nb_final, tol=tol, max_iter=max_iter,
+            )
+            return GLMSolution(_result=result, _design=design, _names=names)
+
+        theta = theta_new
+
+    raise ConvergenceError(
+        f"NB theta estimation did not converge after {theta_max_iter} "
+        f"outer iterations. Last theta = {theta:.4f}.",
+        details={'theta': theta, 'n_outer_iter': theta_max_iter},
+    )
 
 
 # =====================================================================

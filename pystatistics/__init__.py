@@ -29,6 +29,10 @@ from pystatistics import montecarlo
 from pystatistics import survival
 from pystatistics import anova
 from pystatistics import mixed
+from pystatistics import multinomial
+from pystatistics import ordinal
+from pystatistics import multivariate
+from pystatistics import timeseries
 
 __all__ = [
     "__version__",
@@ -41,4 +45,8 @@ __all__ = [
     "survival",
     "anova",
     "mixed",
+    "multinomial",
+    "ordinal",
+    "multivariate",
+    "timeseries",
 ]
