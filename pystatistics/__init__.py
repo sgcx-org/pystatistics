@@ -33,6 +33,7 @@ from pystatistics import multinomial
 from pystatistics import ordinal
 from pystatistics import multivariate
 from pystatistics import timeseries
+from pystatistics import gam
 
 __all__ = [
     "__version__",
@@ -49,4 +50,5 @@ __all__ = [
     "ordinal",
     "multivariate",
     "timeseries",
+    "gam",
 ]

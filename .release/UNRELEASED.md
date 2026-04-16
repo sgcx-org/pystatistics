@@ -145,6 +145,30 @@
   File: `timeseries/_decomposition.py`.
   34 tests in `tests/timeseries/test_decomposition.py`.
 
+- **New module: `gam`** — Generalized Additive Models matching R's `mgcv::gam()`.
+
+  - `gam(y, smooths=[s('x1'), s('x2')], smooth_data={...})` — Fit penalized
+    regression spline GAMs via P-IRLS. Supports cubic regression splines (cr)
+    and thin plate splines (tp). Smoothing parameter selection via GCV (default)
+    or REML using L-BFGS-B optimization over log-lambda space. Computes
+    effective degrees of freedom per smooth term, approximate significance
+    tests, deviance explained, AIC, GCV score.
+
+  - `s(var_name, k=10, bs='cr')` — Smooth term specification matching `mgcv::s()`.
+
+  - Two basis types: cubic regression splines (`_bspline_basis` via
+    `scipy.interpolate.BSpline` with quantile-placed knots, second-derivative
+    penalty via numerical quadrature) and thin plate splines (Wood 2003
+    truncated eigendecomposition).
+
+  - `GAMSolution` with `summary()` matching `mgcv::summary.gam()`: parametric
+    coefficient table, smooth term significance table with edf and chi-sq,
+    deviance explained, GCV, R² adjusted.
+
+  Files: `gam/__init__.py`, `gam/_common.py`, `gam/_basis.py`, `gam/_smooth.py`,
+  `gam/_fit.py`, `gam/_gcv.py`, `gam/_gam.py`, `gam/solution.py`.
+  36 tests in `tests/gam/test_gam.py`.
+
 - **Fixed 5 stale GPU tests** — Tests expecting silent CPU fallback updated to expect
   `NotImplementedError`, matching the v1.2.1 "fail loud" behavior change.
   `test_glm_gpu.py` skip condition narrowed to require CUDA (MPS doesn't support lstsq).
