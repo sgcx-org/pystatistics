@@ -3,9 +3,10 @@
 Release utility for pystatistics / pystatsbio.
 
 Usage:
-    python .release/release.py 1.2.0          # bump + changelog + reset
-    python .release/release.py --check        # show what would change
-    python .release/release.py --status       # show current state
+    python .release/release.py 1.2.0            # bump + changelog + reset
+    python .release/release.py --commit 1.2.0   # bump + changelog + reset + git commit/tag/push
+    python .release/release.py --check 1.2.0    # show what would change
+    python .release/release.py --status         # show current state
 
 What it does (in order):
     1. Reads .release/UNRELEASED.md for the change log
@@ -17,9 +18,12 @@ What it does (in order):
     7. Prints a checklist of remaining manual steps
 
 What it does NOT do (you must do these yourself):
-    - git add / commit / push
-    - Create the GitHub release / tag
-    - The publish.yml workflow handles PyPI automatically on release
+    - Update the README (version badges, "what's new" prose) — pre-stage
+      those edits with `git add README.md` before running --commit so they
+      ride along in the release commit
+    - Create the GitHub release (`gh release create vX.Y.Z`) — this is what
+      triggers the publish.yml workflow that pushes to PyPI
+    - In plain (non --commit) mode: git add / commit / push / tag
 
 Place this file in .release/ at the repo root.
 """
@@ -27,6 +31,7 @@ Place this file in .release/ at the repo root.
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -187,6 +192,60 @@ def validate_version(new: str, current: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Git operations (for --commit mode)
+# ---------------------------------------------------------------------------
+
+def run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    """Run a git command at REPO_ROOT. Fails loudly (Rule 1) unless check=False."""
+    return subprocess.run(
+        ["git", "-C", str(REPO_ROOT), *args],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def get_current_branch() -> str:
+    return run_git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+
+
+def tag_exists(tag: str) -> bool:
+    return bool(run_git(["tag", "-l", tag], check=False).stdout.strip())
+
+
+def commit_and_push(new_version: str, package: str) -> None:
+    """Stage release files, commit, tag, and push. Fails loud on any error.
+
+    Stages release.py's own mutations on top of whatever the user has already
+    staged (e.g. README changes), so pre-staged edits ride along in the
+    release commit.
+    """
+    tag = f"v{new_version}"
+    if tag_exists(tag):
+        raise RuntimeError(f"Tag {tag} already exists — aborting")
+
+    branch = get_current_branch()
+    files = [
+        "pyproject.toml",
+        f"{package}/__init__.py",
+        "CHANGELOG.md",
+        ".release/UNRELEASED.md",
+    ]
+    run_git(["add", *files])
+    run_git(["commit", "-m", f"Release {tag}"])
+    print(f"  ✓ git commit: Release {tag}")
+
+    run_git(["tag", tag])
+    print(f"  ✓ git tag: {tag}")
+
+    run_git(["push", "origin", branch])
+    print(f"  ✓ git push: {branch}")
+
+    run_git(["push", "origin", tag])
+    print(f"  ✓ git push: {tag}")
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -240,7 +299,7 @@ def cmd_check(new_version: str) -> None:
         print("\n  WARNING: UNRELEASED.md is empty — changelog entry will be blank")
 
 
-def cmd_release(new_version: str) -> None:
+def cmd_release(new_version: str, commit: bool = False) -> None:
     package = find_package()
     current = get_current_version()
     validate_version(new_version, current)
@@ -249,6 +308,11 @@ def cmd_release(new_version: str) -> None:
     if not unreleased:
         print("ERROR: .release/UNRELEASED.md has no changes.")
         print("Add changes there before releasing.")
+        sys.exit(1)
+
+    # Pre-flight: if --commit, refuse when tag already exists (before any mutation)
+    if commit and tag_exists(f"v{new_version}"):
+        print(f"ERROR: Tag v{new_version} already exists — aborting before any file changes.")
         sys.exit(1)
 
     print(f"Releasing {package} {current} → {new_version}\n")
@@ -268,21 +332,35 @@ def cmd_release(new_version: str) -> None:
     reset_unreleased()
     print(f"  ✓ .release/UNRELEASED.md — reset for next cycle")
 
-    # 4. Checklist
+    # 4. Commit + tag + push (only in --commit mode)
+    if commit:
+        print()
+        commit_and_push(new_version, package)
+
+    # 5. Checklist
     print(f"\n{'='*50}")
     print(f"  Version bumped to {new_version}")
     print(f"{'='*50}")
-    print(f"\nRemaining steps (manual):")
-    print(f"  1. Review the changes:")
-    print(f"       git diff")
-    print(f"  2. Commit:")
-    print(f"       git add -A && git commit -m 'Release {new_version}'")
-    print(f"  3. Push:")
-    print(f"       git push origin main")
-    print(f"  4. Create GitHub Release (triggers PyPI publish):")
-    print(f"       gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
-    print(f"  5. Verify on PyPI:")
-    print(f"       pip install {package}=={new_version}")
+    if commit:
+        print(f"\nRemaining steps (manual):")
+        print(f"  1. Create GitHub Release (triggers PyPI publish):")
+        print(f"       gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
+        print(f"  2. Verify on PyPI:")
+        print(f"       pip install {package}=={new_version}")
+    else:
+        print(f"\nRemaining steps (manual):")
+        print(f"  1. Review the changes:")
+        print(f"       git diff")
+        print(f"  2. Commit:")
+        print(f"       git add -A && git commit -m 'Release {new_version}'")
+        print(f"  3. Push:")
+        print(f"       git push origin main")
+        print(f"  4. Tag:")
+        print(f"       git tag v{new_version} && git push origin v{new_version}")
+        print(f"  5. Create GitHub Release (triggers PyPI publish):")
+        print(f"       gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
+        print(f"  6. Verify on PyPI:")
+        print(f"       pip install {package}=={new_version}")
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +370,10 @@ def cmd_release(new_version: str) -> None:
 def main() -> None:
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  python .release/release.py <version>   # bump + changelog + reset")
-        print("  python .release/release.py --check <v> # dry run")
-        print("  python .release/release.py --status    # show current state")
+        print("  python .release/release.py <version>            # bump + changelog + reset")
+        print("  python .release/release.py --commit <version>   # also commit + tag + push")
+        print("  python .release/release.py --check <version>    # dry run")
+        print("  python .release/release.py --status             # show current state")
         sys.exit(1)
 
     arg = sys.argv[1]
@@ -306,8 +385,13 @@ def main() -> None:
             print("Usage: python .release/release.py --check <version>")
             sys.exit(1)
         cmd_check(sys.argv[2])
+    elif arg == "--commit":
+        if len(sys.argv) < 3:
+            print("Usage: python .release/release.py --commit <version>")
+            sys.exit(1)
+        cmd_release(sys.argv[2], commit=True)
     else:
-        cmd_release(arg)
+        cmd_release(arg, commit=False)
 
 
 if __name__ == "__main__":

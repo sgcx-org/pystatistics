@@ -204,10 +204,11 @@ the change is made**, not retroactively before a release.
   3. Resets UNRELEASED.md for the next cycle
   4. Prints a checklist of remaining manual steps (commit, push, create release)
 - The script refuses to release if UNRELEASED.md is empty.
-- **Then walk through `.release/CHECKLIST.md`.** `release.py` does NOT update
-  `publish.yml`, the git tag, or the README — all three have caused PyPI
-  publish failures in the past. The checklist is the source of truth for
-  what must be done manually; do not skip it.
+- **Preferred release flow:** pre-stage README changes with `git add README.md`,
+  then run `python .release/release.py --commit X.Y.Z`. That flag extends the
+  script to commit, tag, and push — leaving only `gh release create` manual.
+  See `.release/CHECKLIST.md` for the full flow and the historical foot-guns
+  (README, git tag) that `--commit` was added to close.
 
 **Corollary — No Surprise Releases:**
 If a release goes out and someone asks "what changed?", the answer must already
