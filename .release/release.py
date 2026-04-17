@@ -88,16 +88,19 @@ def get_changelog_version() -> str | None:
 # ---------------------------------------------------------------------------
 
 def get_unreleased_content() -> str:
-    """Read the ## Changes section from UNRELEASED.md."""
+    """Read the ## Changes section from UNRELEASED.md.
+
+    Captures everything after `## Changes` to EOF — works with both flat
+    bullet lists and structured `### Summary/Added/Changed/Fixed` subsections.
+    """
     if not UNRELEASED_PATH.exists():
         return ""
     text = UNRELEASED_PATH.read_text()
-    # Find everything after "## Changes"
-    m = re.search(r'^## Changes\s*\n(.*)', text, re.MULTILINE | re.DOTALL)
+    m = re.search(r'^## Changes\s*\n(.*)\Z', text, re.MULTILINE | re.DOTALL)
     if not m:
         return ""
     content = m.group(1).strip()
-    if content == "*(empty — no unreleased changes yet)*":
+    if not content or content == "*(empty — no unreleased changes yet)*":
         return ""
     return content
 
@@ -268,11 +271,17 @@ def cmd_status() -> None:
 
     print(f"\nUnreleased changes:")
     if unreleased:
-        for line in unreleased.split("\n")[:10]:
-            print(f"  {line}")
-        n_lines = len(unreleased.split("\n"))
-        if n_lines > 10:
-            print(f"  ... ({n_lines - 10} more lines)")
+        lines = unreleased.split("\n")
+        sections = [l for l in lines if l.startswith("### ")]
+        if sections:
+            print(f"  {len(lines)} lines across {len(sections)} section(s):")
+            for s in sections:
+                print(f"    {s}")
+        else:
+            for line in lines[:10]:
+                print(f"  {line}")
+            if len(lines) > 10:
+                print(f"  ... ({len(lines) - 10} more lines)")
     else:
         print("  (none)")
 

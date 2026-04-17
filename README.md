@@ -2,22 +2,22 @@
 
 GPU-accelerated statistical computing for Python.
 
-## What's New in 1.2.1
+## What's New
 
-- **No silent model switches.** PyStatistics now raises explicit errors instead of silently falling back to ridge regularization, different solvers, or CPU backends. You always know exactly what model you're running.
-- **`backend='gpu'` is honest.** Explicitly requesting GPU now errors if GPU is unavailable or the operation has no GPU implementation. `backend='auto'` still falls back silently.
-- **Reproducible Monte Carlo.** `chisq_test()` and `fisher_test()` accept `seed=` for deterministic Monte Carlo p-values.
-- **Module structure.** Large files split to stay under 500 code lines. All backward-compatible.
+Major expansion: 5 new modules, 2 new GLM families, ~650 new tests.
 
-### What's New in 1.1
+- **GLM families**: Gamma and negative binomial regression (`fit(X, y, family='gamma')`, `fit(X, y, family='negative.binomial')`)
+- **Ordinal regression**: Proportional odds model (`polr(y, X)` matching R MASS::polr)
+- **Multinomial regression**: Softmax regression (`multinom(y, X)` matching R nnet::multinom)
+- **PCA / Factor analysis**: `pca(X)` and `factor_analysis(X, n_factors)` with varimax/promax rotation
+- **Time series**: Complete framework — ACF/PACF, stationarity tests (ADF, KPSS), ETS, ARIMA/SARIMA, auto.arima, decomposition (classical + STL)
+- **GAMs**: Penalized regression splines (`gam(y, smooths=[s('x1')], smooth_data={...})` matching R mgcv::gam)
 
-- **Named coefficients**: Pass `names=` to `fit()`, `coxph()`, and `discrete_time()` to get labeled output matching R
-- **`result.coef` dict**: Access coefficients by name — `result.coef["albumin"]` instead of `result.coefficients[1]`
-- **`result.hr` dict** (Cox/discrete-time): Access hazard ratios by name
-- **Intercept auto-detection**: Pass p-1 names and `"(Intercept)"` is prepended automatically
-- **OLS summary improvements**: Now prints residual quantiles and F-statistic, matching R's `summary(lm())`
-- **Cox summary improvements**: Now prints hazard ratio confidence intervals, matching R's `summary(coxph())`
-- **Bug fix**: Kaplan-Meier summary now correctly displays confidence level percentage
+### Previous Releases
+
+**1.2.1** — No silent model switches; `backend='gpu'` is honest; reproducible Monte Carlo via `seed=`; module structure refactoring.
+
+**1.1** — Named coefficients via `names=`; `result.coef` dict; OLS/Cox summary improvements matching R output.
 
 ---
 
@@ -253,6 +253,42 @@ print(result.summary())
 # GLMM — Poisson with random intercept
 result = glmm(y_count, X, groups={'subject': subject_ids},
               family='poisson')
+
+# --- Gamma GLM ---
+from pystatistics.regression import fit
+
+y_positive = np.abs(np.random.randn(200)) + 0.1
+X = np.random.randn(200, 3)
+result = fit(X, y_positive, family='gamma')
+print(result.summary())
+
+# --- Ordinal regression ---
+from pystatistics.ordinal import polr
+
+y_ordinal = np.random.choice([1, 2, 3, 4, 5], size=200)
+X = np.random.randn(200, 3)
+result = polr(y_ordinal, X)
+print(result.coefficients, result.thresholds)
+print(result.summary())
+
+# --- Time series (ARIMA) ---
+from pystatistics.timeseries import arima, auto_arima, acf
+
+ts = np.cumsum(np.random.randn(200))  # random walk
+acf_result = acf(ts, nlags=20)
+result = arima(ts, order=(1, 1, 1))
+print(result.coefficients, result.aic)
+best = auto_arima(ts)
+print(best.order, best.aic)
+
+# --- GAM ---
+from pystatistics.gam import gam, s
+
+x = np.linspace(0, 2 * np.pi, 200)
+y = np.sin(x) + np.random.randn(200) * 0.3
+result = gam(y, smooths=[s('x1')], smooth_data={'x1': x})
+print(result.edf, result.gcv)
+print(result.summary())
 ```
 
 ## Modules
@@ -260,7 +296,7 @@ result = glmm(y_count, X, groups={'subject': subject_ids},
 | Module | Status | Description |
 |--------|--------|-------------|
 | `regression/` LM | Complete | Linear models (OLS) with CPU QR and GPU Cholesky |
-| `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson) via IRLS |
+| `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson, Gamma, Negative Binomial) via IRLS |
 | `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
 | `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
 | `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
@@ -268,6 +304,11 @@ result = glmm(y_count, X, groups={'subject': subject_ids},
 | `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
 | `anova/` | Complete | ANOVA: one-way, factorial, ANCOVA, repeated measures, Type I/II/III SS, Tukey/Bonferroni/Dunnett, Levene's test |
 | `mixed/` LMM/GLMM | Complete | Linear and generalized linear mixed models (random intercepts/slopes, nested/crossed, REML/ML, Satterthwaite df, GLMM Laplace) |
+| `ordinal/` | Complete | Proportional odds (cumulative link) models matching R MASS::polr |
+| `multinomial/` | Complete | Multinomial logit (softmax) regression matching R nnet::multinom |
+| `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
+| `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
+| `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 
