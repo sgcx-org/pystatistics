@@ -40,6 +40,8 @@ def gam(
     tol: float = 1e-8,
     max_iter: int = 200,
     names: list[str] | None = None,
+    backend: str | None = None,
+    use_fp64: bool = False,
 ) -> GAMSolution:
     """Fit a Generalized Additive Model.
 
@@ -81,6 +83,16 @@ def gam(
         ...              smooth_data={'x1': x1, 'x2': x2})
         >>> print(result.summary())
     """
+    # ------------------------------------------------------------------
+    # Backend resolution (see GPU_BACKEND_CONVENTION.md)
+    # ------------------------------------------------------------------
+    if backend is None:
+        backend = "cpu"
+    if backend not in ("cpu", "auto", "gpu"):
+        raise ValidationError(
+            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
+        )
+
     # ------------------------------------------------------------------
     # Input validation
     # ------------------------------------------------------------------
@@ -145,35 +157,103 @@ def gam(
     n_smooths = len(smooths)
 
     # ------------------------------------------------------------------
+    # GPU path selection
+    # ------------------------------------------------------------------
+    # The GPU backend keeps X_aug, y, and the stacked penalty tensor
+    # device-resident across all L-BFGS-B evaluations in the lambda
+    # search (~50 P-IRLS fits per outer fit). Only the log_lambdas
+    # vector going in and the scalar scoring criterion coming out
+    # cross the bus per evaluation.
+    gpu_fitter = None
+    backend_name = "cpu_pirls"
+    if backend != "cpu":
+        from pystatistics.core.compute.device import select_device
+        dev = select_device("gpu" if backend == "gpu" else "auto")
+        if dev.is_gpu:
+            from pystatistics.gam.backends.gpu_pirls import GAMGPUFitter
+            try:
+                gpu_fitter = GAMGPUFitter(
+                    y_arr, X_aug, S_penalties, family_name=fam.name,
+                    parametric_cols=parametric_cols,
+                    device=dev.device_type, use_fp64=use_fp64,
+                )
+                backend_name = (
+                    f"gpu_pirls ({dev.device_type}, "
+                    f"{'fp64' if use_fp64 else 'fp32'})"
+                )
+            except ValueError:
+                # Family not supported on GPU — for an explicit
+                # backend='gpu' this should be loud; for 'auto' fall
+                # back to CPU silently.
+                if backend == "gpu":
+                    raise
+                gpu_fitter = None
+        elif backend == "gpu":
+            raise RuntimeError(
+                "backend='gpu' requested but no GPU is available. "
+                "Install PyTorch with CUDA/MPS support or use "
+                "backend='cpu'."
+            )
+        # else: backend='auto' with no GPU, fall through to CPU.
+
+    # FP32 gradient precision is ~1e-7 — floor the P-IRLS tolerance on
+    # the GPU FP32 path, same rationale as the multinomial / polr
+    # entry points.
+    gpu_fp32_min_tol = 1e-5
+    effective_tol = tol
+    if gpu_fitter is not None and not use_fp64 and tol < gpu_fp32_min_tol:
+        effective_tol = gpu_fp32_min_tol
+
+    # ------------------------------------------------------------------
     # Select smoothing parameters
     # ------------------------------------------------------------------
     if n_smooths > 0:
-        lambdas = select_smoothing_parameters(
-            y_arr, X_aug, S_penalties, fam, parametric_cols,
-            method_upper, tol, max_iter, n_smooths,
-        )
+        if gpu_fitter is not None:
+            from scipy.optimize import minimize as _minimize
+            log_lam0 = np.zeros(n_smooths, dtype=np.float64)
+            bounds = [(-10.0, 15.0)] * n_smooths
+            scorer = (
+                gpu_fitter.gcv_score
+                if method_upper == "GCV" else gpu_fitter.reml_score
+            )
+            opt_res = _minimize(
+                scorer, log_lam0,
+                args=(effective_tol, max_iter),
+                method="L-BFGS-B", bounds=bounds,
+                options={"maxiter": 50, "ftol": 1e-6},
+            )
+            lambdas = np.exp(opt_res.x)
+        else:
+            lambdas = select_smoothing_parameters(
+                y_arr, X_aug, S_penalties, fam, parametric_cols,
+                method_upper, tol, max_iter, n_smooths,
+            )
     else:
         lambdas = np.array([], dtype=np.float64)
 
     # ------------------------------------------------------------------
-    # Final fit with optimal lambdas
-    # ------------------------------------------------------------------
-    beta, mu, eta, W, deviance, n_iter, converged = _fit_gam_fixed_lambda(
-        y_arr, X_aug, S_penalties, lambdas, fam, parametric_cols, tol, max_iter,
-    )
-
-    # ------------------------------------------------------------------
-    # Diagnostics
+    # Final fit with optimal lambdas + per-term EDF
     # ------------------------------------------------------------------
     wt = np.ones(n, dtype=np.float64)
-
-    # EDF per smooth
-    if n_smooths > 0:
-        edf = _compute_edf(X_aug, W, S_penalties, lambdas, term_indices)
+    if gpu_fitter is not None:
+        (edf, total_edf, beta, mu, eta, W, deviance, n_iter,
+         converged) = gpu_fitter.edf_per_term(
+            lambdas, term_indices, effective_tol, max_iter,
+        )
+        if n_smooths == 0:
+            edf = np.array([], dtype=np.float64)
     else:
-        edf = np.array([], dtype=np.float64)
-
-    total_edf = _compute_hat_matrix_trace(X_aug, W, S_penalties, lambdas)
+        beta, mu, eta, W, deviance, n_iter, converged = _fit_gam_fixed_lambda(
+            y_arr, X_aug, S_penalties, lambdas, fam, parametric_cols,
+            tol, max_iter,
+        )
+        if n_smooths > 0:
+            edf = _compute_edf(X_aug, W, S_penalties, lambdas, term_indices)
+        else:
+            edf = np.array([], dtype=np.float64)
+        total_edf = _compute_hat_matrix_trace(
+            X_aug, W, S_penalties, lambdas,
+        )
 
     # Scale estimate
     df_resid = max(n - total_edf, 1.0)
@@ -267,7 +347,7 @@ def gam(
             "lambdas": lambdas.tolist() if n_smooths > 0 else [],
         },
         timing=None,
-        backend_name="cpu_pirls",
+        backend_name=backend_name,
     )
 
     return GAMSolution(result, smooth_infos, _names=names)

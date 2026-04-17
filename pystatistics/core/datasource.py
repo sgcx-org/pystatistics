@@ -261,7 +261,142 @@ class DataSource:
             },
         )
     
-    @classmethod  
+    # === Device transfer ===
+
+    def to(self, device: str) -> DataSource:
+        """Return a new DataSource with all arrays on the specified device.
+
+        Transfers the underlying materialized arrays to the given compute
+        device (``'cpu'``, ``'cuda'``, ``'cuda:0'``, ``'mps'``, ...) and
+        returns a new DataSource. The original is unchanged — DataSources
+        are immutable.
+
+        Intended workflow: pay the host↔device transfer once, reuse the
+        resulting DataSource across many fits::
+
+            ds = DataSource.from_arrays(X=X, y=y)
+            gds = ds.to("cuda")                       # pay transfer once
+            pca(gds['X'], backend="gpu")              # no transfer
+            multinom(gds['y'], gds['X'], backend="gpu")  # no transfer
+
+        Without this, a stateless per-call API re-transfers X from host
+        memory on every fit. Measured on a 1M × 100 FP32 matrix on an
+        RTX 5070 Ti: per-call pageable H2D ≈ 66 ms (92% of total PCA
+        wall time, which is only ~5 ms of actual compute). After
+        ``.to("cuda")``, each subsequent fit sees the 5 ms ceiling.
+
+        This method returns a NEW DataSource (Rule 5: no hidden state).
+        The original CPU DataSource is untouched and still usable — for
+        example, the ``'cpu'`` backend can continue to operate on it
+        while a sibling GPU DataSource drives the ``'gpu'`` backend.
+
+        Args:
+            device: PyTorch device string. Typical values: ``'cpu'``,
+                ``'cuda'``, ``'cuda:0'``, ``'mps'``. Any string
+                ``torch.device()`` accepts is valid.
+
+        Returns:
+            A new DataSource whose arrays are ``torch.Tensor`` instances
+            on the requested device (or ``numpy.ndarray`` instances if
+            ``device='cpu'``). Scalar metadata and array keys are
+            preserved.
+
+        Raises:
+            ValidationError: If the DataSource is not materialized
+                (streaming sources cannot be snapshotted to a device).
+            RuntimeError: If the requested device is unavailable (e.g.
+                CUDA requested but no GPU present).
+        """
+        if not self.supports(CAPABILITY_MATERIALIZED):
+            raise ValidationError(
+                "DataSource.to(): streaming DataSources cannot be "
+                "transferred to a device. Materialize first."
+            )
+
+        # Resolve the device via torch; this validates availability and
+        # gives us a normalized device object.
+        try:
+            import torch
+        except ImportError as e:
+            raise RuntimeError(
+                "DataSource.to() requires PyTorch. "
+                "Install with `pip install pystatistics[gpu]`."
+            ) from e
+
+        target = torch.device(device)
+        target_is_gpu = target.type in ("cuda", "mps")
+
+        # Availability check for GPU-ish devices.
+        if target.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError(
+                f"DataSource.to({device!r}): CUDA is not available. "
+                "Install PyTorch with CUDA support, or target 'cpu' / 'mps'."
+            )
+        if target.type == "mps":
+            mps_ok = (
+                hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+            )
+            if not mps_ok:
+                raise RuntimeError(
+                    f"DataSource.to({device!r}): MPS is not available. "
+                    "Requires macOS with Apple Silicon and a PyTorch "
+                    "build with MPS support."
+                )
+
+        # Short-circuit: already on the requested device. Return self.
+        current_device = self._metadata.get("device")
+        if current_device is not None:
+            try:
+                if torch.device(current_device) == target:
+                    return self
+            except Exception:
+                # Fall through to the full transfer path if the
+                # current device string isn't parseable.
+                pass
+
+        # Transfer every materialized array in _data. Policy:
+        #   target is GPU → all arrays become torch.Tensor on device
+        #   target is CPU → all arrays become numpy.ndarray (the
+        #                   conventional CPU representation; the CPU
+        #                   backends all consume numpy)
+        new_storage: dict[str, Any] = {}
+        for key, value in self._data.items():
+            if target.type == "cpu":
+                # Coerce torch→numpy; leave numpy alone; pass non-
+                # arrays through.
+                if isinstance(value, torch.Tensor):
+                    new_storage[key] = value.detach().cpu().numpy()
+                else:
+                    new_storage[key] = value
+            else:
+                # Coerce numpy→torch on device; move torch to device.
+                if isinstance(value, torch.Tensor):
+                    new_storage[key] = value.to(target)
+                elif isinstance(value, np.ndarray):
+                    new_storage[key] = torch.as_tensor(value).to(target)
+                else:
+                    new_storage[key] = value
+
+        capabilities = {CAPABILITY_MATERIALIZED, CAPABILITY_REPEATABLE}
+        if target_is_gpu:
+            capabilities.add(CAPABILITY_GPU_NATIVE)
+
+        new_metadata = dict(self._metadata)
+        new_metadata["device"] = str(target)
+
+        return DataSource(
+            _data=new_storage,
+            _capabilities=frozenset(capabilities),
+            _metadata=new_metadata,
+        )
+
+    @property
+    def device(self) -> str:
+        """Current compute device. ``'cpu'`` for numpy-backed sources."""
+        return self._metadata.get("device") or "cpu"
+
+    @classmethod
     def build(cls, *args, **kwargs) -> DataSource:
         """
         Convenience factory that dispatches to appropriate from_* method.

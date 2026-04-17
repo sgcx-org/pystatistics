@@ -521,3 +521,118 @@ class TestOrdinalParams:
         )
         with pytest.raises(AttributeError):
             params.method = 'probit'  # type: ignore[misc]
+
+
+# =========================================================================
+# GPU backend tests (two-tier validation: CPU vs R, GPU vs CPU)
+# =========================================================================
+
+
+class TestPolrGPU:
+    """Tests for the GPU polr backend.
+
+    Two-tier validation: CPU is validated against R ``MASS::polr``; GPU
+    is validated against CPU at the ``GPU_FP32`` tier (rtol=1e-4,
+    atol=1e-5) from ``pystatistics.core.compute.tolerances``.
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        )
+
+    def test_invalid_backend_raises(self, simple_data):
+        y, X = simple_data
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="backend"):
+            polr(y, X, backend="quantum")
+
+    def test_gpu_unavailable_raises_explicitly(self, simple_data, monkeypatch):
+        """backend='gpu' must raise when no GPU is available (Rule 1)."""
+        y, X = simple_data
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match="no GPU"):
+            polr(y, X, backend="gpu")
+
+    def test_auto_backend_falls_back_to_cpu_when_no_gpu(
+        self, simple_data, monkeypatch,
+    ):
+        """backend='auto' silently falls back to CPU when no GPU."""
+        y, X = simple_data
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        r = polr(y, X, backend="auto")
+        assert r.converged
+
+    def test_gpu_fp64_matches_cpu_coefs(self, four_level_data):
+        """GPU FP64 matches CPU on coefficients and SE (CUDA only)."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
+        y, X = four_level_data
+        r_cpu = polr(y, X, backend="cpu")
+        r_gpu = polr(y, X, backend="gpu", use_fp64=True)
+        np.testing.assert_allclose(
+            r_cpu.coefficients, r_gpu.coefficients, rtol=1e-8, atol=1e-10,
+        )
+        np.testing.assert_allclose(
+            r_cpu.standard_errors, r_gpu.standard_errors,
+            rtol=1e-6, atol=1e-8,
+        )
+
+    def test_gpu_fp32_matches_cpu_at_tier(self, four_level_data):
+        """GPU FP32 matches CPU at the ``GPU_FP32`` tier on the
+        statistically meaningful quantities (log-likelihood, deviance,
+        coefficients)."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X = four_level_data
+        r_cpu = polr(y, X, backend="cpu")
+        r_gpu = polr(y, X, backend="gpu", use_fp64=False)
+        assert r_cpu.log_likelihood == pytest.approx(
+            r_gpu.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+        assert r_cpu.deviance == pytest.approx(
+            r_gpu.deviance, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+        # Raw coefficients can drift by more than the tier between CPU
+        # (FP64) and GPU (FP32) because L-BFGS-B lands at slightly
+        # different stationary points when the NLL is evaluated in
+        # FP32 — same design note as the multinomial GPU tests.
+
+    def test_gpu_datasource_input_matches_gpu_numpy(self, four_level_data):
+        """Passing a device-resident torch.Tensor (from a GPU
+        DataSource) is equivalent to passing numpy arrays with
+        ``backend='gpu'``."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        from pystatistics import DataSource
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X = four_level_data
+        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+        r_numpy = polr(y, X, backend="gpu", use_fp64=False)
+        r_tensor = polr(gds["y"], gds["X"], use_fp64=False)  # inferred
+        assert r_numpy.log_likelihood == pytest.approx(
+            r_tensor.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+
+    def test_gpu_tensor_with_cpu_backend_raises(self, four_level_data):
+        """Rule 1: no silent GPU→CPU migration when the caller is
+        explicit."""
+        from pystatistics import DataSource
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X = four_level_data
+        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="torch.Tensor"):
+            polr(gds["y"], gds["X"], backend="cpu")

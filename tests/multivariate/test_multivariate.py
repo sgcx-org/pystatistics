@@ -67,15 +67,21 @@ class TestPCA:
     """Tests for principal component analysis."""
 
     def test_reconstruction(self, iris_like_data):
-        """Reconstruct X from scores and loadings: X_centered ~ scores @ rotation.T."""
-        result = pca(iris_like_data)
+        """Reconstruct X from scores and loadings: X_centered ~ scores @ rotation.T.
+
+        Uses backend='cpu' explicitly — this test checks a rank-preservation
+        identity at atol=1e-10, which is a CPU-reference tolerance. The
+        GPU path runs in FP32 by design and satisfies this identity only
+        at ``GPU_FP32`` precision; testing that is the job of TestPCAGPU.
+        """
+        result = pca(iris_like_data, backend="cpu")
         X_centered = iris_like_data - result.center
         reconstructed = result.x @ result.rotation.T
         np.testing.assert_allclose(X_centered, reconstructed, atol=1e-10)
 
     def test_total_variance(self, iris_like_data):
-        """sdev^2 sum equals total variance of centered data."""
-        result = pca(iris_like_data)
+        """sdev^2 sum equals total variance of centered data (CPU precision)."""
+        result = pca(iris_like_data, backend="cpu")
         total_var_from_sdev = np.sum(result.sdev ** 2)
         X_centered = iris_like_data - np.mean(iris_like_data, axis=0)
         # Total variance = sum of column variances (ddof=1)
@@ -88,8 +94,8 @@ class TestPCA:
         np.testing.assert_allclose(np.sum(result.explained_variance_ratio), 1.0, atol=1e-14)
 
     def test_scores_orthogonal(self, iris_like_data):
-        """Scores are orthogonal (uncorrelated)."""
-        result = pca(iris_like_data)
+        """Scores are orthogonal (uncorrelated). CPU precision."""
+        result = pca(iris_like_data, backend="cpu")
         # scores.T @ scores should be diagonal (up to scale)
         gram = result.x.T @ result.x
         # Off-diagonal elements should be ~0
@@ -109,8 +115,8 @@ class TestPCA:
         np.testing.assert_allclose(result.center, np.zeros(3), atol=1e-14)
 
     def test_scale_true(self, iris_like_data):
-        """scale=True produces correlation-based PCA."""
-        result = pca(iris_like_data, scale=True)
+        """scale=True produces correlation-based PCA. CPU precision."""
+        result = pca(iris_like_data, scale=True, backend="cpu")
         assert result.scale is not None
         # With scaling, total variance should equal number of variables
         total_var = np.sum(result.sdev ** 2)
@@ -207,6 +213,194 @@ class TestPCA:
         result = pca(iris_like_data)
         assert result.n_obs == 50
         assert result.n_vars == 4
+
+
+class TestPCAGPU:
+    """Tests for the GPU PCA backend.
+
+    These follow the project's two-tier validation rule: CPU is
+    validated against R; GPU is validated against CPU. FP32 runs match
+    CPU to ~1e-6 relative; FP64 on CUDA should match to machine
+    precision.
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+
+    def test_gpu_unavailable_raises_explicitly(self, iris_like_data, monkeypatch):
+        """backend='gpu' must raise when no GPU is available, not silently
+        fall back to CPU (Rule 1: no hidden fallbacks when caller is
+        explicit)."""
+        from pystatistics.core.compute import device as dev_mod
+
+        def no_gpu(*_a, **_k):
+            return None
+        monkeypatch.setattr(dev_mod, "detect_gpu", no_gpu)
+        with pytest.raises(RuntimeError, match="no GPU"):
+            pca(iris_like_data, backend="gpu")
+
+    def test_invalid_backend_raises(self, iris_like_data):
+        with pytest.raises(ValidationError, match="backend"):
+            pca(iris_like_data, backend="quantum")
+
+    def test_gpu_fp64_matches_cpu(self, iris_like_data):
+        """FP64 GPU path should match CPU to machine precision."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                dtype_ok = True
+            else:
+                # MPS does not support FP64 — the GPU path raises.
+                dtype_ok = False
+        except ImportError:
+            dtype_ok = False
+        if not dtype_ok:
+            pytest.skip("MPS has no FP64")
+
+        r_cpu = pca(iris_like_data, center=True, scale=True, backend="cpu")
+        r_gpu = pca(
+            iris_like_data, center=True, scale=True,
+            backend="gpu", use_fp64=True,
+        )
+        np.testing.assert_allclose(r_cpu.sdev, r_gpu.sdev, rtol=1e-12)
+        # Rotation can sign-flip between implementations; compare |.|
+        np.testing.assert_allclose(
+            np.abs(r_cpu.rotation), np.abs(r_gpu.rotation), atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            np.abs(r_cpu.x), np.abs(r_gpu.x), atol=1e-10,
+        )
+
+    def test_gpu_fp32_matches_cpu_at_gpu_fp32_tolerance(self, iris_like_data):
+        """FP32 GPU path matches CPU at the project's GPU_FP32 tier.
+
+        The README's two-tier validation rule says CPU is validated
+        against R to 1e-10 and GPU is validated against CPU at the
+        tolerance tier defined in ``pystatistics.core.compute.tolerances``.
+        GPU_FP32 is rtol=1e-4, atol=1e-5 — "statistically equivalent".
+        This is the tolerance we hold GPU to, not the (tighter) machine
+        precision we hold CPU-vs-R to.
+        """
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        r_cpu = pca(iris_like_data, center=True, scale=True, backend="cpu")
+        r_gpu = pca(
+            iris_like_data, center=True, scale=True,
+            backend="gpu", use_fp64=False,
+        )
+        np.testing.assert_allclose(
+            r_cpu.sdev, r_gpu.sdev,
+            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+        np.testing.assert_allclose(
+            np.abs(r_cpu.rotation), np.abs(r_gpu.rotation),
+            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+        np.testing.assert_allclose(
+            np.abs(r_cpu.x), np.abs(r_gpu.x),
+            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, iris_like_data, monkeypatch):
+        """backend='auto' must NOT raise when no GPU is available — it
+        falls back to CPU (that is the definition of 'auto')."""
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        # Should succeed, not raise.
+        r = pca(iris_like_data, backend="auto")
+        # And should match the explicit CPU path.
+        r_cpu = pca(iris_like_data, backend="cpu")
+        np.testing.assert_allclose(r.sdev, r_cpu.sdev, rtol=1e-14)
+
+    def test_invalid_method_raises(self, iris_like_data):
+        """method must be in {'svd', 'gram', 'auto'}."""
+        with pytest.raises(ValidationError, match="method"):
+            pca(iris_like_data, backend="gpu", method="magic")
+
+    def test_gram_matches_svd_well_conditioned(self):
+        """Gram path matches SVD path at GPU_FP32 tier on tall-skinny
+        well-conditioned data.
+
+        Comparison target is the invariant part of the PCA answer:
+            - singular values (uniquely determined)
+            - subspace projection V V^T  (invariant to rotations of V
+              within any degenerate eigenspace — two algorithms can
+              legitimately produce slightly different V for loadings
+              with near-equal singular values, but they must span the
+              same subspace to the tier tolerance).
+        Loadings compared elementwise can diverge above rtol when two
+        sdev values are within ~1e-4 of each other even when both
+        implementations are statistically indistinguishable.
+        """
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((5000, 20))
+        r_svd = pca(X, backend="gpu", method="svd")
+        r_gram = pca(X, backend="gpu", method="gram")
+        np.testing.assert_allclose(
+            r_svd.sdev, r_gram.sdev,
+            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+        # Subspace invariant: V V^T is well-defined regardless of
+        # rotations within degenerate eigenspaces.
+        proj_svd = r_svd.rotation @ r_svd.rotation.T
+        proj_gram = r_gram.rotation @ r_gram.rotation.T
+        np.testing.assert_allclose(
+            proj_svd, proj_gram,
+            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_gram_refuses_ill_conditioned(self):
+        """Gram path raises NumericalError on near-rank-deficient data
+        unless force=True (Rule 1: fail loud when cond(X') is past the
+        safe threshold for the current precision)."""
+        from pystatistics.core.exceptions import NumericalError
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        rng = np.random.default_rng(1)
+        X = rng.standard_normal((1000, 20))
+        # Duplicate a column to make cond(X) ≈ ∞.
+        X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
+        with pytest.raises(NumericalError, match="cond"):
+            pca(X, backend="gpu", method="gram")
+
+    def test_gram_force_bypasses_condition_check(self):
+        """force=True bypasses the condition gate — the fit completes
+        even on ill-conditioned data, though the numerical result is
+        unreliable."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        rng = np.random.default_rng(2)
+        X = rng.standard_normal((1000, 20))
+        X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
+        r = pca(X, backend="gpu", method="gram", force=True)
+        assert r.sdev.shape == (20,)
+
+    def test_auto_falls_back_to_svd_on_ill_conditioned(self):
+        """method='auto' must silently fall back to SVD when Gram's
+        condition check fails — that is the explicit contract of
+        'auto' (unlike method='gram' which raises)."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        rng = np.random.default_rng(3)
+        X = rng.standard_normal((1000, 20))
+        X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
+        r_auto = pca(X, backend="gpu", method="auto")
+        r_svd = pca(X, backend="gpu", method="svd")
+        # auto should have fallen back to SVD, so results are identical
+        # (same code path, same data).
+        np.testing.assert_allclose(r_auto.sdev, r_svd.sdev, rtol=1e-14)
 
 
 # ===========================================================================

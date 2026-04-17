@@ -325,6 +325,62 @@ def _compute_vcov(
     return vcov
 
 
+def _fit_polr_gpu(
+    y_codes: NDArray[np.integer[Any]],
+    X: NDArray[np.floating[Any]] | Any,   # numpy OR torch.Tensor
+    link: Link,
+    n_levels: int,
+    tol: float,
+    max_iter: int,
+    device: str,
+    use_fp64: bool,
+) -> tuple[NDArray, int, bool, float, Any]:
+    """GPU counterpart of :func:`_fit_polr`.
+
+    Builds a :class:`PolrGPULikelihood` that keeps X and y_codes on
+    device across all L-BFGS-B evaluations, returns the optimizer
+    solution, and also returns the likelihood object so the caller can
+    reuse it for the analytical-autograd Hessian (vcov) without
+    rebuilding the GPU tensors.
+    """
+    from pystatistics.ordinal.backends.gpu_likelihood import PolrGPULikelihood
+
+    p = X.shape[1]
+    x0 = _compute_starting_values(y_codes, n_levels, link, p)
+
+    like = PolrGPULikelihood(
+        X, y_codes, n_levels, link_name=link.name,
+        device=device, use_fp64=use_fp64,
+    )
+
+    # On FP32 the CPU ftol=1e-15 is well below gradient precision
+    # (~1e-7) and routinely triggers L-BFGS-B "ABNORMAL" line-search
+    # stalls. Use tol for both gtol and ftol on the GPU FP32 path; on
+    # FP64 keep the tight CPU-matching ftol.
+    ftol = 1e-15 if use_fp64 else tol
+    result = minimize(
+        fun=like.fun,
+        x0=x0,
+        method="L-BFGS-B",
+        jac=like.jac,
+        options={"maxiter": max_iter, "gtol": tol, "ftol": ftol},
+    )
+    converged = bool(result.success)
+    n_iter = int(result.nit)
+    neg_loglik = float(result.fun)
+
+    if not converged:
+        raise ConvergenceError(
+            f"polr optimizer did not converge: {result.message}. "
+            f"Completed {n_iter} iterations. Try increasing max_iter "
+            f"or check data for separation.",
+            iterations=n_iter,
+            reason=str(result.message),
+        )
+
+    return result.x, n_iter, converged, neg_loglik, like
+
+
 def polr(
     y: ArrayLike,
     X: ArrayLike,
@@ -334,6 +390,8 @@ def polr(
     level_names: list[str] | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
+    backend: str | None = None,
+    use_fp64: bool = False,
 ) -> OrdinalSolution:
     """
     Fit a proportional odds (cumulative link) model.
@@ -383,19 +441,101 @@ def polr(
         >>> sol = polr(y, X, method='logistic', names=['x1', 'x2'])
         >>> print(sol.summary())
     """
-    # Validate inputs
-    y_codes, X_arr, col_names, lvl_names, n_levels = _validate_inputs(
-        y, X, names, level_names,
+    # Convention (see GPU_BACKEND_CONVENTION.md): numpy input defaults
+    # to CPU, GPU torch.Tensor input defaults to GPU. Explicit
+    # backend='cpu' with a GPU tensor raises (Rule 1: no silent
+    # migration).
+    import sys as _sys
+    _is_X_tensor = (
+        "torch" in _sys.modules
+        and isinstance(X, _sys.modules["torch"].Tensor)
     )
+
+    if _is_X_tensor:
+        import torch
+        if X.ndim != 2:
+            raise ValidationError(f"X: expected 2-D tensor, got {X.ndim}-D")
+        if not torch.isfinite(X).all():
+            raise ValidationError("X contains non-finite values")
+        if backend is None:
+            backend = "gpu" if X.device.type != "cpu" else "cpu"
+        if backend == "cpu":
+            raise ValidationError(
+                "backend='cpu' was specified but X is a torch.Tensor "
+                f"on device {X.device}. Either pass a numpy array / "
+                "CPU DataSource to the CPU backend, or call `.to('cpu')` "
+                "on the DataSource explicitly to move it back."
+            )
+        # Pull y (tiny integer vector) to CPU for the shared validator.
+        y_host = (
+            y.detach().cpu().numpy()
+            if isinstance(y, torch.Tensor) else y
+        )
+        y_codes, _discard_X, col_names, lvl_names, n_levels = _validate_inputs(
+            y_host, np.zeros((X.shape[0], X.shape[1]), dtype=np.float64),
+            names, level_names,
+        )
+        # Replace the placeholder numpy X with the real device tensor.
+        X_arr = None
+        X_for_gpu = X
+        n, p = X.shape
+    else:
+        if backend is None:
+            backend = "cpu"
+        y_codes, X_arr, col_names, lvl_names, n_levels = _validate_inputs(
+            y, X, names, level_names,
+        )
+        X_for_gpu = None
+        n, p = X_arr.shape
+
+    if backend not in ("cpu", "auto", "gpu"):
+        raise ValidationError(
+            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
+        )
 
     # Resolve link
     link = _resolve_method_link(method)
 
-    # Fit the model
-    n, p = X_arr.shape
-    opt_params, n_iter, converged, neg_loglik = _fit_polr(
-        y_codes, X_arr, link, n_levels, tol, max_iter,
-    )
+    # FP32 gradient precision is ~1e-7 — floor tol on the GPU FP32 path
+    # for the same reason as multinomial (L-BFGS-B ABNORMAL otherwise).
+    gpu_fp32_min_tol = 1e-5
+    effective_tol = tol
+    if backend != "cpu" and not use_fp64 and tol < gpu_fp32_min_tol:
+        effective_tol = gpu_fp32_min_tol
+
+    gpu_like = None
+
+    if X_arr is None:
+        gpu_device = X_for_gpu.device.type
+        opt_params, n_iter, converged, neg_loglik, gpu_like = _fit_polr_gpu(
+            y_codes, X_for_gpu, link, n_levels, effective_tol, max_iter,
+            device=gpu_device, use_fp64=use_fp64,
+        )
+        backend_name = f"gpu_lbfgsb ({gpu_device}, {'fp64' if use_fp64 else 'fp32'})"
+    elif backend == "cpu":
+        opt_params, n_iter, converged, neg_loglik = _fit_polr(
+            y_codes, X_arr, link, n_levels, tol, max_iter,
+        )
+        backend_name = "cpu_lbfgsb"
+    else:
+        from pystatistics.core.compute.device import select_device
+        dev = select_device("gpu" if backend == "gpu" else "auto")
+        if dev.is_gpu:
+            opt_params, n_iter, converged, neg_loglik, gpu_like = _fit_polr_gpu(
+                y_codes, X_arr, link, n_levels, effective_tol, max_iter,
+                device=dev.device_type, use_fp64=use_fp64,
+            )
+            backend_name = f"gpu_lbfgsb ({dev.device_type}, {'fp64' if use_fp64 else 'fp32'})"
+        elif backend == "gpu":
+            raise RuntimeError(
+                "backend='gpu' requested but no GPU is available. "
+                "Install PyTorch with CUDA/MPS support or use backend='cpu'."
+            )
+        else:
+            opt_params, n_iter, converged, neg_loglik = _fit_polr(
+                y_codes, X_arr, link, n_levels, tol, max_iter,
+            )
+            backend_name = "cpu_lbfgsb"
 
     # Extract parameters
     n_thresh = n_levels - 1
@@ -409,7 +549,10 @@ def polr(
     aic = deviance + 2.0 * n_total_params
 
     # Compute vcov on the raw (unconstrained) parameterization
-    vcov = _compute_vcov(opt_params, y_codes, X_arr, link, n_levels)
+    if gpu_like is not None:
+        vcov = gpu_like.compute_vcov(opt_params)
+    else:
+        vcov = _compute_vcov(opt_params, y_codes, X_arr, link, n_levels)
 
     # Build result payload
     params = OrdinalParams(
@@ -436,7 +579,7 @@ def polr(
             'iterations': n_iter,
         },
         timing=None,
-        backend_name='cpu_lbfgsb',
+        backend_name=backend_name,
     )
 
     return OrdinalSolution(

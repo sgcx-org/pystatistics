@@ -610,3 +610,114 @@ class TestSolution:
         y, X, _ = three_class_data
         result = multinom(y, X)
         assert result.log_likelihood < 0
+
+
+class TestMultinomGPU:
+    """Tests for the GPU multinomial backend.
+
+    Two-tier validation: CPU is validated against R ``nnet::multinom``;
+    GPU is validated against CPU at the ``GPU_FP32`` tier (rtol=1e-4,
+    atol=1e-5) from ``pystatistics.core.compute.tolerances``.
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+
+    def test_invalid_backend_raises(self, three_class_data):
+        y, X, _ = three_class_data
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="backend"):
+            multinom(y, X, backend="quantum")
+
+    def test_gpu_unavailable_raises_explicitly(self, three_class_data, monkeypatch):
+        """backend='gpu' must raise when no GPU is available (Rule 1)."""
+        y, X, _ = three_class_data
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match="no GPU"):
+            multinom(y, X, backend="gpu")
+
+    def test_auto_backend_falls_back_to_cpu_when_no_gpu(
+        self, three_class_data, monkeypatch,
+    ):
+        """backend='auto' falls back silently when no GPU — that is the
+        definition of 'auto', not a Rule 1 violation."""
+        y, X, _ = three_class_data
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        r = multinom(y, X, backend="auto")
+        assert r.converged
+
+    def test_gpu_fp64_matches_cpu_loglik(self, three_class_data):
+        """GPU FP64 matches CPU on log-likelihood."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
+        y, X, _ = three_class_data
+        r_cpu = multinom(y, X, backend="cpu")
+        r_gpu = multinom(y, X, backend="gpu", use_fp64=True)
+        assert r_cpu.log_likelihood == pytest.approx(
+            r_gpu.log_likelihood, rel=1e-8,
+        )
+
+    def test_gpu_fp32_matches_cpu_at_tier(self, three_class_data):
+        """GPU FP32 matches CPU at the project's GPU_FP32 tier on
+        statistically meaningful quantities (log-lik and deviance).
+
+        Raw coefficients can drift between CPU and GPU runs because
+        L-BFGS-B lands at slightly different stationary points when
+        the objective is evaluated in FP32 vs FP64 — that is the
+        documented "by design" divergence in the README. What we pin
+        to the tier is the *statistical* answer.
+        """
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X, _ = three_class_data
+        r_cpu = multinom(y, X, backend="cpu")
+        r_gpu = multinom(y, X, backend="gpu", use_fp64=False)
+        assert r_cpu.log_likelihood == pytest.approx(
+            r_gpu.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+        assert r_cpu.deviance == pytest.approx(
+            r_gpu.deviance, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+
+    def test_gpu_datasource_input_matches_gpu_numpy(self, three_class_data):
+        """Passing a torch.Tensor (e.g. from ``ds.to('cuda')['X']``) is
+        equivalent to passing the numpy array with ``backend='gpu'``,
+        and faster on the amortized path because X never crosses the
+        PCIe bus mid-fit."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        from pystatistics import DataSource
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X, _ = three_class_data
+        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+
+        r_numpy = multinom(y, X, backend="gpu", use_fp64=False)
+        r_tensor = multinom(gds["y"], gds["X"], use_fp64=False)  # backend inferred
+        # Same statistical answer within the GPU_FP32 tier.
+        assert r_numpy.log_likelihood == pytest.approx(
+            r_tensor.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+
+    def test_gpu_tensor_with_cpu_backend_raises(self, three_class_data):
+        """Rule 1: no silent GPU→CPU migration when the caller is
+        explicit."""
+        from pystatistics import DataSource
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y, X, _ = three_class_data
+        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="torch.Tensor"):
+            multinom(gds["y"], gds["X"], backend="cpu")

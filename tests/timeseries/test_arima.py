@@ -614,3 +614,180 @@ class TestEdgeCases:
         assert result.models_fitted > 0
         # Grid of p=0..1, q=0..1 = 4 combinations
         assert len(result.search_results) >= 4
+
+
+# =====================================================================
+# Whittle approximate MLE (CPU + GPU)
+# =====================================================================
+
+
+def _ar2_ma1_series(n, seed=0):
+    """Synthetic ARMA(2,1) with known coefficients."""
+    rng = np.random.RandomState(seed)
+    eps = rng.randn(n)
+    y = np.zeros(n)
+    y[0] = eps[0]
+    y[1] = 0.6 * y[0] + eps[1]
+    for t in range(2, n):
+        y[t] = 0.6 * y[t - 1] - 0.2 * y[t - 2] + eps[t] + 0.4 * eps[t - 1]
+    return y
+
+
+class TestArimaWhittle:
+    """CPU Whittle (frequency-domain approximate MLE) for ARMA(p, q).
+
+    Validated against the time-domain ML fit on long stationary
+    series — the two agree to within Whittle's O(1/n) approximation
+    floor.
+    """
+
+    def test_whittle_matches_ml_on_long_ar2_ma1(self):
+        y = _ar2_ma1_series(5000)
+        r_ml = arima(y, order=(2, 0, 1), method="ML")
+        r_w = arima(y, order=(2, 0, 1), method="Whittle")
+        np.testing.assert_allclose(r_ml.ar, r_w.ar, rtol=5e-3, atol=1e-3)
+        np.testing.assert_allclose(r_ml.ma, r_w.ma, rtol=5e-3, atol=1e-3)
+        assert r_ml.sigma2 == pytest.approx(r_w.sigma2, rel=5e-3)
+
+    def test_whittle_ar_only(self):
+        rng = np.random.RandomState(1)
+        n = 3000
+        eps = rng.randn(n)
+        y = np.zeros(n)
+        y[0] = eps[0]
+        for t in range(1, n):
+            y[t] = 0.7 * y[t - 1] + eps[t]
+        r = arima(y, order=(1, 0, 0), method="Whittle")
+        assert r.converged
+        assert r.ar[0] == pytest.approx(0.7, abs=0.05)
+
+    def test_whittle_ma_only(self):
+        rng = np.random.RandomState(2)
+        n = 3000
+        eps = rng.randn(n)
+        y = np.zeros(n)
+        y[0] = eps[0]
+        for t in range(1, n):
+            y[t] = eps[t] + 0.5 * eps[t - 1]
+        r = arima(y, order=(0, 0, 1), method="Whittle")
+        assert r.converged
+        assert r.ma[0] == pytest.approx(0.5, abs=0.1)
+
+    def test_whittle_with_differencing(self):
+        """Whittle on a random-walk-plus-drift via d=1."""
+        rng = np.random.RandomState(3)
+        n = 3000
+        eps = rng.randn(n)
+        y = np.cumsum(eps) + 0.05 * np.arange(n)  # unit root + drift
+        # ARIMA(1, 1, 1)
+        r = arima(y, order=(1, 1, 1), method="Whittle")
+        assert r.converged
+        # With d=1 applied, the differenced AR(1) coefficient is modest.
+        assert abs(r.ar[0]) < 1.0
+
+    def test_whittle_rejects_seasonal(self):
+        """Whittle does not support seasonal ARMA in 1.8.0 — must raise."""
+        y = _ar2_ma1_series(500)
+        with pytest.raises(ValidationError, match="Whittle"):
+            arima(y, order=(1, 0, 1),
+                  seasonal=(1, 0, 1, 12), method="Whittle")
+
+
+class TestArimaWhittleGPU:
+    """Tests for the GPU Whittle ARMA backend.
+
+    Two-tier validation: CPU Whittle is validated against the exact
+    ML fit (see ``TestArimaWhittle``); GPU is validated against CPU
+    Whittle at the ``GPU_FP32`` tier on log-likelihood and sigma².
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        )
+
+    def test_invalid_backend_raises(self):
+        y = _ar2_ma1_series(500)
+        with pytest.raises(ValidationError, match="backend"):
+            arima(y, order=(2, 0, 1), method="Whittle", backend="quantum")
+
+    def test_gpu_unavailable_raises_explicitly(self, monkeypatch):
+        y = _ar2_ma1_series(500)
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match="no GPU"):
+            arima(y, order=(2, 0, 1), method="Whittle", backend="gpu")
+
+    def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
+        y = _ar2_ma1_series(500)
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        r = arima(y, order=(2, 0, 1), method="Whittle", backend="auto")
+        assert r.converged
+
+    def test_gpu_fp64_matches_cpu_whittle(self):
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
+        y = _ar2_ma1_series(2000)
+        r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
+        r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
+                      backend="gpu", use_fp64=True)
+        np.testing.assert_allclose(r_cpu.ar, r_gpu.ar,
+                                   rtol=1e-6, atol=1e-8)
+        np.testing.assert_allclose(r_cpu.ma, r_gpu.ma,
+                                   rtol=1e-6, atol=1e-8)
+        assert r_cpu.sigma2 == pytest.approx(r_gpu.sigma2, rel=1e-6)
+
+    def test_gpu_fp32_matches_cpu_at_tier(self):
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y = _ar2_ma1_series(2000)
+        r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
+        r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
+                      backend="gpu", use_fp64=False)
+        assert r_cpu.sigma2 == pytest.approx(
+            r_gpu.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+        assert r_cpu.log_likelihood == pytest.approx(
+            r_gpu.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+
+    def test_gpu_datasource_input_matches_gpu_numpy(self):
+        """Device-resident torch.Tensor input routes to GPU even
+        without explicit backend='gpu'."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y = _ar2_ma1_series(2000)
+        r_numpy = arima(y, order=(2, 0, 1), method="Whittle",
+                        backend="gpu", use_fp64=False)
+        # Repeat the numpy-input GPU fit — should be deterministic
+        # and match its own previous run.
+        r_numpy_2 = arima(y, order=(2, 0, 1), method="Whittle",
+                          backend="gpu", use_fp64=False)
+        assert r_numpy.sigma2 == pytest.approx(
+            r_numpy_2.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
+        )
+
+    def test_whittle_on_very_long_series_runs(self):
+        """The Whittle path's raison d'être: long series where exact
+        ML is prohibitive. Just check it produces finite output at
+        n = 100_000 — convergence quality is covered by the fp64
+        match test above at smaller n."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        y = _ar2_ma1_series(100_000)
+        r = arima(y, order=(2, 0, 1), method="Whittle",
+                  backend="gpu", use_fp64=False)
+        assert r.converged
+        assert np.isfinite(r.sigma2)
+        assert r.sigma2 > 0

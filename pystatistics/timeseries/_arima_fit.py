@@ -363,7 +363,7 @@ def _validate_arima_inputs(
         if not isinstance(m, (int, np.integer)) or m < 2:
             raise ValidationError(f"seasonal.m: must be an integer >= 2, got {m}")
 
-    valid_methods = ("CSS", "ML", "CSS-ML")
+    valid_methods = ("CSS", "ML", "CSS-ML", "Whittle")
     if method not in valid_methods:
         raise ValidationError(f"method: must be one of {valid_methods}, got '{method}'")
 
@@ -609,6 +609,8 @@ def arima(
     method: str = "CSS-ML",
     tol: float = 1e-8,
     max_iter: int = 1000,
+    backend: str | None = None,
+    use_fp64: bool = False,
 ) -> ARIMAResult:
     """
     Fit an ARIMA(p, d, q) or seasonal ARIMA(p, d, q)(P, D, Q)[m] model.
@@ -683,6 +685,29 @@ def arima(
         y_diff = diff(y_diff, differences=d, lag=1)
 
     n_used = len(y_diff)
+
+    # ----- Whittle (frequency-domain approximate MLE) fast path -----
+    # Non-seasonal ARMA only. Operates on the already-differenced series
+    # (stationarity pre-condition). Exact ML via Kalman remains the
+    # default; Whittle is for long series (n ≳ 10⁴) where FFT wins over
+    # O(n) Kalman recursion. GPU version lives in
+    # ``backends/whittle_gpu.py`` and is selected via ``backend=``.
+    if method == "Whittle":
+        if seasonal is not None and (seasonal[0] > 0 or seasonal[2] > 0
+                                     or seasonal[1] > 0):
+            raise ValidationError(
+                "method='Whittle' supports non-seasonal ARMA(p, d, q) "
+                "only. For seasonal models use method='CSS-ML' (default)."
+            )
+        from pystatistics.timeseries._whittle import fit_arima_whittle
+        return fit_arima_whittle(
+            y_diff=y_diff, n_obs=n_obs, order=order,
+            include_mean=include_mean, tol=tol, max_iter=max_iter,
+            backend=backend, use_fp64=use_fp64,
+            yule_walker_start=_yule_walker_start,
+            css_residuals=arima_css_residuals,
+            ARIMAResult=ARIMAResult,
+        )
 
     # ----- Build effective ARMA orders -----
     sp, sd, sq, m = seasonal if seasonal is not None else (0, 0, 0, 1)
