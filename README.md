@@ -4,6 +4,12 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
+> **Note:** 1.6.2 re-ships the 1.6.1 fixes. The 1.6.1 release commit
+> was tagged before the source fixes were actually committed, so the
+> PyPI 1.6.1 wheel was missing every change it was supposed to contain.
+> PyPI does not allow re-uploading the same version, so 1.6.2 is the
+> corrected release. **If you installed 1.6.1, upgrade to 1.6.2.**
+
 Patch release closing five Coding Bible Rule 1 violations (silent failures / degraded paths) surfaced by the Linux/NVIDIA validation suite.
 
 - **ARIMA `method='CSS-ML'` now fails loud.** The previous code silently fell back to CSS estimates when ML refinement failed, while still labeling the result as CSS-ML. Now raises `ConvergenceError` with actionable guidance (`use method='CSS'`, adjust `tol`/`max_iter`).

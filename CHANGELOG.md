@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.6.2
+
+### Re-release of 1.6.1 fixes
+
+**Why 1.6.2 exists:** the 1.6.1 release commit (`Release v1.6.1`) was
+created after the source fixes were staged but before they were actually
+committed to the branch. The CI `publish.yml` workflow then built the
+PyPI package from the `v1.6.1` tag, which pointed at the version-bump
+commit only — **the compiled wheel lacked the ARIMA / Gamma / var /
+scipy fixes it was supposed to ship**. PyPI does not allow re-uploading
+the same version number, so a patch version was the only clean path.
+Users who installed `pystatistics==1.6.1` should upgrade to `1.6.2`.
+
+The release script flow was adjusted in this cycle to ensure the release
+commit carries all staged fixes; see Historical Notes in
+`.release/CHECKLIST.md`.
+
+### Fixed — content is the same as the 1.6.1 changelog entry
+
+All fixes listed under 1.6.1 in `CHANGELOG.md` are now actually present
+in the shipped wheel:
+
+- **`timeseries.arima(method='CSS-ML')` silent fallback removed.** Raises
+  `ConvergenceError` instead of silently returning CSS estimates labeled
+  as CSS-ML.
+- **`timeseries.arima` zero-parameter case.** Closed-form MLE for
+  ARIMA(0,d,0); bypasses scipy's `nit=0 "ABNORMAL"` degenerate path.
+- **`regression.GammaFamily.log_likelihood`** on non-positive dispersion
+  returns explicit NaN instead of emitting `RuntimeWarning` and silently
+  returning NaN from `np.log(negative)`.
+- **`descriptive.var(n=1)`** short-circuits to NaN without triggering
+  numpy's `Degrees of freedom <= 0` warning.
+- **scipy 1.18 forward-compat**: removed deprecated `disp` option from
+  `scipy.optimize.minimize` in mvnmle CPU and GPU backends.
+- **mvnmle test suite** updated: `TestMissvalsDataset` uses EM
+  explicitly; `TestDirectNonConvergence` codifies the fail-loud contract
+  on the missvals pathological dataset.
+
+
 ## 1.6.1
 
 ### Fixed — Coding Bible Rule 1 violations (silent failures / degraded paths)

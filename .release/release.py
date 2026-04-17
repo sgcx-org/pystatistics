@@ -324,6 +324,38 @@ def cmd_release(new_version: str, commit: bool = False) -> None:
         print(f"ERROR: Tag v{new_version} already exists — aborting before any file changes.")
         sys.exit(1)
 
+    # Pre-flight: in --commit mode, refuse if there are unstaged source
+    # edits in the package. The release commit only stages pyproject.toml,
+    # __init__.py, CHANGELOG.md, UNRELEASED.md, plus anything the user
+    # pre-staged with `git add`. Unstaged source edits would be left out
+    # of the release commit, producing a tagged wheel that is missing the
+    # very fixes it is supposed to ship.  (This happened with v1.6.1 and
+    # required a same-day 1.6.2 patch-of-a-patch.)
+    if commit:
+        package_dir = REPO_ROOT / package
+        # `git diff --name-only` lists UNSTAGED changes (modified but not
+        # added). We only care about changes inside the package directory.
+        diff_proc = run_git(["diff", "--name-only"], check=False)
+        unstaged = [
+            line for line in diff_proc.stdout.splitlines()
+            if line.startswith(f"{package}/")
+        ]
+        if unstaged:
+            print(
+                f"ERROR: {len(unstaged)} unstaged file(s) inside {package}/ "
+                "would be left out of the release commit:"
+            )
+            for f in unstaged:
+                print(f"    {f}")
+            print()
+            print(
+                "Release aborted before any file changes. Either:\n"
+                f"  - `git add` these files to include them in Release v{new_version}, or\n"
+                "  - `git stash` them if they should not ship in this release.\n"
+                "See: .release/CHECKLIST.md — 'Historical context' (v1.6.1 foot-gun)."
+            )
+            sys.exit(1)
+
     print(f"Releasing {package} {current} → {new_version}\n")
 
     # 1. Bump versions
