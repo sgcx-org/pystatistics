@@ -133,25 +133,64 @@ def _prepare_X_gpu(X_arr, center, scale, col_means_cpu, scale_values_cpu,
 
 
 def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
-              col_means_cpu, scale_values_cpu, var_names, n, p):
-    """Truncate, transfer, build PCAResult. Shared.
+              col_means_cpu, scale_values_cpu, var_names, n, p,
+              *, device_resident: bool = False):
+    """Truncate and build PCAResult.
 
-    Transfers scores / rotation / sdev / center / scale back to host
-    at their *native* compute dtype — does NOT force-promote FP32 to
-    FP64. Reason: promoting a 400 MB FP32 scores tensor to FP64 on the
-    GPU doubles the D2H payload to 800 MB, adding ~140 ms of PCIe
-    transfer to report "precision" we never actually had (the fit ran
-    in FP32). At the project's GPU_FP32 tolerance tier this is
-    correct behavior: the GPU path's precision ceiling is FP32, and
-    zero-padding with FP64 bits doesn't change that. Users who want
-    FP64 scores should run with ``use_fp64=True``.
+    When ``device_resident=False`` (default, back-compat path) the
+    numeric fields (sdev / rotation / scores / center / scale) are
+    transferred back to host via one D2H per tensor. Transfers happen
+    at the *native* compute dtype — we do NOT force-promote FP32 to
+    FP64. Promoting a 400 MB FP32 scores tensor to FP64 on the GPU
+    doubles the D2H payload to 800 MB, adding ~140 ms of PCIe
+    transfer to report precision we never actually had; the GPU
+    path's precision ceiling is FP32 and zero-padding with FP64 bits
+    doesn't change that. Users who want FP64 scores should run with
+    ``use_fp64=True``.
+
+    When ``device_resident=True`` the tensors stay on-device and the
+    returned PCAResult holds them directly — this is the escape hatch
+    for multi-step GPU pipelines where the scores are the input to a
+    subsequent GPU computation. A 1M × 100 FP32 scores tensor is
+    ~400 MB — the D2H copy of that is ~150 ms on PCIe 4.0, which
+    routinely dominates every op downstream of PCA on amortized
+    workflows. The user can always materialise numpy via
+    ``result.to_numpy()``.
     """
     import torch
     sdev_gpu = sdev_gpu[:n_components]
     rotation_gpu = rotation_gpu[:, :n_components]
     scores_gpu = scores_gpu[:, :n_components]
-    # .cpu() returns a tensor of the same dtype; .numpy() views it as
-    # numpy with the matching dtype (float32 stays float32).
+
+    if device_resident:
+        # Fields stay on device. col_means / scale_values may arrive as
+        # numpy (when computed inside pca() on a numpy input) or as
+        # torch tensors (when the device-resident moments path ran);
+        # in the device_resident return, promote numpy inputs to
+        # tensors on the same device so all numeric fields share the
+        # PCAResult.device contract.
+        dev = scores_gpu.device
+        dtype = scores_gpu.dtype
+
+        def _to_dev(v):
+            if v is None:
+                return None
+            if isinstance(v, torch.Tensor):
+                return v.to(device=dev, dtype=dtype)
+            return torch.as_tensor(v, device=dev, dtype=dtype)
+
+        return PCAResult(
+            sdev=sdev_gpu,
+            rotation=rotation_gpu,
+            center=_to_dev(col_means_cpu),
+            scale=_to_dev(scale_values_cpu),
+            x=scores_gpu,
+            n_obs=n,
+            n_vars=p,
+            var_names=var_names,
+        )
+
+    # Default path: numpy-backed PCAResult.
     sdev = sdev_gpu.cpu().numpy()
     rotation = rotation_gpu.cpu().numpy()
     scores = scores_gpu.cpu().numpy()
@@ -176,7 +215,7 @@ def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
 def _pca_gpu_svd(
     X_arr, center, scale, n_components,
     col_means_cpu, scale_values_cpu, var_names,
-    device, use_fp64,
+    device, use_fp64, device_resident=False,
 ) -> PCAResult:
     """SVD-based PCA on GPU. Always safe, moderate GPU speedup."""
     import torch
@@ -196,13 +235,14 @@ def _pca_gpu_svd(
     return _finalize(
         sdev_gpu, rotation_gpu, scores_gpu, n_components,
         col_means_cpu, scale_values_cpu, var_names, n, p,
+        device_resident=device_resident,
     )
 
 
 def _pca_gpu_gram(
     X_arr, center, scale, n_components,
     col_means_cpu, scale_values_cpu, var_names,
-    device, use_fp64, force,
+    device, use_fp64, force, device_resident=False,
 ) -> PCAResult:
     """Gram-matrix PCA on GPU: eigendecompose X'X.
 
@@ -282,6 +322,7 @@ def _pca_gpu_gram(
     return _finalize(
         sdev_gpu, rotation_gpu, scores_gpu, n_components,
         col_means_cpu, scale_values_cpu, var_names, n, p,
+        device_resident=device_resident,
     )
 
 
@@ -298,6 +339,7 @@ def pca_gpu(
     use_fp64: bool = False,
     method: str = "svd",
     force: bool = False,
+    device_resident: bool = False,
 ) -> PCAResult:
     """Fit PCA on GPU. Dispatches on ``method``.
 
@@ -351,13 +393,13 @@ def pca_gpu(
         return _pca_gpu_svd(
             X_arr, center, scale, n_components,
             col_means_cpu, scale_values_cpu, var_names,
-            device, use_fp64,
+            device, use_fp64, device_resident=device_resident,
         )
     if method == "gram":
         return _pca_gpu_gram(
             X_arr, center, scale, n_components,
             col_means_cpu, scale_values_cpu, var_names,
-            device, use_fp64, force,
+            device, use_fp64, force, device_resident=device_resident,
         )
 
     # method == 'auto'. Use Gram when it is likely to help: n > 2p
@@ -371,6 +413,7 @@ def pca_gpu(
                 X_arr, center, scale, n_components,
                 col_means_cpu, scale_values_cpu, var_names,
                 device, use_fp64, force=False,
+                device_resident=device_resident,
             )
         except Exception:
             # Any Gram-path failure (condition, degenerate, numerical)
@@ -379,7 +422,7 @@ def pca_gpu(
     return _pca_gpu_svd(
         X_arr, center, scale, n_components,
         col_means_cpu, scale_values_cpu, var_names,
-        device, use_fp64,
+        device, use_fp64, device_resident=device_resident,
     )
 
 

@@ -14,11 +14,44 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+def _is_torch_tensor(obj: object) -> bool:
+    """True if ``obj`` is a ``torch.Tensor`` without force-importing torch.
+
+    The sys.modules check keeps numpy-only callers from paying torch's
+    ~800 ms cold import cost just to build or inspect a PCAResult.
+    """
+    import sys as _sys
+    if "torch" not in _sys.modules:
+        return False
+    torch_mod = _sys.modules["torch"]
+    return isinstance(obj, torch_mod.Tensor)
+
+
+def _tensor_to_numpy(x):
+    """Eager detach+cpu+numpy for a torch.Tensor; pass-through otherwise."""
+    if _is_torch_tensor(x):
+        return x.detach().cpu().numpy()
+    return x
+
+
 @dataclass(frozen=True)
 class PCAResult:
     """Result from principal component analysis.
 
     Matches the structure of R's ``prcomp()`` return value.
+
+    Device residency
+    ----------------
+    The numeric fields (``sdev``, ``rotation``, ``center``, ``scale``,
+    ``x``) are annotated as ``NDArray | torch.Tensor``. When the GPU
+    backend is invoked *with a device-resident input tensor* and
+    ``device_resident=True`` is passed to :func:`pca`, the result's
+    fields stay on the original device — the ``x`` scores matrix
+    especially, which is typically the largest payload. Downstream
+    computations can chain straight off ``result.x`` without paying
+    the host↔device round-trip that otherwise dominates multi-step
+    GPU pipelines. Call :meth:`to_numpy` (or :meth:`to` with a CPU
+    device) to materialise a numpy-backed copy.
 
     Attributes:
         sdev: Standard deviations of principal components (length min(n, p)).
@@ -41,15 +74,88 @@ class PCAResult:
     var_names: tuple[str, ...] | None
 
     @property
-    def explained_variance_ratio(self) -> NDArray:
-        """Proportion of variance explained by each component."""
-        variances = self.sdev ** 2
-        return variances / np.sum(variances)
+    def device(self) -> str:
+        """Device hosting the numeric fields: ``'cpu'``, ``'cuda'``, or ``'mps'``.
+
+        A numpy-backed result reports ``'cpu'``. A tensor-backed result
+        reports the underlying tensor's device type.
+        """
+        if _is_torch_tensor(self.x):
+            return str(self.x.device.type)
+        return "cpu"
+
+    def to_numpy(self) -> "PCAResult":
+        """Return a new PCAResult with numpy-backed numeric fields.
+
+        Idempotent on numpy-backed results (returns ``self``). On a
+        tensor-backed result this is the explicit "I want CPU numpy"
+        escape hatch, matching the rest of the library's
+        no-silent-migration contract.
+        """
+        if not any(
+            _is_torch_tensor(f)
+            for f in (self.sdev, self.rotation, self.center, self.scale, self.x)
+        ):
+            return self
+        return PCAResult(
+            sdev=_tensor_to_numpy(self.sdev),
+            rotation=_tensor_to_numpy(self.rotation),
+            center=_tensor_to_numpy(self.center),
+            scale=_tensor_to_numpy(self.scale),
+            x=_tensor_to_numpy(self.x),
+            n_obs=self.n_obs,
+            n_vars=self.n_vars,
+            var_names=self.var_names,
+        )
+
+    def to(self, device: str) -> "PCAResult":
+        """Move the result to ``device`` (``'cpu'``, ``'cuda'``, ``'mps'``).
+
+        ``device='cpu'`` returns a numpy-backed PCAResult (same as
+        :meth:`to_numpy`). Any other device requires torch and
+        materialises the fields as ``torch.Tensor`` instances on that
+        device.
+        """
+        if device == "cpu":
+            return self.to_numpy()
+        import torch
+        tgt = torch.device(device)
+
+        def _mv(v):
+            if v is None:
+                return None
+            if _is_torch_tensor(v):
+                return v.to(tgt)
+            return torch.as_tensor(v, device=tgt)
+
+        return PCAResult(
+            sdev=_mv(self.sdev),
+            rotation=_mv(self.rotation),
+            center=_mv(self.center),
+            scale=_mv(self.scale),
+            x=_mv(self.x),
+            n_obs=self.n_obs,
+            n_vars=self.n_vars,
+            var_names=self.var_names,
+        )
 
     @property
-    def cumulative_variance_ratio(self) -> NDArray:
+    def explained_variance_ratio(self):
+        """Proportion of variance explained by each component.
+
+        Returned as the same array type as ``sdev`` — numpy for a
+        numpy-backed result, torch.Tensor on the same device for a
+        tensor-backed result. Both numpy ndarrays and torch tensors
+        support ``.sum()`` and elementwise arithmetic so the impl
+        is type-polymorphic.
+        """
+        variances = self.sdev ** 2
+        return variances / variances.sum()
+
+    @property
+    def cumulative_variance_ratio(self):
         """Cumulative proportion of variance explained."""
-        return np.cumsum(self.explained_variance_ratio)
+        return self.explained_variance_ratio.cumsum(0)
 
     def summary(self) -> str:
         """R-style summary matching ``summary(prcomp(...))``.
@@ -58,7 +164,11 @@ class PCAResult:
             Formatted string with standard deviations, proportion of variance,
             and cumulative proportion for each component.
         """
-        n_comp = len(self.sdev)
+        # All quantities in the summary table are length-min(n, p), so
+        # a one-shot D2H copy for tensor-backed results is cheap — no
+        # reason to duplicate the formatting with a torch branch.
+        r = self.to_numpy()
+        n_comp = len(r.sdev)
         labels = [f"PC{i+1}" for i in range(n_comp)]
 
         header = "Importance of components:"
@@ -72,9 +182,9 @@ class PCAResult:
 
         rows = [
             header,
-            _fmt_row("Standard deviation", self.sdev),
-            _fmt_row("Proportion of Variance", self.explained_variance_ratio),
-            _fmt_row("Cumulative Proportion", self.cumulative_variance_ratio),
+            _fmt_row("Standard deviation", r.sdev),
+            _fmt_row("Proportion of Variance", r.explained_variance_ratio),
+            _fmt_row("Cumulative Proportion", r.cumulative_variance_ratio),
         ]
         # Column labels
         label_row = " " * 30 + "".join(f"{lab:>{col_width}s}" for lab in labels)

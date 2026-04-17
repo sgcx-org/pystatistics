@@ -44,6 +44,7 @@ def pca(
     use_fp64: bool = False,
     method: str = "svd",
     force: bool = False,
+    device_resident: bool = False,
 ) -> PCAResult:
     """Principal Component Analysis via SVD.
 
@@ -108,6 +109,17 @@ def pca(
             results will be unreliable on truly ill-conditioned inputs
             — use only when you understand the data is well-conditioned
             despite the automated estimator disagreeing.
+        device_resident: When ``True`` and the GPU backend runs, the
+            returned :class:`PCAResult` holds its numeric fields
+            (``sdev``, ``rotation``, ``center``, ``scale``, ``x``) as
+            ``torch.Tensor`` instances on the fit's device rather than
+            materialising them as numpy arrays. This saves the ~150 ms
+            D2H copy of the scores matrix on 1M × 100 FP32 data, which
+            otherwise dominates any multi-step GPU pipeline that
+            consumes PCA output. Call ``result.to_numpy()`` or
+            ``result.to('cpu')`` to materialise a numpy-backed copy.
+            Ignored on the CPU path (result is always numpy-backed
+            there). Default ``False`` preserves 1.8.0 behavior.
 
     Returns:
         PCAResult with sdev, rotation (loadings), scores, etc.
@@ -298,6 +310,7 @@ def pca(
             use_fp64=use_fp64,
             method=method,
             force=force,
+            device_resident=device_resident,
         )
 
     if backend != "cpu":
@@ -317,6 +330,7 @@ def pca(
                 use_fp64=use_fp64,
                 method=method,
                 force=force,
+                device_resident=device_resident,
             )
         if backend == "gpu":
             raise RuntimeError(

@@ -600,3 +600,125 @@ class TestRotation:
         loadings = np.array([[0.9], [0.8], [0.7]])
         rotated, R = promax(loadings)
         assert rotated.shape == (3, 1)
+
+
+class TestPCADeviceResident:
+    """Tests for device-resident PCAResult (1.9.0 feature).
+
+    A PCAResult with ``.device != 'cpu'`` holds its numeric fields as
+    ``torch.Tensor`` instances on the fit's device. This is the
+    opt-in path that skips the D2H copy of the scores matrix —
+    useful in multi-step GPU pipelines where PCA output feeds
+    directly into a subsequent GPU computation.
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        )
+
+    def test_default_result_is_numpy_backed(self):
+        """Back-compat: default GPU path returns a numpy-backed result.
+
+        ``device_resident=False`` (the default) must behave exactly as
+        before 1.9.0 — fields are numpy ndarrays, ``.device`` reports
+        ``'cpu'``. Breaking this silently would be a Rule 1 violation.
+        """
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        X = np.random.RandomState(0).randn(200, 5).astype(np.float32)
+        r = pca(X, backend="gpu", use_fp64=False)
+        assert r.device == "cpu"
+        assert isinstance(r.x, np.ndarray)
+        assert isinstance(r.sdev, np.ndarray)
+
+    def test_device_resident_fields_are_tensors(self):
+        """Opt-in: ``device_resident=True`` keeps fields on GPU."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        X = np.random.RandomState(0).randn(200, 5).astype(np.float32)
+        r = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        assert r.device != "cpu"
+        assert isinstance(r.x, torch.Tensor)
+        assert isinstance(r.sdev, torch.Tensor)
+        assert isinstance(r.rotation, torch.Tensor)
+        assert r.x.device.type in ("cuda", "mps")
+
+    def test_to_numpy_matches_default_path(self):
+        """``result.to_numpy()`` on a device-resident fit returns the
+        same PCAResult values as the default numpy-return path."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        X = np.random.RandomState(0).randn(500, 10).astype(np.float32)
+        r_np = pca(X, backend="gpu", use_fp64=False)
+        r_dr = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        r_dr_cpu = r_dr.to_numpy()
+        np.testing.assert_array_equal(r_np.sdev, r_dr_cpu.sdev)
+        np.testing.assert_array_equal(r_np.rotation, r_dr_cpu.rotation)
+        np.testing.assert_array_equal(r_np.x, r_dr_cpu.x)
+        assert r_dr_cpu.device == "cpu"
+
+    def test_to_numpy_idempotent_on_numpy_result(self):
+        """On a numpy-backed result, ``to_numpy`` returns ``self``."""
+        X = np.random.RandomState(0).randn(100, 4)
+        r = pca(X, backend="cpu")
+        assert r.to_numpy() is r
+
+    def test_device_resident_ignored_on_cpu(self):
+        """``device_resident=True`` on CPU path is a no-op (result is
+        still numpy-backed; no torch dependency incurred)."""
+        X = np.random.RandomState(0).randn(100, 4)
+        r = pca(X, backend="cpu", device_resident=True)
+        assert r.device == "cpu"
+        assert isinstance(r.x, np.ndarray)
+
+    def test_explained_variance_ratio_polymorphic(self):
+        """``explained_variance_ratio`` returns tensor on tensor-backed
+        results, numpy on numpy-backed — same dtype as ``sdev``."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        X = np.random.RandomState(0).randn(300, 8).astype(np.float32)
+        r_np = pca(X, backend="gpu", use_fp64=False)
+        r_dr = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        assert isinstance(r_np.explained_variance_ratio, np.ndarray)
+        assert isinstance(r_dr.explained_variance_ratio, torch.Tensor)
+        # Numeric content matches.
+        np.testing.assert_allclose(
+            r_np.explained_variance_ratio,
+            r_dr.explained_variance_ratio.cpu().numpy(),
+            rtol=1e-6, atol=1e-8,
+        )
+
+    def test_summary_works_on_tensor_backed(self):
+        """``summary()`` materialises internally so it works for both
+        backings without the caller worrying about the device."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        X = np.random.RandomState(0).randn(200, 6).astype(np.float32)
+        r = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        s = r.summary()
+        assert "Importance of components" in s
+        assert "PC1" in s
+
+    def test_to_moves_between_devices(self):
+        """``result.to('cpu')`` is equivalent to ``to_numpy()``; round-
+        tripping ``to('cuda').to('cpu')`` is a no-op on values."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            pytest.skip(".to('cuda') requires CUDA")
+        X = np.random.RandomState(0).randn(150, 5).astype(np.float32)
+        r_cpu = pca(X, backend="cpu")
+        r_gpu = r_cpu.to("cuda")
+        assert r_gpu.device == "cuda"
+        r_back = r_gpu.to("cpu")
+        np.testing.assert_array_equal(r_cpu.x, r_back.x)
+        np.testing.assert_array_equal(r_cpu.sdev, r_back.sdev)

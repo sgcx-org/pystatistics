@@ -30,6 +30,7 @@ from pystatistics.timeseries._ets_fit import ets, ETSResult
 from pystatistics.timeseries._ets_forecast import forecast_ets, ETSForecast
 from pystatistics.timeseries._ets_models import ETSSpec
 from pystatistics.timeseries._arima_fit import arima, ARIMAResult
+from pystatistics.timeseries._arima_batch import arima_batch, ARMABatchResult
 from pystatistics.timeseries._arima_forecast import forecast_arima, ARIMAForecast
 from pystatistics.timeseries._arima_order import auto_arima, AutoARIMAResult
 from pystatistics.timeseries._decomposition import decompose, stl, DecompositionResult
@@ -50,6 +51,8 @@ __all__ = [
     "ETSSpec",
     "arima",
     "ARIMAResult",
+    "arima_batch",
+    "ARMABatchResult",
     "forecast_arima",
     "ARIMAForecast",
     "auto_arima",

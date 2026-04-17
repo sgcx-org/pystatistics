@@ -791,3 +791,181 @@ class TestArimaWhittleGPU:
         assert r.converged
         assert np.isfinite(r.sigma2)
         assert r.sigma2 > 0
+
+
+# =====================================================================
+# Batched ARMA fit (arima_batch) — 1.9.0
+# =====================================================================
+
+
+def _ar1_batch(K, n, seed=0):
+    """Generate K independent AR(1) series with random phi in [0.1, 0.8]."""
+    rng = np.random.RandomState(seed)
+    phi_true = rng.uniform(0.1, 0.8, K)
+    Y = np.zeros((K, n))
+    for k in range(K):
+        eps = rng.randn(n)
+        Y[k, 0] = eps[0]
+        for t in range(1, n):
+            Y[k, t] = phi_true[k] * Y[k, t - 1] + eps[t]
+    return Y, phi_true
+
+
+class TestArimaBatch:
+    """Batched ARMA fit via ``arima_batch``.
+
+    CPU path is a Python loop over ``arima(method='Whittle')`` — no
+    speed benefit, just an API-shape packaging for users with
+    K series. GPU path is the actual win.
+    """
+
+    def test_cpu_loop_equivalent_to_serial_whittle(self):
+        """The CPU loop fit returns results identical to calling
+        ``arima(method='Whittle')`` per series."""
+        from pystatistics.timeseries import arima_batch
+        Y, phi_true = _ar1_batch(K=20, n=1500, seed=0)
+        # Match tol between the batch call and the per-series
+        # comparison — the batch API uses tol=1e-5 by default while
+        # single-series arima uses 1e-8, so same code path runs with
+        # different stopping criteria otherwise.
+        r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+                        backend="cpu", tol=1e-8, max_iter=200)
+        assert r.n_series == 20
+        assert r.ar.shape == (20, 1)
+        matched = 0
+        for k in range(20):
+            try:
+                rs = arima(Y[k], order=(1, 0, 0), method="Whittle",
+                           tol=1e-8, max_iter=200)
+            except Exception:
+                # scipy L-BFGS-B can report ABNORMAL when finite-diff
+                # gradient hits its noise floor — skip those rows in
+                # the cross-check; the batch and serial paths raise
+                # the same exception on the same input.
+                continue
+            np.testing.assert_array_equal(r.ar[k], rs.ar)
+            assert r.sigma2[k] == rs.sigma2
+            matched += 1
+        assert matched >= 15   # well above scipy-stall incidence
+
+    def test_invalid_backend_raises(self):
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=5, n=500)
+        with pytest.raises(ValidationError, match="backend"):
+            arima_batch(Y, order=(1, 0, 0), method="Whittle",
+                        backend="quantum")
+
+    def test_non_whittle_method_raises(self):
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=5, n=500)
+        with pytest.raises(ValidationError, match="Whittle"):
+            arima_batch(Y, order=(1, 0, 0), method="ML")
+
+    def test_rejects_1d_input(self):
+        from pystatistics.timeseries import arima_batch
+        with pytest.raises(ValidationError, match="2-D"):
+            arima_batch(np.zeros(500), order=(1, 0, 0), method="Whittle")
+
+
+class TestArimaBatchGPU:
+    """GPU batched ARMA fit — the actual win of ``arima_batch``.
+
+    Validates against the serial CPU Whittle fit (row-by-row) at the
+    GPU_FP32 tier on AR/MA coefficients and σ². The CPU Whittle has
+    been validated against the exact time-domain ML fit upstream
+    (TestArimaWhittle).
+    """
+
+    def _gpu_available(self) -> bool:
+        try:
+            import torch
+        except ImportError:
+            return False
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        )
+
+    def test_gpu_unavailable_raises_explicitly(self, monkeypatch):
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=5, n=500)
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match="no GPU"):
+            arima_batch(Y, order=(1, 0, 0), method="Whittle", backend="gpu")
+
+    def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=5, n=500)
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        r = arima_batch(Y, order=(1, 0, 0), method="Whittle", backend="auto")
+        assert r.converged.any()
+
+    def test_gpu_matches_serial_whittle_on_phi(self):
+        """AR(1) on batched GPU matches serial CPU Whittle at a
+        loosened-of-FP32 tier reflecting Adam vs L-BFGS-B curvature.
+
+        Skips any series where scipy L-BFGS-B hits ABNORMAL (finite-
+        diff gradient noise floor) — that's a property of the serial
+        comparison, not the batched GPU fit.
+        """
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=30, n=3000, seed=1)
+        r_gpu = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+                            backend="gpu", use_fp64=True)
+        gpu_phi = []
+        cpu_phi = []
+        for k in range(30):
+            try:
+                rs = arima(Y[k], order=(1, 0, 0), method="Whittle")
+            except Exception:
+                continue
+            gpu_phi.append(r_gpu.ar[k, 0])
+            cpu_phi.append(rs.ar[0])
+        assert len(cpu_phi) >= 25
+        np.testing.assert_allclose(
+            np.array(gpu_phi), np.array(cpu_phi),
+            rtol=1e-2, atol=1e-3,
+        )
+
+    def test_gpu_batch_converges_on_all_series(self):
+        """All series should converge within max_iter at the default
+        learning rate on a well-posed synthetic problem."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        from pystatistics.timeseries import arima_batch
+        Y, _ = _ar1_batch(K=50, n=2000, seed=2)
+        r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+                        backend="gpu", use_fp64=True)
+        assert r.converged.sum() >= 48  # allow at most two stragglers
+        assert np.all(np.isfinite(r.sigma2))
+        assert np.all(r.sigma2 > 0)
+
+    def test_tensor_input_routes_to_gpu(self):
+        """A device-resident torch.Tensor for Y routes to GPU without
+        an explicit ``backend='gpu'``, matching the shared convention."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        from pystatistics.timeseries import arima_batch
+        Y_np, _ = _ar1_batch(K=10, n=1000, seed=3)
+        Y_t = torch.as_tensor(Y_np, device="cuda", dtype=torch.float32)
+        r = arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
+                        use_fp64=False)
+        assert "GPU" in r.method
+        assert r.ar.shape == (10, 1)
+
+    def test_tensor_input_with_cpu_backend_raises(self):
+        """Rule 1: explicit backend='cpu' with a GPU tensor raises."""
+        if not self._gpu_available():
+            pytest.skip("no GPU available")
+        import torch
+        from pystatistics.timeseries import arima_batch
+        Y_np, _ = _ar1_batch(K=5, n=500)
+        Y_t = torch.as_tensor(Y_np, device="cuda", dtype=torch.float32)
+        with pytest.raises(ValidationError, match="torch.Tensor"):
+            arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
+                        backend="cpu")
