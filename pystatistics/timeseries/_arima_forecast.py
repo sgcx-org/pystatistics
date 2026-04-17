@@ -175,24 +175,34 @@ def _forecast_differenced(
     q = len(ma)
     n = len(y_diff)
 
-    forecasts = np.empty(h, dtype=np.float64)
+    # Indexing convention: y_diff is 0-indexed of length n, representing
+    # observations at "times" 1..n. We forecast times n+1, n+2, ..., n+h.
+    # For the k-th forecast (k=1..h, time n+k), AR lag i refers to time
+    # n+k-i; in 0-indexing that is array position (n+k-i) - 1.
+    #
+    # Prior to this fix the code used `idx = n + k - i` (off by one) and
+    # initialized `forecasts` with `np.empty`, which normally yielded
+    # zeros from a fresh OS page but could leak garbage when the
+    # allocator pattern shifted. The k=1, i=1 case read `forecasts[0]`
+    # before writing it, producing huge garbage propagated as y_{n+1}.
+    forecasts = np.zeros(h, dtype=np.float64)
     for k in range(1, h + 1):
         val = mean
         # AR part
         for i in range(1, p + 1):
-            idx = n + k - i
+            idx = n + k - i - 1  # 0-indexed "time n+k-i"
             if idx < n:
-                # Use actual observation (de-meaned)
                 val += ar[i - 1] * (y_diff[idx] - mean)
             else:
-                # Use previous forecast (de-meaned)
+                # Use already-computed forecast (de-meaned). k - i >= 1
+                # when idx >= n, so forecasts[(idx - n)] = forecasts[k-i-1]
+                # has been written in a prior outer-loop iteration.
                 val += ar[i - 1] * (forecasts[idx - n] - mean)
-        # MA part
+        # MA part: future residuals are zero, so only in-sample indices.
         for j in range(1, q + 1):
-            idx = n + k - j
+            idx = n + k - j - 1
             if idx < n:
                 val += ma[j - 1] * residuals[idx]
-            # else: future residual = 0
         forecasts[k - 1] = val
     return forecasts
 

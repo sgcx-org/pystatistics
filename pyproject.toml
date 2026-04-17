@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pystatistics"
-version = "1.6.2"
+version = "1.7.0"
 description = "GPU-accelerated statistical computing for Python"
 readme = "README.md"
 license = "MIT"
@@ -36,6 +36,12 @@ classifiers = [
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
+    # numba: required for the JIT'd ARIMA Kalman filter in
+    # pystatistics/timeseries/_arima_kalman.py. SARIMA exact-ML fitting
+    # runs a dense inner loop at small state dimension (r <= ~25) where
+    # pure-numpy per-call overhead dominates. Numba closes the gap with
+    # R's Fortran arima.c by ~20x. See CHANGELOG.
+    "numba>=0.59",
 ]
 
 [project.optional-dependencies]

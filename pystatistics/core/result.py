@@ -13,29 +13,43 @@ Design decisions:
     - Immutable (frozen=True) for reproducibility
 """
 
+import sys
 from dataclasses import dataclass, field
 from typing import TypeVar, Generic, Any
 
 P = TypeVar('P')  # Parameter payload type
 
 
+# Cached provenance dict. Every Result() construction used to rebuild this
+# via three imports; on CPU-only codepaths that triggered a ~800 ms cold
+# `import torch` on the first fit (the entire torch module graph loads just
+# to read a version string). We now:
+#   1. Build the dict once, lazily, on first Result().
+#   2. Only probe torch if it is ALREADY imported (sys.modules) — never
+#      force-load it. GPU code paths will have imported torch themselves
+#      long before the first Result() is constructed.
+_PROVENANCE_CACHE: dict[str, Any] | None = None
+
+
 def _default_provenance() -> dict[str, Any]:
-    """Generate minimal provenance metadata."""
+    """Generate minimal provenance metadata (cached after first call)."""
+    global _PROVENANCE_CACHE
+    if _PROVENANCE_CACHE is not None:
+        return dict(_PROVENANCE_CACHE)  # copy; callers treat as their own
+
     import pystatistics
-    provenance = {
+    provenance: dict[str, Any] = {
         'pystatistics_version': pystatistics.__version__,
     }
-    try:
-        import numpy as np
-        provenance['numpy_version'] = np.__version__
-    except ImportError:
-        pass
-    try:
-        import torch
-        provenance['torch_version'] = torch.__version__
-    except ImportError:
-        pass
-    return provenance
+    numpy_mod = sys.modules.get('numpy')
+    if numpy_mod is not None:
+        provenance['numpy_version'] = numpy_mod.__version__
+    torch_mod = sys.modules.get('torch')
+    if torch_mod is not None:
+        provenance['torch_version'] = torch_mod.__version__
+
+    _PROVENANCE_CACHE = provenance
+    return dict(provenance)
 
 
 @dataclass(frozen=True)

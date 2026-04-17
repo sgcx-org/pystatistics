@@ -27,6 +27,10 @@ from scipy.optimize import minimize
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.validation import check_array, check_1d, check_finite
 from pystatistics.timeseries._differencing import diff
+from pystatistics.timeseries._arima_factored import (
+    _factored_to_effective,
+    optimize_arima_factored as _optimize_arima_factored_impl,
+)
 from pystatistics.timeseries._arima_likelihood import (
     arima_css_residuals,
     arima_negloglik,
@@ -234,6 +238,39 @@ def _multiply_polynomials(
 
     # Return coefficients after leading 1, negated back to positive convention
     return -product[1:]
+
+
+def _multiply_ma_polynomials(
+    nonseasonal: NDArray,
+    seasonal: NDArray,
+    period: int,
+) -> NDArray:
+    """Multiply two MA polynomials under pystatistics' MA sign convention.
+
+    pystatistics stores AR and MA with OPPOSITE sign conventions:
+        AR:  e_t = y_t - Σ ar_i y_{t-i}       (AR polynomial 1 − Σ ar_i B^i)
+        MA:  e_t = y_t - Σ ma_j e_{t-j}       (MA polynomial 1 + Σ ma_j B^j)
+
+    ``_multiply_polynomials`` above handles the AR case (all signs
+    negated). For MA we need the product of
+        (1 + ma_1 B + … + ma_q B^q)(1 + sma_1 B^m + … + sma_Q B^{Qm})
+    returned as ``[ma_eff_1, ma_eff_2, …]``. A straight convolution of
+    ``[1, ma_1, …, ma_q]`` with ``[1, sma_1 at position m, …]`` yields
+    this directly — no double negation.
+    """
+    poly1 = np.zeros(1 + len(nonseasonal))
+    poly1[0] = 1.0
+    for i, c in enumerate(nonseasonal):
+        poly1[i + 1] = c
+
+    max_seasonal_lag = len(seasonal) * period
+    poly2 = np.zeros(1 + max_seasonal_lag)
+    poly2[0] = 1.0
+    for i, c in enumerate(seasonal):
+        poly2[(i + 1) * period] = c
+
+    product = np.convolve(poly1, poly2)
+    return product[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -653,14 +690,49 @@ def arima(
     q_eff = q + sq * m
 
     # ----- Starting values -----
+    #
+    # For SEASONAL models we optimize in the factored parameterization:
+    #   params = [ar_1..ar_p, ma_1..ma_q, sar_1..sar_P, sma_1..sma_Q, mean?]
+    # so scipy sees p + q + sp + sq (+1) dimensions instead of the
+    # expanded p_eff + q_eff (+1). For the Box-Jenkins airline model this
+    # is 2 dims vs 13 — roughly the factor difference between R's fit
+    # time and ours. When there is no seasonal structure, p_eff == p
+    # and q_eff == q, so the two parameterizations coincide.
+    seasonal_fit = seasonal is not None and (sp > 0 or sq > 0)
     y_demean = y_diff - np.mean(y_diff) if include_mean else y_diff.copy()
-    ar_start = np.clip(_yule_walker_start(y_demean, p_eff), -0.99, 0.99)
-    ma_start = np.zeros(q_eff)
     mean_start = np.mean(y_diff) if include_mean else None
 
-    start_params = np.concatenate([ar_start, ma_start])
-    if include_mean:
-        start_params = np.concatenate([start_params, [mean_start]])
+    if seasonal_fit:
+        # Factored starts. Zero starts are safe but for airline-type
+        # models the likelihood has multiple nearby stationary points;
+        # plain zero can land in an inferior local minimum 4+ log-lik
+        # units above the MLE. We therefore:
+        #   - initialize AR via Yule-Walker on the differenced series
+        #     (same as non-seasonal path);
+        #   - initialize MA/seasonal-MA to a small negative value (-0.1)
+        #     — the same heuristic R's `stats::arima` uses because
+        #     empirical data almost always has slight positive serial
+        #     correlation at short lags, which corresponds to negative
+        #     MA/θ coefficients.
+        # These starts were verified to recover R's airline-model
+        # optimum on log(AirPassengers) (ma1 ≈ -0.40, sma1 ≈ -0.56).
+        if p > 0:
+            ar_start = np.clip(_yule_walker_start(y_demean, p), -0.99, 0.99)
+        else:
+            ar_start = np.zeros(0)
+        ma_start = np.full(q, -0.1)
+        sar_start = np.zeros(sp)
+        sma_start = np.full(sq, -0.1)
+        parts = [ar_start, ma_start, sar_start, sma_start]
+        if include_mean:
+            parts.append(np.array([mean_start]))
+        start_params = np.concatenate(parts)
+    else:
+        ar_start = np.clip(_yule_walker_start(y_demean, p_eff), -0.99, 0.99)
+        ma_start = np.zeros(q_eff)
+        start_params = np.concatenate([ar_start, ma_start])
+        if include_mean:
+            start_params = np.concatenate([start_params, [mean_start]])
 
     # ----- Handle trivial case: no parameters to estimate -----
     if p_eff == 0 and q_eff == 0 and not include_mean:
@@ -695,9 +767,26 @@ def arima(
         )
 
     # ----- Optimize -----
-    opt_params, nll, converged, n_iter, method_used = _optimize_arima(
-        y_diff, p_eff, q_eff, include_mean, method, tol, max_iter, start_params,
-    )
+    if seasonal_fit:
+        opt_factored, nll, converged, n_iter, method_used = (
+            _optimize_arima_factored_impl(
+                y_diff, p, q, sp, sq, m, include_mean,
+                method, tol, max_iter, start_params,
+                _multiply_polynomials, _multiply_ma_polynomials,
+            )
+        )
+        # Expand back to effective coefficients (for residuals, Hessian,
+        # and the existing reporting path). Keep the factored version
+        # around so we can report it separately below.
+        opt_params = _factored_to_effective(
+            opt_factored, p, q, sp, sq, m, include_mean,
+            _multiply_polynomials, _multiply_ma_polynomials,
+        )
+    else:
+        opt_params, nll, converged, n_iter, method_used = _optimize_arima(
+            y_diff, p_eff, q_eff, include_mean, method, tol, max_iter, start_params,
+        )
+        opt_factored = None
 
     if not converged:
         raise ConvergenceError(
@@ -719,16 +808,13 @@ def arima(
     sigma2 = np.dot(residuals, residuals) / n_used
 
     # ----- Decompose effective coefficients into seasonal and non-seasonal -----
-    if seasonal is not None and (sp > 0 or sq > 0):
-        # The effective coefficients were optimized jointly.
-        # We store the effective coefficients as non-seasonal and report
-        # empty seasonal arrays, since decomposition is not unique.
-        # A cleaner approach: optimize non-seasonal and seasonal separately.
-        # For now, store effective AR/MA and empty seasonal components.
-        ar_nonseasonal = ar_eff
-        ma_nonseasonal = ma_eff
-        sar = np.array([], dtype=np.float64)
-        sma = np.array([], dtype=np.float64)
+    if seasonal_fit:
+        # Factored optimization: the factored params are already the
+        # non-seasonal and seasonal pieces, no decomposition needed.
+        ar_nonseasonal = opt_factored[:p]
+        ma_nonseasonal = opt_factored[p:p + q]
+        sar = opt_factored[p + q:p + q + sp]
+        sma = opt_factored[p + q + sp:p + q + sp + sq]
     else:
         ar_nonseasonal = ar_eff[:p]
         ma_nonseasonal = ma_eff[:q]

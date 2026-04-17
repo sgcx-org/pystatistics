@@ -4,24 +4,71 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
-> **Note:** 1.6.2 re-ships the 1.6.1 fixes. The 1.6.1 release commit
-> was tagged before the source fixes were actually committed, so the
-> PyPI 1.6.1 wheel was missing every change it was supposed to contain.
-> PyPI does not allow re-uploading the same version, so 1.6.2 is the
-> corrected release. **If you installed 1.6.1, upgrade to 1.6.2.**
+### 1.7.0 — Performance parity with R on OLS, polr, SARIMA
 
-Patch release closing five Coding Bible Rule 1 violations (silent failures / degraded paths) surfaced by the Linux/NVIDIA validation suite.
+Minor release focused on performance. Three hot paths that were
+orders of magnitude slower than the corresponding R implementation
+are now at or beating R on the Linux/NVIDIA validation rig. Two
+genuine correctness bugs were fixed along the way.
 
-- **ARIMA `method='CSS-ML'` now fails loud.** The previous code silently fell back to CSS estimates when ML refinement failed, while still labeling the result as CSS-ML. Now raises `ConvergenceError` with actionable guidance (`use method='CSS'`, adjust `tol`/`max_iter`).
-- **ARIMA(0,d,0) uses closed-form MLE.** Previously handed a near-MLE start to scipy's L-BFGS-B, which exits with `nit=0, "ABNORMAL"` and tripped the silent fallback. The MLE is closed-form for zero AR/MA parameters — no optimizer needed.
-- **Gamma GLM log-likelihood** on non-positive dispersion now returns explicit NaN instead of emitting a `RuntimeWarning` and silently returning NaN from `np.log(negative)`.
-- **`descriptive.var` for n=1** short-circuits to NaN (matching R) instead of emitting numpy's `Degrees of freedom <= 0` warning.
-- **scipy 1.18 forward-compat**: removed deprecated `disp`/`iprint` options from mvnmle optimizer calls.
-- **mvnmle test suite** updated to reflect the actual code contract: `TestMissvalsDataset` now uses EM (the algorithm R uses on that dataset), and the removed `TestEMMatchesDirect::test_missvals_*` tests — which asserted agreement between two algorithms that genuinely cannot agree on this pathological dataset — are replaced by an explicit `TestDirectNonConvergence` contract.
+**Performance (versus R on real datasets from the validation suite):**
 
-Full pystatistics test suite now passes clean under `pytest -W error::UserWarning -W error::RuntimeWarning -W error::DeprecationWarning`: 2,301 passing, 0 warnings, 0 failures.
+| Fit | Before 1.7.0 | 1.7.0 | R |
+|-----|--------------|-------|---|
+| OLS on California Housing (n=20,640), first call | 578 ms | **5 ms** | 4 ms |
+| polr on MASS::housing (n=1,681) | 277 ms | **23 ms** | 20 ms |
+| SARIMA(0,1,1)(0,1,1)[12] on log(AirPassengers) | 2,100 ms | **14 ms** | 11 ms |
+
+How:
+
+- **OLS first-call.** `Result()` construction used to `import torch`
+  just to record `torch.__version__` in provenance metadata. On
+  CPU-only sessions that triggered an 800 ms cold module load on
+  the first fit. Now probes `sys.modules` and caches.
+- **polr.** The negative log-likelihood ran a per-row Python loop
+  calling `link.linkinv(np.atleast_1d(scalar))` twice per observation.
+  A fully vectorized helper `_cumulative_probs_vectorized` already
+  existed right next to it, unused. Swapped in.
+- **SARIMA.** Three stacked fixes: (1) new `_arima_kalman.py` module
+  implementing state-space Kalman-filter exact ML (Gardner–Harvey–
+  Phillips 1980 — the same algorithm R uses), numba-JIT'd with
+  companion-matrix sparsity; (2) new `_arima_factored.py` optimizes
+  in factored (ma₁, sma₁) space instead of the expanded seasonal-MA
+  polynomial (2 dims instead of 13 for the airline model); (3) sign-
+  convention bug in `_multiply_polynomials` when composing MA
+  polynomials — fits previously converged to an inferior local mode
+  and now match R's coefficients to 3 decimals.
+
+**Correctness fixes:**
+
+- **`_forecast_differenced`: off-by-one + `np.empty` bug.** AR lag
+  index was off by one and `forecasts` was allocated uninitialized.
+  The k=1 step read `forecasts[0]` before writing it — worked by
+  luck when fresh OS pages returned zeros, but the performance
+  changes above perturbed allocator state and exposed the bug,
+  producing forecasts of 4e50 from latent garbage.
+- **MA sign bug in `_multiply_polynomials`** (described above).
+  Previously masked by the expanded-parameter optimization path
+  absorbing the sign freely; now fixed explicitly via a new
+  `_multiply_ma_polynomials` helper.
+
+**New required dependency: `numba>=0.59`.** The Kalman filter inner
+loop is tight enough that pure-numpy per-call overhead on small
+(r ≤ 25) state matrices dominates. Numba JIT closes the gap with
+R's Fortran implementation. Torch remains optional (GPU backend only).
+
+Validation: 2,301 pystatistics tests pass, plus 117 R-vs-Python
+cross-validation tests in `pystatistics-validation/` covering the
+real-data parity claims above.
 
 ### Previous Releases
+
+**1.6.2** — Re-shipped the 1.6.1 fixes after a release-process bug
+left them out of the PyPI wheel. Closes five Rule 1 silent-failure
+violations: ARIMA CSS-ML fails loud on refinement failure;
+ARIMA(0,d,0) uses closed-form MLE; Gamma GLM returns explicit NaN
+on non-positive dispersion; `descriptive.var(n=1)` returns NaN
+without numpy warnings; scipy 1.18 forward-compat.
 
 **1.6.0** — Five new modules (`ordinal`, `multinomial`, `multivariate`, `timeseries`, `gam`), two new GLM families (`Gamma`, `NegativeBinomial`), ~650 new tests.
 

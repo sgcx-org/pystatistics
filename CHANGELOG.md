@@ -1,5 +1,112 @@
 # Changelog
 
+## 1.7.0
+
+### Performance
+
+- **`core/result.py`: eliminate 500+ ms cold-import cost on first fit.**
+  `_default_provenance()` used to run `import torch` on every `Result()`
+  construction so it could record `torch.__version__`. On CPU-only code
+  paths (where torch has not otherwise been loaded) this triggered a
+  full torch module graph load — ~800 ms for 770 modules — on the first
+  fit of every session. Fix: (1) only probe torch if it is already in
+  `sys.modules` (GPU code paths will have imported it themselves; CPU
+  paths legitimately shouldn't pay the cost), (2) cache the probe result
+  so subsequent `Result()` constructions are a dict copy. Measured: OLS
+  on California Housing (n=20,640) first-call went from 578 ms to ~5 ms.
+  Steady-state unchanged (~3 ms, faster than R's `lm()`).
+
+- **`timeseries/_arima_factored.py` (NEW) + `_arima_fit.py` wiring:
+  optimize SARIMA in factored (ma1, sma1) space instead of expanded
+  (ma_eff_1..ma_eff_{q+sq·m}) space.** Previously seasonal models were
+  optimized over the expanded MA polynomial — for Box-Jenkins airline
+  SARIMA(0,1,1)(0,1,1)[12] that meant scipy's L-BFGS-B exploring 13
+  parameters on a 2-D manifold, with ~1600 likelihood evaluations per
+  fit. The factored path optimizes 2 params directly, mirroring R's
+  ``stats::arima`` parameterization. Measured: SARIMA airline model on
+  log(AirPassengers) went from 149 ms (Kalman with expanded params) to
+  **14 ms** (Kalman with factored params) — at parity with R's 11 ms.
+
+- **`timeseries/_arima_fit.py`: fix MA sign-convention bug in
+  `_multiply_polynomials` for MA composition.** pystatistics' AR and MA
+  use opposite sign conventions:
+      AR:  e_t = y_t − Σ ar_i y_{t−i}      (polynomial 1 − Σ ar_i B^i)
+      MA:  e_t = y_t − Σ ma_j e_{t−j}      (polynomial 1 + Σ ma_j B^j)
+  The existing ``_multiply_polynomials`` was written for the AR
+  convention; calling it for MA as the original non-factored
+  implementation did was accidentally cancelled out by the expanded-
+  form optimizer (which absorbed the sign freely). The factored path
+  exposed the bug: airline-model fit converged to an inferior local
+  minimum with NLL −240.5 instead of R's −244.7. Added a new
+  ``_multiply_ma_polynomials`` with the correct sign; verified that
+  fitting log(AirPassengers) now produces ma1=−0.402, sma1=−0.558,
+  matching R's reported −0.402 / −0.557 to 3 decimals.
+
+- **`timeseries/_arima_kalman.py` (NEW): state-space Kalman-filter
+  exact ML for ARMA.** Replaces the O(n³) innovations algorithm with
+  the Gardner–Harvey–Phillips (1980) state-space representation used
+  by R's `stats::arima`. The Kalman forward pass is JIT-compiled with
+  numba and exploits the companion-matrix structure of the ARMA
+  transition matrix T (T[i, 0] = φ_{i+1}, T[i, i+1] = 1) so each
+  step is O(r²) instead of O(r³). The stationary initial covariance
+  P₀ solving `P = T P T' + RR'` is computed in a JIT'd fixed-point
+  iteration, replacing scipy's `solve_discrete_lyapunov` which was
+  150 µs per call on r=13 after the main loop was optimized. Falls
+  back to a diffuse init (kappa=1e6, matching R's `makeARIMA`) if
+  the fixed-point iteration fails to converge. Measured: SARIMA
+  airline model on log(AirPassengers) went from 2100 ms (original
+  innovations) → 220 ms (vectorized innovations) → 149 ms (Kalman +
+  numba). Further improvement to R's 11 ms would require switching
+  from expanded-MA parameterization to factored (ma1, sma1) so that
+  scipy's L-BFGS-B optimizes a 2D surface instead of 13D — a
+  separate refactor.
+
+- **`pyproject.toml`: add `numba>=0.59` as a required dependency.**
+  The Kalman filter inner loop is tight enough that pure-numpy
+  per-call overhead on r <= 25 matrices dominates vs. R's Fortran
+  implementation. Numba JIT closes the gap within a ~10x factor
+  instead of ~200x. Torch remains optional (GPU backend only).
+
+- **`timeseries/_arima_likelihood.py`: vectorize hot paths; use
+  `scipy.signal.lfilter` for CSS residuals.** Three changes:
+  (1) `arima_css_residuals` now calls `scipy.signal.lfilter(b, a, y)`
+      instead of a double-nested Python loop. The difference equation
+      `e[t] = y[t] - Σ ar_i y[t-i] - Σ ma_j e[t-j]` maps directly to
+      lfilter's IIR form; lfilter runs in compiled C. Eliminates
+      ~500k Python `np.dot` calls per SARIMA fit.
+  (2) `_innovations_algorithm` inner j-sum is now a numpy dot product;
+      numerical-guard clips (previously per-scalar `np.clip` / builtin
+      `min`) are now Python comparisons or array-level `np.minimum`.
+  (3) `exact_loglik` prediction-error inner loop is a dot product, and
+      the log-likelihood aggregation is a single vectorized sum.
+  Measured: SARIMA(0,1,1)(0,1,1)[12] on log(AirPassengers) went from
+  2.1s to 0.22s per fit (~10× faster). Remaining gap to R's 11 ms is
+  algorithmic — R uses a Kalman filter (O(n·s²)); the innovations
+  algorithm is O(n³).
+
+- **`ordinal/_likelihood.py`: vectorize `cumulative_negloglik`.** The
+  negative log-likelihood was computed by a per-observation Python loop
+  that made two `link.linkinv(np.atleast_1d(scalar))` calls per row to
+  fill a `prob[i]` array one element at a time. On MASS::housing
+  (n=1681) that was ~100k scalar `linkinv` calls per fit, each paying
+  full numpy per-call overhead. The `_cumulative_probs_vectorized`
+  helper right next to it already computes the full (n, K) category-
+  probability matrix in one vectorized `linkinv` call — we now call it
+  and index into it with `cat_probs[np.arange(n), y_codes]`. Measured:
+  polr on MASS::housing went from 277 ms to 23 ms per fit (~12× faster,
+  now at parity with R's MASS::polr at ~20 ms).
+
+- **`timeseries/_arima_forecast.py`: fix latent off-by-one and
+  uninitialized-memory bug in `_forecast_differenced`.** AR lag index
+  was `n + k - i` (treats series as 1-indexed but `y_diff` is
+  0-indexed), and `forecasts` was allocated with `np.empty`. The k=1,
+  i=1 case read `forecasts[0]` before writing it. Worked only because
+  fresh OS pages are zeroed; perturbations to allocator state (e.g.,
+  from the SARIMA changes above) exposed it, producing forecasts of
+  4e50 from latent garbage. Indexing corrected to `idx = n + k - i - 1`
+  and the array is now `np.zeros`.
+
+
 ## 1.6.2
 
 ### Re-release of 1.6.1 fixes

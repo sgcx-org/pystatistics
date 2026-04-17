@@ -166,28 +166,15 @@ def cumulative_negloglik(
     alpha = raw_to_thresholds(raw_thresh)
     eta = X @ beta  # (n,)
 
-    # Compute category probabilities P(Y = j | x) for each observation
-    # P(Y = j) = F(alpha_j - eta) - F(alpha_{j-1} - eta)
-    # where F(alpha_0 - eta) = 0 and F(alpha_K - eta) = 1
-    n = len(y_codes)
-    prob = np.empty(n)
-
-    for i in range(n):
-        j = y_codes[i]
-        if j == 0:
-            # P(Y=0) = F(alpha_0 - eta_i)
-            upper = link.linkinv(np.atleast_1d(alpha[0] - eta[i]))[0]
-            prob[i] = upper
-        elif j == n_thresh:
-            # P(Y=K-1) = 1 - F(alpha_{K-2} - eta_i)
-            lower = link.linkinv(np.atleast_1d(alpha[n_thresh - 1] - eta[i]))[0]
-            prob[i] = 1.0 - lower
-        else:
-            upper = link.linkinv(np.atleast_1d(alpha[j] - eta[i]))[0]
-            lower = link.linkinv(np.atleast_1d(alpha[j - 1] - eta[i]))[0]
-            prob[i] = upper - lower
-
-    # Numerical guard: clamp probabilities away from zero
+    # Previously this function contained an n-long Python loop that
+    # called `link.linkinv(np.atleast_1d(scalar))` twice per observation
+    # to fill in `prob[i]` one element at a time. On MASS::housing
+    # (n=1681) that was 3362 scalar linkinv calls × ~30 optimizer steps =
+    # ~100k scalar calls per fit, each paying numpy's per-call overhead.
+    # `_cumulative_probs_vectorized` already computes the full (n, K)
+    # category-probability matrix in one shot; just index it.
+    cat_probs = _cumulative_probs_vectorized(alpha, eta, link, n_levels)
+    prob = cat_probs[np.arange(len(y_codes)), y_codes]
     prob = np.maximum(prob, 1e-15)
     return -np.sum(np.log(prob))
 
