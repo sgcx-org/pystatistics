@@ -450,6 +450,41 @@ def _optimize_arima(
     """
     order_pq = (p_eff, q_eff)
 
+    # Closed-form case: no AR and no MA parameters. The negative
+    # log-likelihood depends only on the mean (if included) and the
+    # residual variance. The MLE of the mean is the sample mean of the
+    # differenced series; there is no optimization to run. Handing this
+    # to scipy.minimize with a near-MLE start causes L-BFGS-B to exit
+    # with nit=0 "ABNORMAL" because the initial gradient is essentially
+    # zero — which is indistinguishable from a real convergence failure.
+    # Rule 1: handle this explicitly; do not paper over scipy's behavior
+    # with a warning-and-fallback path.
+    if p_eff == 0 and q_eff == 0:
+        if include_mean:
+            # MLE: mu_hat = mean(y_diff)
+            opt_params = np.array([float(np.mean(y_diff))])
+        else:
+            opt_params = np.array([])
+        nll_css = float(arima_negloglik(
+            opt_params, y_diff, order_pq, include_mean, "CSS",
+        ))
+        if method == "CSS":
+            return opt_params, nll_css, True, 0, "CSS"
+        nll_ml = float(arima_negloglik(
+            opt_params, y_diff, order_pq, include_mean, "ML",
+        ))
+        if not np.isfinite(nll_ml):
+            raise ConvergenceError(
+                "ARIMA ML likelihood is not finite for the closed-form "
+                "case (p=q=0); the differenced series is degenerate "
+                "(e.g. all identical values). Use method='CSS' or "
+                "check the input series.",
+                iterations=0,
+                reason="degenerate_likelihood",
+            )
+        method_used = "ML" if method == "ML" else "CSS-ML"
+        return opt_params, nll_ml, True, 0, method_used
+
     if method == "CSS" or method == "CSS-ML":
         result_css = minimize(
             arima_negloglik,
@@ -466,9 +501,11 @@ def _optimize_arima(
 
         if method == "CSS-ML":
             # Refine with exact ML starting from CSS solution.
-            # If ML fails or produces worse results, keep CSS estimates.
+            # Fail loud if ML refinement fails — user asked for CSS-ML and
+            # silently returning CSS estimates would mask the failure.
+            # Rule 1: raise on unexpected failure; do not return a default
+            # to mask missing/invalid state.
             css_params = opt_params.copy()
-            css_nll = nll
             try:
                 result_ml = minimize(
                     arima_negloglik,
@@ -477,23 +514,32 @@ def _optimize_arima(
                     method="L-BFGS-B",
                     options={"maxiter": max_iter, "ftol": tol},
                 )
-                n_iter += result_ml.nit
-                if result_ml.success and np.isfinite(result_ml.fun):
-                    opt_params = result_ml.x
-                    nll = result_ml.fun
-                    method_used = "CSS-ML"
-                else:
-                    warnings.warn(
-                        "ML refinement did not converge; using CSS estimates",
-                        stacklevel=4,
-                    )
-                    method_used = "CSS"
-            except (ValueError, np.linalg.LinAlgError):
-                warnings.warn(
-                    "ML refinement failed numerically; using CSS estimates",
-                    stacklevel=4,
+            except (ValueError, np.linalg.LinAlgError) as exc:
+                raise ConvergenceError(
+                    "ARIMA CSS-ML: ML refinement failed numerically "
+                    f"({type(exc).__name__}: {exc}). "
+                    "Use method='CSS' if you want CSS estimates, or "
+                    "adjust tol / max_iter / starting values.",
+                    iterations=n_iter,
+                    reason="ml_numerical_failure",
+                ) from exc
+
+            n_iter += result_ml.nit
+            if not (result_ml.success and np.isfinite(result_ml.fun)):
+                raise ConvergenceError(
+                    "ARIMA CSS-ML: ML refinement did not converge after "
+                    f"{result_ml.nit} iterations (scipy message: "
+                    f"{result_ml.message}). "
+                    "Use method='CSS' if you want CSS estimates, or "
+                    "increase max_iter / relax tol.",
+                    iterations=n_iter,
+                    reason="ml_max_iter_or_infeasible",
+                    threshold=tol,
                 )
-                method_used = "CSS"
+
+            opt_params = result_ml.x
+            nll = result_ml.fun
+            method_used = "CSS-ML"
 
     else:
         # Pure ML

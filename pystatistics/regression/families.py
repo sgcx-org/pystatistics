@@ -479,6 +479,14 @@ class GammaFamily(Family):
         # shape = 1/dispersion, rate = shape/μ
         # loglik = Σ wt * (shape*log(rate) + (shape-1)*log(y) - rate*y - lgamma(shape))
         from scipy.special import gammaln
+        # NUMERICAL GUARD: dispersion must be strictly positive for the
+        # Gamma log-likelihood. A non-positive dispersion estimate (dev/df
+        # with perfect fit) would produce log(negative) → NaN. Instead of
+        # emitting a RuntimeWarning and returning NaN silently (Rule 1
+        # violation), return NaN explicitly so the caller sees a clearly
+        # undefined log-likelihood for a degenerate model.
+        if not (np.isfinite(dispersion) and dispersion > 0):
+            return float('nan')
         shape = 1.0 / dispersion
         # NUMERICAL GUARD: prevents log(0) in Gamma log-likelihood
         mu = np.maximum(mu, 1e-10)

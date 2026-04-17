@@ -116,7 +116,6 @@ class GPUMLEBackend:
         with timer.section('optimization'):
             opt_options = {
                 'maxiter': max_iter,
-                'disp': False,
             }
 
             if method in ('BFGS', 'L-BFGS-B'):

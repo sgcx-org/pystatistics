@@ -133,29 +133,30 @@ class TestEMMatchesDirect:
         direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
         np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=1e-4)
 
-    def test_missvals_loglik_agrees(self):
-        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
-                   tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
-                       max_iter=500)
-        assert abs(em.loglik - direct.loglik) < 1e-4, (
-            f"EM loglik {em.loglik} differs from direct {direct.loglik} "
-            f"by {abs(em.loglik - direct.loglik)}"
-        )
+    # --- missvals dataset ---
+    # On missvals (n=13, p=5, high missingness), direct (L-BFGS-B) does
+    # not converge — the likelihood surface is near-flat at this sample
+    # size. EM converges and matches R exactly. The former "EM matches
+    # direct on missvals" tests have been removed because the premise
+    # (that direct converges) is false. See
+    # tests/mvnmle/test_mlest.py::TestDirectNonConvergence for the
+    # explicit contract that direct signals converged=False here.
 
-    def test_missvals_means_agree(self):
-        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
-                   tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
-                       max_iter=500)
-        np.testing.assert_allclose(em.muhat, direct.muhat, rtol=5e-3)
+    def test_missvals_em_matches_r(self, tmp_path):
+        """EM converges on missvals and matches R — direct does not.
+        This replaces the old "EM matches direct on missvals" tests."""
+        import json
+        from pathlib import Path
+        ref_path = (Path(__file__).parent / "references" /
+                    "missvals_reference.json")
+        with open(ref_path) as f:
+            ref = json.load(f)
 
-    def test_missvals_covariance_agrees(self):
         em = mlest(datasets.missvals, algorithm='em', backend='cpu',
                    tol=1e-8, max_iter=100000)
-        direct = mlest(datasets.missvals, algorithm='direct', backend='cpu',
-                       max_iter=500)
-        np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=5e-3)
+        assert em.converged
+        assert abs(em.loglik - ref['loglik']) < 1e-6
+        np.testing.assert_allclose(em.muhat, ref['muhat'], rtol=1e-6)
 
 
 # =====================================================================

@@ -197,7 +197,17 @@ class CPUDescriptiveBackend:
             return np.nanmean(data, axis=0)
 
     def _compute_variance(self, data: NDArray, use: str) -> NDArray:
-        """Compute column variance with Bessel correction (n-1). Matches R var()."""
+        """Compute column variance with Bessel correction (n-1). Matches R var().
+
+        For n < 2 the sample variance is undefined; we return NaN per column,
+        matching R. Short-circuiting avoids numpy's RuntimeWarning which is
+        correct but noisy given this is an intentionally-handled degenerate
+        case (not a silent failure).
+        """
+        n = data.shape[0]
+        if n < 2:
+            p = data.shape[1] if data.ndim == 2 else 1
+            return np.full(p, np.nan, dtype=np.float64)
         if use == 'everything':
             return np.var(data, axis=0, ddof=1)
         else:

@@ -74,7 +74,6 @@ class CPUMLEBackend:
                 options={
                     'maxiter': max_iter,
                     'gtol': tol,
-                    'disp': False,
                 }
             )
 
