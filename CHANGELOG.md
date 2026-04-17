@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.6.0
+
+### Summary
+
+Major expansion of classical statistics coverage. Five new top-level modules
+(`ordinal`, `multinomial`, `multivariate`, `timeseries`, `gam`), two new GLM
+families (`Gamma`, `NegativeBinomial`), and reinforced "fail loud" numerical
+policy. Adds ~650 new tests across all modules. Estimated coverage of standard
+applied frequentist statistics goes from ~85% to ~95%.
+
+### Added
+
+#### GLM Families: Gamma and Negative Binomial
+
+- **`GammaFamily`** — Gamma regression for positive continuous data (cost data,
+  survival times, insurance claims). V(μ) = μ². Supports inverse (default), log,
+  and identity links. Dispersion (1/shape) estimated from Pearson chi-squared /
+  df_residual. Validates against R `stats::Gamma()`.
+
+- **`NegativeBinomial`** — Negative binomial regression for overdispersed count
+  data. V(μ) = μ + μ²/θ. Default link: log. Two usage modes:
+  (1) `NegativeBinomial(theta=5)` for fixed θ via standard IRLS;
+  (2) `fit(X, y, family='negative.binomial')` for automatic θ estimation via
+  alternating profile likelihood, matching R `MASS::glm.nb()`.
+
+#### Ordinal Regression Module
+
+- **`polr(y, X, method='logistic')`** — Proportional odds (cumulative link)
+  model matching R `MASS::polr()`. Supports logistic, probit, and complementary
+  log-log links. Threshold ordering enforced via unconstrained parameterization
+  (incremental exp-transform). L-BFGS-B with analytical gradient.
+
+#### Multinomial Regression Module
+
+- **`multinom(y, X)`** — Multinomial logit (softmax) regression matching R
+  `nnet::multinom()`. Estimates (J-1) × p coefficient matrix with last class as
+  reference. Log-sum-exp trick for numerical stability, L-BFGS-B with analytical
+  gradient.
+
+#### Multivariate Analysis Module
+
+- **`pca(X, center=True, scale=False)`** — PCA via SVD matching R
+  `stats::prcomp()`. Enforces R sign convention.
+
+- **`factor_analysis(X, n_factors, rotation='varimax')`** — Maximum likelihood
+  factor analysis matching R `stats::factanal()`. Varimax and promax rotations.
+
+#### Time Series Module (Complete)
+
+Full time series analysis framework. Validates against R packages `stats`,
+`tseries`, and `forecast`.
+
+- **ACF / PACF** — `acf(x)` and `pacf(x)` matching R `stats::acf()` / `stats::pacf()`.
+- **Stationarity tests** — `adf_test(x)` and `kpss_test(x)` matching R
+  `tseries::adf.test()` / `tseries::kpss.test()`.
+- **Differencing** — `diff(x)` and `ndiffs(x)` matching R `base::diff()` /
+  `forecast::ndiffs()`.
+- **ETS** — `ets(y, model='ANN')` fitting 12 ETS model types matching R
+  `forecast::ets()`. `forecast_ets()` with prediction intervals.
+- **ARIMA / SARIMA** — `arima(y, order=(p,d,q), seasonal=(P,D,Q,m))` with CSS,
+  ML, and CSS-ML methods matching R `stats::arima()`. `forecast_arima()` with
+  MA(∞) psi weights. `auto_arima(y)` with stepwise or grid search matching R
+  `forecast::auto.arima()`.
+- **Decomposition** — `decompose(x, period)` and `stl(x, period)` matching R
+  `stats::decompose()` / `stats::stl()`.
+
+#### Generalized Additive Models Module
+
+- **`gam(y, smooths=[s('x1')], smooth_data={...})`** — Penalized regression
+  spline GAMs via P-IRLS matching R `mgcv::gam()`. Cubic regression splines and
+  thin plate splines. GCV and REML smoothing parameter selection.
+- **`s(var_name, k=10, bs='cr')`** — Smooth term specification matching `mgcv::s()`.
+
+### Changed
+
+- **GPU behavior enforces "fail loud" policy** — Explicit `backend='gpu'` calls
+  on unsupported operations now raise `NotImplementedError` instead of silently
+  falling back to CPU. Users who want automatic fallback should use
+  `backend='auto'`.
+- **GPU GLM tests require CUDA** — Skip condition narrowed from "any GPU" to
+  "CUDA available" (MPS does not support `torch.linalg.lstsq`).
+
+### Fixed
+
+- **5 stale GPU hypothesis tests** — Tests expecting silent CPU fallback updated
+  to expect `NotImplementedError`, matching v1.2.1 "fail loud" behavior.
+
+### Tests
+
+~650 new tests. Total: 2,275 fast + 13 slow = 2,288.
+
 ## 1.3.0
 
 ### Summary
