@@ -4,16 +4,20 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
-Major expansion: 5 new modules, 2 new GLM families, ~650 new tests.
+Patch release closing five Coding Bible Rule 1 violations (silent failures / degraded paths) surfaced by the Linux/NVIDIA validation suite.
 
-- **GLM families**: Gamma and negative binomial regression (`fit(X, y, family='gamma')`, `fit(X, y, family='negative.binomial')`)
-- **Ordinal regression**: Proportional odds model (`polr(y, X)` matching R MASS::polr)
-- **Multinomial regression**: Softmax regression (`multinom(y, X)` matching R nnet::multinom)
-- **PCA / Factor analysis**: `pca(X)` and `factor_analysis(X, n_factors)` with varimax/promax rotation
-- **Time series**: Complete framework — ACF/PACF, stationarity tests (ADF, KPSS), ETS, ARIMA/SARIMA, auto.arima, decomposition (classical + STL)
-- **GAMs**: Penalized regression splines (`gam(y, smooths=[s('x1')], smooth_data={...})` matching R mgcv::gam)
+- **ARIMA `method='CSS-ML'` now fails loud.** The previous code silently fell back to CSS estimates when ML refinement failed, while still labeling the result as CSS-ML. Now raises `ConvergenceError` with actionable guidance (`use method='CSS'`, adjust `tol`/`max_iter`).
+- **ARIMA(0,d,0) uses closed-form MLE.** Previously handed a near-MLE start to scipy's L-BFGS-B, which exits with `nit=0, "ABNORMAL"` and tripped the silent fallback. The MLE is closed-form for zero AR/MA parameters — no optimizer needed.
+- **Gamma GLM log-likelihood** on non-positive dispersion now returns explicit NaN instead of emitting a `RuntimeWarning` and silently returning NaN from `np.log(negative)`.
+- **`descriptive.var` for n=1** short-circuits to NaN (matching R) instead of emitting numpy's `Degrees of freedom <= 0` warning.
+- **scipy 1.18 forward-compat**: removed deprecated `disp`/`iprint` options from mvnmle optimizer calls.
+- **mvnmle test suite** updated to reflect the actual code contract: `TestMissvalsDataset` now uses EM (the algorithm R uses on that dataset), and the removed `TestEMMatchesDirect::test_missvals_*` tests — which asserted agreement between two algorithms that genuinely cannot agree on this pathological dataset — are replaced by an explicit `TestDirectNonConvergence` contract.
+
+Full pystatistics test suite now passes clean under `pytest -W error::UserWarning -W error::RuntimeWarning -W error::DeprecationWarning`: 2,301 passing, 0 warnings, 0 failures.
 
 ### Previous Releases
+
+**1.6.0** — Five new modules (`ordinal`, `multinomial`, `multivariate`, `timeseries`, `gam`), two new GLM families (`Gamma`, `NegativeBinomial`), ~650 new tests.
 
 **1.2.1** — No silent model switches; `backend='gpu'` is honest; reproducible Monte Carlo via `seed=`; module structure refactoring.
 

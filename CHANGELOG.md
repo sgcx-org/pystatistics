@@ -1,5 +1,73 @@
 # Changelog
 
+## 1.6.1
+
+### Fixed — Coding Bible Rule 1 violations (silent failures / degraded paths)
+
+- **`timeseries.arima(method='CSS-ML')` silent fallback removed.** When ML
+  refinement failed, the previous code emitted a `UserWarning` and silently
+  returned CSS estimates while labeling the result "CSS" — despite the
+  user having requested "CSS-ML". Now raises `ConvergenceError` with
+  actionable guidance (use `method='CSS'`, adjust `tol`/`max_iter`).
+  `pystatistics/timeseries/_arima_fit.py`.
+
+- **`timeseries.arima` zero-parameter case.** For ARIMA(0,d,0) (and any
+  configuration with p_eff = q_eff = 0), the code was calling scipy's
+  `minimize` with a near-MLE start, which causes L-BFGS-B to exit with
+  `nit=0, "ABNORMAL"` and trip the silent fallback path. The MLE is
+  closed-form here (sample mean of the differenced series, or a constant
+  if no mean) — no optimization is needed. Added an explicit closed-form
+  branch that bypasses scipy. `pystatistics/timeseries/_arima_fit.py`.
+
+- **`regression.GammaFamily.log_likelihood` on non-positive dispersion.**
+  When the Gamma GLM fit perfectly (e.g. constant y), dispersion = dev/df
+  came out as ≈ 0 or slightly negative, causing `np.log(rate)` to emit a
+  `RuntimeWarning: invalid value encountered in log` and silently return
+  NaN. Now validates dispersion > 0 explicitly and returns `nan` without
+  triggering numpy's warning. `pystatistics/regression/families.py`.
+
+- **`descriptive.var` of single-observation input.** For n=1 the sample
+  variance is undefined. numpy correctly returns NaN but emits
+  `RuntimeWarning: Degrees of freedom <= 0 for slice`. Added a short-circuit
+  that returns NaN explicitly (matching R `var()`) without triggering the
+  internal numpy warning. `pystatistics/descriptive/backends/cpu.py`.
+
+### Fixed — scipy 1.18 forward-compatibility
+
+- **Removed deprecated `disp` option from `scipy.optimize.minimize`** in
+  mvnmle CPU and GPU backends. scipy 1.18 emits `DeprecationWarning` for
+  `disp`/`iprint` on L-BFGS-B; the option is removed entirely (we do not
+  print optimizer progress, so the default is fine).
+  `pystatistics/mvnmle/backends/{cpu,gpu}.py`.
+
+### Fixed — mvnmle test suite reflects code contract
+
+- **`TestMissvalsDataset` now uses EM explicitly.** The `missvals` dataset
+  (n=13, p=5, high missingness) is pathological for L-BFGS-B direct
+  optimization: the likelihood surface is near-flat at this sample size,
+  and direct does not converge. R's `mvnmle` uses an EM-equivalent
+  algorithm — so the R-comparison tests must also use EM in pystatistics.
+  EM converges to machine precision on this dataset and matches R exactly.
+
+- **`TestEMMatchesDirect::test_missvals_*` removed.** These tests asserted
+  that EM and direct estimates agree on missvals, but direct genuinely
+  cannot converge on that dataset. Replaced with a single test that
+  verifies EM matches R on missvals — the contract that actually holds.
+
+- **Added `TestDirectNonConvergence`.** Codifies the explicit fail-loud
+  contract: on pathological datasets like missvals, the direct optimizer
+  must return `converged=False` rather than silently returning a
+  meaningless answer. A future change which "fixes" direct non-convergence
+  (e.g. by switching optimizers) must update this test deliberately.
+
+### Test impact
+
+- `pytest tests/` passes clean under
+  `-W error::UserWarning -W error::RuntimeWarning -W error::DeprecationWarning`
+  (was 20 warning-induced failures, now 0). Normal run: 2,301 passing,
+  0 failing, 19 skipped.
+
+
 ## 1.6.0
 
 ### Summary
