@@ -258,7 +258,7 @@ def discrete_time(
     *,
     names: list[str] | None = None,
     intervals=None,
-    backend: Literal["auto", "cpu", "gpu"] = "auto",
+    backend: Literal["auto", "cpu", "gpu"] | None = None,
 ) -> DiscreteTimeSolution:
     """Discrete-time survival via person-period logistic regression.
 
@@ -275,14 +275,18 @@ def discrete_time(
         serve as the intercept.
     intervals : array-like or None
         Time interval boundaries. If None, uses unique event times.
-    backend : str
-        Backend for logistic regression: "auto", "cpu", or "gpu".
-        "auto" selects GPU if available, else CPU.
+    backend : str or None
+        Backend for the person-period logistic regression. Default
+        None → 'cpu' (R-reference path). Explicit values: "cpu", "gpu",
+        or "auto" to prefer GPU when available.
 
     Returns
     -------
     DiscreteTimeSolution
     """
+    if backend is None:
+        backend = "cpu"
+
     design = SurvivalDesign.for_survival(time, event, X)
 
     if design.X is None:

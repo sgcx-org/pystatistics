@@ -38,7 +38,7 @@ def discrete_time_fit(
     event: NDArray,
     X: NDArray,
     intervals: NDArray | None = None,
-    backend: Literal["auto", "cpu", "gpu"] = "auto",
+    backend: Literal["auto", "cpu", "gpu"] | None = None,
 ) -> DiscreteTimeParams:
     """Fit discrete-time survival model.
 
@@ -52,14 +52,19 @@ def discrete_time_fit(
         (n, p) covariate matrix (NO intercept).
     intervals : NDArray or None
         Time interval boundaries. If None, uses unique event times.
-    backend : str
-        Backend for logistic regression: "auto", "cpu", or "gpu".
+    backend : str or None
+        Backend for the person-period logistic regression. Default
+        None → 'cpu' (R-reference path). Explicit values: "cpu", "gpu",
+        or "auto".
 
     Returns
     -------
     DiscreteTimeParams
     """
     from pystatistics.regression.solvers import fit as regression_fit
+
+    if backend is None:
+        backend = "cpu"
 
     n, p = X.shape
     n_events_total = int(np.sum(event))

@@ -4,6 +4,38 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
+### 2.0.0 — CPU is now the default backend everywhere (breaking)
+
+Every public solver that previously defaulted to `backend='auto'` now
+defaults to **CPU — the R-reference, validated-for-regulated-industries
+path**. GPU is never selected implicitly. Affected entry points:
+
+- `regression.fit` (OLS and all GLM families)
+- `mvnmle.mlest`
+- `survival.discrete_time` and `discrete_time_fit`
+- `montecarlo.boot`, `montecarlo.permutation_test`
+- `descriptive.describe`, `.cor`, `.cov`, `.var`, `.quantile`, `.summary`
+- `hypothesis.*` (signatures normalized — behaviour unchanged; CPU was
+  already the effective default)
+
+The GPU path is opt-in:
+
+```python
+result = fit(X, y, backend='gpu')    # require GPU; fail loud if absent
+result = fit(X, y, backend='auto')   # prefer GPU, fall back to CPU
+```
+
+Rationale: GPU behaviour is not guaranteed across installs, and
+regulated-industry users need "unspecified backend" to mean the
+validated path. This formalises the convention already documented in
+`pystatistics/GPU_BACKEND_CONVENTION.md` and followed by the
+`multivariate.pca`, `multinomial`, `ordinal`, `timeseries.arima`, and
+`gam` modules since 1.6.0.
+
+Migration: if you were relying on implicit GPU selection on a
+GPU-equipped box, add `backend='auto'` (best-effort GPU) or
+`backend='gpu'` (require GPU) to the affected calls.
+
 ### 1.9.0 — Device-resident PCA results and batched ARMA fits
 
 Two follow-ons to the 1.8.0 GPU sweep, focused on removing remaining

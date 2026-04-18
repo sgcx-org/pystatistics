@@ -30,9 +30,9 @@ def _ensure_design(data: ArrayLike | DescriptiveDesign) -> DescriptiveDesign:
     return DescriptiveDesign.from_array(data)
 
 
-def _get_backend(backend: BackendChoice):
-    """Select backend based on preference."""
-    if backend == 'cpu':
+def _get_backend(backend: BackendChoice | None):
+    """Select backend based on preference. None → 'cpu'."""
+    if backend is None or backend == 'cpu':
         return CPUDescriptiveBackend()
 
     if backend == 'auto':
@@ -58,7 +58,7 @@ def describe(
     *,
     use: UseMethod = 'everything',
     quantile_type: int = 7,
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute comprehensive descriptive statistics.
@@ -77,8 +77,9 @@ def describe(
         'pairwise.complete.obs' (pairwise deletion for cor/cov).
     quantile_type : int
         R quantile type (1-9). Default 7 matches R default.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------
@@ -109,7 +110,7 @@ def cor(
     *,
     method: CorMethod = 'pearson',
     use: UseMethod = 'everything',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute correlation matrix. Matches R cor().
@@ -125,8 +126,9 @@ def cor(
         'pearson', 'spearman', 'kendall'.
     use : str
         Missing data handling.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------
@@ -163,7 +165,7 @@ def cov(
     y: ArrayLike | None = None,
     *,
     use: UseMethod = 'everything',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute covariance matrix (Bessel-corrected, n-1). Matches R cov().
@@ -176,8 +178,9 @@ def cov(
         Second variable (1D).
     use : str
         Missing data handling.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------
@@ -201,7 +204,7 @@ def var(
     x: ArrayLike | DescriptiveDesign,
     *,
     use: UseMethod = 'everything',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute variance (Bessel-corrected, n-1). Matches R var().
@@ -215,8 +218,9 @@ def var(
         1D or 2D data.
     use : str
         Missing data handling.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------
@@ -240,7 +244,7 @@ def quantile(
     *,
     type: int = 7,
     use: UseMethod = 'everything',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute quantiles. Matches R quantile() with all 9 types.
@@ -255,8 +259,9 @@ def quantile(
         R quantile type 1-9. Default 7 (R default).
     use : str
         Missing data handling.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------
@@ -288,7 +293,7 @@ def summary(
     x: ArrayLike | DescriptiveDesign,
     *,
     use: UseMethod = 'everything',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
     Compute six-number summary. Matches R summary() for numeric vectors.
@@ -301,8 +306,9 @@ def summary(
         1D or 2D data.
     use : str
         Missing data handling.
-    backend : str
-        'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available.
 
     Returns
     -------

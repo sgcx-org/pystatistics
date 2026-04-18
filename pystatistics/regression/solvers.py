@@ -26,7 +26,7 @@ def fit(
     y: ArrayLike | None = None,
     *,
     family: 'str | Family | None' = None,
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
     force: bool = False,
     tol: float = 1e-8,
     max_iter: int = 25,
@@ -48,7 +48,10 @@ def fit(
         y: Response vector (required if X_or_design is array)
         family: GLM family specification. None for OLS, or a string
             ('gaussian', 'binomial', 'poisson') or Family instance.
-        backend: 'auto', 'cpu', 'gpu', 'cpu_qr', 'cpu_svd', 'gpu_qr'
+        backend: Compute backend. Default None → 'cpu' (the R-reference
+            path, validated for regulated-industry use). Explicit values:
+            'cpu', 'gpu', 'cpu_qr', 'cpu_svd', 'gpu_qr', or 'auto' to
+            prefer GPU when available and fall back to CPU.
         force: If True, proceed with GPU Cholesky even on ill-conditioned
             matrices. Has no effect on CPU backends.
         tol: Convergence tolerance for IRLS (GLM only). Default 1e-8
@@ -76,6 +79,11 @@ def fit(
         # Poisson regression
         >>> result = fit(X, y, family='poisson')
     """
+    # Unspecified backend → CPU (R-reference path). GPU is never the
+    # default; callers must opt in explicitly or request 'auto'.
+    if backend is None:
+        backend = 'cpu'
+
     # Get or build Design
     if isinstance(X_or_design, Design):
         design = X_or_design

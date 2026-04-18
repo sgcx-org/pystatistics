@@ -25,7 +25,7 @@ BackendChoice = Literal['cpu', 'gpu', 'auto']
 # GPU only helps in specific Monte Carlo scenarios.
 
 
-def _get_backend(backend: str = 'cpu'):
+def _get_backend(backend: str | None = None):
     """
     Select backend for hypothesis tests.
 
@@ -33,11 +33,11 @@ def _get_backend(backend: str = 'cpu'):
     GPU only helps for Monte Carlo simulations (chi-squared and
     Fisher r×c with simulate_p_value=True).
 
-    backend='auto' uses CPU — GPU is only instantiated when
-    explicitly requested, so that non-GPU-accelerated tests
-    raise NotImplementedError instead of silently falling back.
+    None (default) and 'auto' both route to CPU — GPU is only
+    instantiated when explicitly requested, so that non-GPU-accelerated
+    tests raise NotImplementedError instead of silently falling back.
     """
-    if backend in ('cpu', 'auto'):
+    if backend is None or backend in ('cpu', 'auto'):
         return CPUHypothesisBackend()
     if backend == 'gpu':
         from pystatistics.hypothesis.backends.gpu import GPUHypothesisBackend
@@ -56,7 +56,7 @@ def t_test(
     paired: bool = False,
     var_equal: bool = False,
     conf_level: float = 0.95,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     Student's t-test. Matches R t.test().
@@ -115,7 +115,7 @@ def chisq_test(
     simulate_p_value: bool = False,
     B: int = 2000,
     seed: int | None = None,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     Pearson's Chi-squared test. Matches R chisq.test().
@@ -175,7 +175,7 @@ def prop_test(
     alternative: str = "two.sided",
     conf_level: float = 0.95,
     correct: bool = True,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     Test of proportions. Matches R prop.test().
@@ -233,7 +233,7 @@ def fisher_test(
     simulate_p_value: bool = False,
     B: int = 2000,
     seed: int | None = None,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     Fisher's Exact Test for Count Data. Matches R fisher.test().
@@ -293,7 +293,7 @@ def wilcox_test(
     correct: bool = True,
     conf_int: bool = True,
     conf_level: float = 0.95,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     Wilcoxon rank-sum or signed-rank test. Matches R wilcox.test().
@@ -351,7 +351,7 @@ def ks_test(
     *,
     alternative: str = "two.sided",
     distribution: str | None = None,
-    backend: str = 'cpu',
+    backend: str | None = None,
     **dist_params: float,
 ) -> HTestSolution:
     """
@@ -401,7 +401,7 @@ def var_test(
     ratio: float = 1.0,
     alternative: str = "two.sided",
     conf_level: float = 0.95,
-    backend: str = 'cpu',
+    backend: str | None = None,
 ) -> HTestSolution:
     """
     F-test to compare two variances. Matches R var.test().

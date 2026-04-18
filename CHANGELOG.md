@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.0
+
+- **BREAKING: Default backend is now CPU across all public solvers**
+  (requires next version be a major bump per semver). Every public
+  fit/solver entry point that previously defaulted to `backend='auto'`
+  now defaults to `backend=None`, which resolves to `'cpu'` for numpy
+  input — the R-reference path. GPU is never the default; callers
+  must opt in explicitly with `backend='gpu'` (fail-loud if
+  unavailable) or `backend='auto'` (prefer GPU, fall back to CPU).
+  Rationale: GPU behavior is not guaranteed across installs, and
+  regulated-industry users need "unspecified backend" to mean the
+  validated path. Affected entry points:
+    - `regression.fit` (covers OLS + all GLM families)
+    - `mvnmle.mlest`
+    - `survival.discrete_time` and internal `discrete_time_fit`
+    - `montecarlo.boot`, `montecarlo.permutation_test`
+    - `descriptive.describe`, `.cor`, `.cov`, `.var`, `.quantile`,
+      `.summary`
+    - `hypothesis.*` (signatures normalized — behavior unchanged;
+      CPU was already the effective default)
+  The convention already documented in
+  `pystatistics/GPU_BACKEND_CONVENTION.md` (numpy input → CPU) is now
+  uniformly enforced. Previously-compliant modules (`multivariate.pca`,
+  `multinomial`, `ordinal`, `timeseries.arima` / `.arima_batch`,
+  `gam`) are unchanged. Migration: if you were relying on implicit
+  GPU selection on a GPU-equipped box, add `backend='auto'`
+  (best-effort GPU) or `backend='gpu'` (require GPU) to the
+  affected calls.
+
+
 ## 1.9.1
 
 ### README — catch-up for 1.8.0 and 1.9.0

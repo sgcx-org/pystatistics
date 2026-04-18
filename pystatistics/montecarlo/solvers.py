@@ -76,7 +76,7 @@ def boot(
     ran_gen: Callable | None = None,
     mle: Any = None,
     seed: int | None = None,
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> BootstrapSolution:
     """
     Bootstrap resampling. Matches R's boot::boot().
@@ -100,7 +100,8 @@ def boot(
         ran_gen: For parametric bootstrap: fn(data, mle, rng) -> sim_data.
         mle: Parameter estimates for parametric bootstrap.
         seed: Random seed for reproducibility.
-        backend: "auto", "cpu", or "gpu".
+        backend: Compute backend. Default None → 'cpu'. Explicit:
+            'cpu', 'gpu', or 'auto'.
 
     Returns:
         BootstrapSolution with t0, t, bias, SE.
@@ -116,6 +117,9 @@ def boot(
         >>> result.bias  # bootstrap bias estimate
         >>> result.se  # bootstrap standard error
     """
+    if backend is None:
+        backend = 'cpu'
+
     design = BootstrapDesign.for_bootstrap(
         data=data,
         statistic=statistic,
@@ -228,7 +232,7 @@ def permutation_test(
     *,
     alternative: Literal["two.sided", "less", "greater"] = "two.sided",
     seed: int | None = None,
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
 ) -> PermutationSolution:
     """
     Permutation test for two groups.
@@ -244,7 +248,8 @@ def permutation_test(
         R: Number of permutations. Default 9999.
         alternative: "two.sided", "less", or "greater".
         seed: Random seed for reproducibility.
-        backend: "auto", "cpu", or "gpu".
+        backend: Compute backend. Default None → 'cpu'. Explicit:
+            'cpu', 'gpu', or 'auto'.
 
     Returns:
         PermutationSolution with observed_stat, perm_stats, p_value.
@@ -256,6 +261,9 @@ def permutation_test(
         >>> result = permutation_test(x, y, mean_diff, R=9999, seed=42)
         >>> result.p_value
     """
+    if backend is None:
+        backend = 'cpu'
+
     design = PermutationDesign.for_permutation_test(
         x=x,
         y=y,

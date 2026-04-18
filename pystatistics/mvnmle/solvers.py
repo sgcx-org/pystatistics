@@ -22,7 +22,7 @@ def mlest(
     data_or_design,
     *,
     algorithm: AlgorithmChoice = 'direct',
-    backend: BackendChoice = 'auto',
+    backend: BackendChoice | None = None,
     method: str | None = None,
     tol: float | None = None,
     max_iter: int | None = None,
@@ -45,8 +45,10 @@ def mlest(
           using R-exact inverse Cholesky parameterization.
         - 'em': Expectation-Maximization algorithm. Typically slower to
           converge but guaranteed monotone likelihood increase.
-    backend : str
-        Backend selection: 'auto', 'cpu', 'gpu'.
+    backend : str or None
+        Backend selection. Default None → 'cpu' (R-reference path,
+        validated for regulated-industry use). Explicit values:
+        'cpu', 'gpu', or 'auto' to prefer GPU when available.
     method : str or None
         Optimization method for direct algorithm. If None, auto-selected
         by backend. Ignored for EM.
@@ -71,6 +73,11 @@ def mlest(
     >>> print(result.muhat)
     >>> print(result.loglik)
     """
+    # Unspecified backend → CPU (R-reference path). GPU is never the
+    # default; callers must opt in explicitly or request 'auto'.
+    if backend is None:
+        backend = 'cpu'
+
     # Get or build Design
     if isinstance(data_or_design, MVNDesign):
         design = data_or_design
