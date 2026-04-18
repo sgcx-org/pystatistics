@@ -1,5 +1,43 @@
 # Changelog
 
+## 2.0.1
+
+- **GPU Backend Convention: codified when NOT to add a GPU backend**
+  (`pystatistics/GPU_BACKEND_CONVENTION.md`, new Section 0). Formalises
+  the Oprah-test rule: don't give every module a GPU backend — only
+  those where the algorithm is actually a good fit for GPU hardware
+  (large dense linear algebra, big-N likelihoods, batched independent
+  fits). Explicitly calls out the non-targets (many-small-fits,
+  sequential algorithms, transfer-bound cheap compute) and the ~100 ms
+  CPU-time threshold below which launch + PCIe overhead eats any
+  speedup. Names the deliberate CPU-only modules (`anova`,
+  `timeseries.ets`, `survival.coxph`, `multivariate.factor_analysis`,
+  acf / stationarity) so future contributors know these omissions are
+  intentional, not oversights.
+- **`auto_arima` now accepts `backend=` and `method=`**
+  (`pystatistics/timeseries/_arima_order.py`). Parameters are threaded
+  through `_stepwise_search` / `_grid_search` / `_try_fit` to every
+  candidate `arima()` call. Previously there was no way to route the
+  per-candidate fits through the GPU Whittle path, so on a
+  GPU-equipped box the search was stuck on CPU even if the user
+  wanted frequency-domain speedups. Default `backend=None` → CPU
+  (R-reference); pass `method='Whittle', backend='gpu'` to run each
+  candidate on GPU.
+- **`little_mcar_test` now accepts `backend=` and `algorithm=`**
+  (`pystatistics/mvnmle/mcar_test.py`). Previously the function had no
+  backend knob and always ran `mlest()` with the default — which after
+  2.0.0's CPU-default sweep meant there was no way to route Little's
+  MCAR test through the GPU path, defeating the purpose of having a
+  GPU MLE backend at all. The new `backend` parameter is forwarded
+  straight to `mlest`; default None → CPU (consistent with the 2.0.0
+  convention), `'gpu'` / `'auto'` opt in to GPU. The per-pattern
+  test-statistic accumulation still runs on CPU — it's O(P × v³) for
+  v = observed vars per pattern (typically < 50) and was never the
+  bottleneck; the ML estimation step is where GPU matters. Verified
+  GPU/CPU results agree within FP32 tolerance (Δ stat ≈ 1.4e-4 on
+  the apple dataset).
+
+
 ## 2.0.0
 
 - **BREAKING: Default backend is now CPU across all public solvers**

@@ -10,6 +10,49 @@ Two exemplars to read alongside this doc:
 - `pystatistics/multivariate/_pca.py` + `backends/gpu_pca.py`
 - `pystatistics/multinomial/_solver.py` + `backends/gpu_likelihood.py`
 
+## 0. When to add a GPU backend — and when not to
+
+A GPU backend exists because the underlying computation is a good fit
+for GPU hardware, not because the module is public and therefore
+"deserves" one. Adding a GPU backend that doesn't make algorithmic
+sense is worse than having none at all: it invites users to pick a
+slower path, adds a maintenance surface, and forces convention
+compliance (Rules 1–9 below) for no benefit.
+
+**Reasonable targets:** large dense linear algebra (QR / SVD /
+Cholesky), per-iteration gradient evaluations on large design
+matrices, big-N likelihood evaluations, batched independent fits,
+frequency-domain transforms.
+
+**Not reasonable targets — do not add a GPU backend for these:**
+
+- Many-small-fits workflows where per-call launch overhead dominates
+  compute (e.g. ANOVA SS computation, which fits a chain of tiny
+  regressions — the CPU LAPACK call is microseconds, the GPU kernel
+  launch is milliseconds).
+- Inherently sequential algorithms without exploitable parallelism
+  (most EM variants below a certain dataset size, Cox PH partial
+  likelihood).
+- Algorithms already bounded by PCIe / D2H transfer, where the
+  compute is cheap enough that you spend more time copying data than
+  running the kernel.
+- Algorithms where the existing scipy / LAPACK implementation is
+  already within an order of magnitude of hardware peak — a 2× speedup
+  is not worth the convention-compliance + test + review cost.
+
+**Signal that GPU makes sense:** measured CPU time > 100 ms on a
+representative input, with > 80 % of that time in a compute kernel
+that maps to cuBLAS / cuSOLVER / cuFFT. Below that threshold, the
+launch + transfer overhead eats the win.
+
+If a public module has no `backends/gpu*.py`, that is a deliberate
+statement — like `anova`, `timeseries.ets`, `survival.coxph`,
+`multivariate.factor_analysis`, and the acf / stationarity families.
+The public API correspondingly does *not* expose a `backend=`
+parameter, which is the correct state (Rule 1: don't offer choices
+you can't honor; exposing `backend='gpu'` on a CPU-only module would
+violate fail-fast).
+
 ## 1. Input type determines default backend
 
 The top-level fit function accepts either a numpy array *or* a

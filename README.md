@@ -4,6 +4,31 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
+### 2.0.1 — GPU-backend exposure gaps and a convention rule
+
+Two public functions had GPU-capable inner calls but no `backend=`
+parameter, so there was no way to route them through the GPU path —
+exactly the regression the 2.0.0 CPU-default sweep was trying *not*
+to create. Both fixed:
+
+- **`little_mcar_test`** now accepts `backend=` and `algorithm=`,
+  forwarded to `mlest`. The per-pattern test-statistic accumulation
+  still runs on CPU (O(P × v³) for tiny v — never the bottleneck).
+  GPU results match CPU within FP32 tolerance (Δ stat ≈ 1.4e-4 on
+  the apple dataset).
+- **`auto_arima`** now accepts `backend=` and `method=`, threaded
+  through `_stepwise_search` / `_grid_search` / `_try_fit` so every
+  candidate fit honours the same backend. Pass
+  `method='Whittle', backend='gpu'` to run each candidate on GPU.
+
+Also codified the "when to add a GPU backend, and when not to" rule
+as Section 0 of `pystatistics/GPU_BACKEND_CONVENTION.md` — the
+absence of `backends/gpu*.py` in a module (`anova`, `ets`, `coxph`,
+`factor_analysis`, acf / stationarity) is a deliberate statement,
+not an oversight. GPU backends belong on workloads that actually
+map to GPU hardware (large dense linear algebra, big-N likelihoods,
+batched fits, frequency-domain transforms), not on everything.
+
 ### 2.0.0 — CPU is now the default backend everywhere (breaking)
 
 Every public solver that previously defaulted to `backend='auto'` now

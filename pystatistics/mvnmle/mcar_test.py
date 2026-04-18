@@ -102,6 +102,8 @@ def regularized_inverse(matrix: np.ndarray,
 
 def little_mcar_test(data,
                      alpha: float = 0.05,
+                     backend: str | None = None,
+                     algorithm: str = 'direct',
                      verbose: bool = False) -> MCARTestResult:
     """
     Little's test for Missing Completely at Random (MCAR).
@@ -112,6 +114,14 @@ def little_mcar_test(data,
         Data matrix with missing values as np.nan.
     alpha : float, default=0.05
         Significance level
+    backend : str or None, default None
+        Backend for the ML estimation step (the dominant cost).
+        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        'gpu', or 'auto' to prefer GPU when available. The per-pattern
+        test-statistic accumulation runs on CPU regardless — it's
+        O(P × v³) for tiny v and is not the bottleneck.
+    algorithm : str, default 'direct'
+        ML algorithm: 'direct' (BFGS) or 'em'. Forwarded to mlest.
     verbose : bool, default=False
         Print detailed progress
 
@@ -138,7 +148,9 @@ def little_mcar_test(data,
         print("Step 1: Computing ML estimates...")
 
     try:
-        ml_result = mlest(data_array, verbose=False)
+        ml_result = mlest(
+            data_array, backend=backend, algorithm=algorithm, verbose=False,
+        )
         mu_ml = ml_result.muhat
         sigma_ml = ml_result.sigmahat
     except Exception as e:

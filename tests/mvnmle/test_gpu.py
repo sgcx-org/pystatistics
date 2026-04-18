@@ -331,3 +331,32 @@ class TestGPUEdgeCases:
         assert result_em.converged
         assert np.all(np.isfinite(result_direct.muhat))
         assert np.all(np.isfinite(result_direct.sigmahat))
+
+
+# =====================================================================
+# Little's MCAR test — backend forwarding
+# =====================================================================
+
+class TestLittleMCARGPU:
+    """Little's MCAR test must accept and honor backend=.
+
+    Regression coverage for the gap exposed during Project Lacuna:
+    pre-fix, little_mcar_test had no backend knob, so there was no
+    way to route the (dominant) ML estimation step through the GPU
+    path even though a GPU MLE backend existed.
+    """
+
+    def test_gpu_backend_runs(self):
+        from pystatistics.mvnmle import little_mcar_test
+        result = little_mcar_test(datasets.apple, backend='gpu')
+        assert np.isfinite(result.statistic)
+        assert 0.0 <= result.p_value <= 1.0
+        assert result.df > 0
+
+    def test_gpu_matches_cpu_within_fp32_tolerance(self):
+        from pystatistics.mvnmle import little_mcar_test
+        cpu = little_mcar_test(datasets.apple, backend='cpu')
+        gpu = little_mcar_test(datasets.apple, backend='gpu')
+        assert gpu.df == cpu.df
+        # FP32 mlest → ~1e-3 level agreement on the chi-sq statistic
+        assert abs(gpu.statistic - cpu.statistic) < 1e-2

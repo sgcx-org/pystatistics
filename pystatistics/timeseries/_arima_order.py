@@ -117,6 +117,8 @@ def _try_fit(
     ic: str,
     tol: float,
     max_iter: int,
+    method: str = "CSS-ML",
+    backend: str | None = None,
 ) -> tuple[object | None, float]:
     """Attempt to fit an ARIMA model; return (result, ic_value).
 
@@ -149,8 +151,10 @@ def _try_fit(
             y,
             order=order,
             seasonal=seasonal_order,
+            method=method,
             tol=tol,
             max_iter=max_iter,
+            backend=backend,
         )
         if not result.converged:
             return None, math.inf
@@ -229,6 +233,8 @@ def _stepwise_search(
     ic: str,
     tol: float,
     max_iter: int,
+    method: str = "CSS-ML",
+    backend: str | None = None,
 ) -> tuple[object, tuple[int, int, int], float, list[tuple[tuple, float]]]:
     """Stepwise ARIMA order selection.
 
@@ -274,7 +280,9 @@ def _stepwise_search(
     best_ic = math.inf
 
     for order in initial_orders:
-        result, ic_val = _try_fit(y, order, seasonal_order, ic, tol, max_iter)
+        result, ic_val = _try_fit(
+            y, order, seasonal_order, ic, tol, max_iter, method, backend,
+        )
         search_results.append((order, ic_val))
         if ic_val < best_ic:
             best_ic = ic_val
@@ -311,7 +319,7 @@ def _stepwise_search(
         for order in neighbours:
             visited.add(order)
             result, ic_val = _try_fit(
-                y, order, seasonal_order, ic, tol, max_iter
+                y, order, seasonal_order, ic, tol, max_iter, method, backend,
             )
             search_results.append((order, ic_val))
             if ic_val < best_ic:
@@ -336,6 +344,8 @@ def _grid_search(
     ic: str,
     tol: float,
     max_iter: int,
+    method: str = "CSS-ML",
+    backend: str | None = None,
 ) -> tuple[object, tuple[int, int, int], float, list[tuple[tuple, float]]]:
     """Exhaustive grid search over all (p, d, q) combinations.
 
@@ -368,7 +378,9 @@ def _grid_search(
 
     for p, q in itertools.product(range(max_p + 1), range(max_q + 1)):
         order = (p, d, q)
-        result, ic_val = _try_fit(y, order, seasonal_order, ic, tol, max_iter)
+        result, ic_val = _try_fit(
+            y, order, seasonal_order, ic, tol, max_iter, method, backend,
+        )
         search_results.append((order, ic_val))
         if ic_val < best_ic:
             best_ic = ic_val
@@ -403,6 +415,8 @@ def auto_arima(
     stepwise: bool = True,
     tol: float = 1e-8,
     max_iter: int = 1000,
+    method: str = "CSS-ML",
+    backend: str | None = None,
 ) -> AutoARIMAResult:
     """Automatic ARIMA model selection.
 
@@ -436,6 +450,15 @@ def auto_arima(
         Convergence tolerance passed to :func:`arima`.
     max_iter : int
         Maximum iterations passed to :func:`arima`.
+    method : str
+        Estimation method forwarded to every candidate fit. Default
+        ``'CSS-ML'`` matches R. Use ``'Whittle'`` with ``backend='gpu'``
+        to route each candidate through the frequency-domain GPU path.
+    backend : str or None
+        Backend forwarded to every candidate fit. Default ``None`` →
+        CPU (R-reference path). Pass ``'gpu'`` or ``'auto'`` to
+        opt into the GPU path; only meaningful when the candidate
+        fits actually support it (e.g. ``method='Whittle'``).
 
     Returns
     -------
@@ -486,11 +509,13 @@ def auto_arima(
     # --- Search ---
     if stepwise:
         best_result, best_order, best_ic_val, search_results = _stepwise_search(
-            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter
+            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter,
+            method, backend,
         )
     else:
         best_result, best_order, best_ic_val, search_results = _grid_search(
-            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter
+            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter,
+            method, backend,
         )
 
     models_fitted = sum(1 for _, v in search_results if v < math.inf)
