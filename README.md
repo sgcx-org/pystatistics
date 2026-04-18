@@ -4,64 +4,85 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
-### 1.7.0 — Performance parity with R on OLS, polr, SARIMA
+### 1.9.0 — Device-resident PCA results and batched ARMA fits
 
-Minor release focused on performance. Three hot paths that were
-orders of magnitude slower than the corresponding R implementation
-are now at or beating R on the Linux/NVIDIA validation rig. Two
-genuine correctness bugs were fixed along the way.
+Two follow-ons to the 1.8.0 GPU sweep, focused on removing remaining
+PCIe transfer bottlenecks and on making many-series workflows fast.
 
-**Performance (versus R on real datasets from the validation suite):**
+- **GPU-resident `PCAResult`** (`pca(..., device_resident=True)`).
+  Numeric fields (`sdev`, `rotation`, `center`, `scale`, `x`) stay
+  as `torch.Tensor` on the fit's device instead of being copied
+  back to numpy. On a 1M × 100 FP32 PCA via a GPU `DataSource`,
+  skipping the scores D2H copy cuts per-fit wall time from 202.9 ms
+  to 59.3 ms — **3.4×** — and removes what was otherwise the
+  dominant cost of any downstream GPU computation that consumes PCA
+  output. Explicit `PCAResult.to_numpy()` / `.to(device)` materialise
+  a numpy-backed copy; `.device` reports where the fields live.
+  Default `device_resident=False` preserves 1.8.0 behaviour.
+- **`arima_batch(Y, order=(p, d, q), method='Whittle')`.** Fits K
+  independent ARMA models on the rows of a `(K, n)` matrix
+  simultaneously. One batched `torch.fft.rfft` computes the full
+  `(K, m)` periodogram; batched Adam runs K independent
+  optimizations on a shared `(K, p+q)` parameter tensor with
+  per-row gradient-norm convergence freezing. Non-seasonal,
+  Whittle-method only; CPU path is a Python loop over the
+  single-series `arima(method='Whittle')` (no batch speedup).
+  Crossover at **K ≈ 100**; measured 6.9× at K=500, **13× at
+  K=1000**, 10.7× at K=500/n=10000.
 
-| Fit | Before 1.7.0 | 1.7.0 | R |
-|-----|--------------|-------|---|
-| OLS on California Housing (n=20,640), first call | 578 ms | **5 ms** | 4 ms |
-| polr on MASS::housing (n=1,681) | 277 ms | **23 ms** | 20 ms |
-| SARIMA(0,1,1)(0,1,1)[12] on log(AirPassengers) | 2,100 ms | **14 ms** | 11 ms |
+Validation: 2,371 pystatistics tests, 117 R-vs-Python cross-validation.
 
-How:
+### 1.8.0 — GPU backends for the 1.6.x modules
 
-- **OLS first-call.** `Result()` construction used to `import torch`
-  just to record `torch.__version__` in provenance metadata. On
-  CPU-only sessions that triggered an 800 ms cold module load on
-  the first fit. Now probes `sys.modules` and caches.
-- **polr.** The negative log-likelihood ran a per-row Python loop
-  calling `link.linkinv(np.atleast_1d(scalar))` twice per observation.
-  A fully vectorized helper `_cumulative_probs_vectorized` already
-  existed right next to it, unused. Swapped in.
-- **SARIMA.** Three stacked fixes: (1) new `_arima_kalman.py` module
-  implementing state-space Kalman-filter exact ML (Gardner–Harvey–
-  Phillips 1980 — the same algorithm R uses), numba-JIT'd with
-  companion-matrix sparsity; (2) new `_arima_factored.py` optimizes
-  in factored (ma₁, sma₁) space instead of the expanded seasonal-MA
-  polynomial (2 dims instead of 13 for the airline model); (3) sign-
-  convention bug in `_multiply_polynomials` when composing MA
-  polynomials — fits previously converged to an inferior local mode
-  and now match R's coefficients to 3 decimals.
+Major release adding GPU backends across the five modules introduced
+in 1.6.0 plus GEE in pystatsbio, a new `DataSource.to(device)` API
+for amortised-transfer workflows, and a frequency-domain ARIMA method.
+Also includes a CPU-only perf win for the multinomial vcov step that
+fell out of the GPU work.
 
-**Correctness fixes:**
+**New GPU backends** (measured on an RTX 5070 Ti; see CHANGELOG for
+shape-by-shape tables):
 
-- **`_forecast_differenced`: off-by-one + `np.empty` bug.** AR lag
-  index was off by one and `forecasts` was allocated uninitialized.
-  The k=1 step read `forecasts[0]` before writing it — worked by
-  luck when fresh OS pages returned zeros, but the performance
-  changes above perturbed allocator state and exposed the bug,
-  producing forecasts of 4e50 from latent garbage.
-- **MA sign bug in `_multiply_polynomials`** (described above).
-  Previously masked by the expanded-parameter optimization path
-  absorbing the sign freely; now fixed explicitly via a new
-  `_multiply_ma_polynomials` helper.
+| Module | Approach | Typical speedup vs CPU |
+|---|---|---|
+| PCA | SVD or Gram-matrix eigh, cond-gated | 3–4× (SVD), up to 100× (Gram, tall-skinny) |
+| Multinomial logit | Analytical block-Hessian `X'·diag(Wⱼₖ)·X` | 49–183× |
+| Ordinal polr | Autograd NLL + Hessian-via-autograd vcov | **448× at n=100k** |
+| GAM (P-IRLS) | Batched penalty-sum + LU, hat-trace via numpy LAPACK | 10–29× with 3 smooths |
+| GEE (pystatsbio 1.6.0) | Cluster-size grouped batched `torch.linalg.solve` | 13–67× at K=500–5000 |
+| ARIMA Whittle | FFT-based approximate MLE, all on device | **36× at n=1M** |
 
-**New required dependency: `numba>=0.59`.** The Kalman filter inner
-loop is tight enough that pure-numpy per-call overhead on small
-(r ≤ 25) state matrices dominates. Numba JIT closes the gap with
-R's Fortran implementation. Torch remains optional (GPU backend only).
+Two-tier validation convention is documented in
+`GPU_BACKEND_CONVENTION.md`: CPU is validated against R; GPU is
+validated against CPU at the `GPU_FP32` tolerance tier for FP32
+runs and to machine precision on CUDA FP64.
 
-Validation: 2,301 pystatistics tests pass, plus 117 R-vs-Python
-cross-validation tests in `pystatistics-validation/` covering the
-real-data parity claims above.
+**`DataSource.to(device)`** — pay the host→device transfer once up
+front, reach the compute ceiling on every subsequent fit. Rule-1
+safe (explicit device mismatches raise). Underpins the amortised
+numbers above.
+
+**Whittle ARIMA** (`method='Whittle'`) — FFT-based approximate MLE
+alongside CSS / ML / CSS-ML. Non-seasonal only in 1.8.0; `vcov`
+returned as NaN (use ML/CSS-ML for SEs). CPU-only Whittle still
+wins 1.4–17.5× over CSS-ML at n ≥ 2000 via precomputed cos/sin
+tables; GPU Whittle hits 36× at n=1M.
+
+**CPU multinomial analytical Hessian (backport).** The CPU vcov
+step now uses the same block `X'·diag(Wⱼₖ)·X` formula the GPU
+backend does, replacing the central-difference Hessian. **29–33×
+CPU speedup** on the vcov step alone with no new dependencies.
+
+Validation: 2,353 pystatistics tests, 117 R-vs-Python cross-validation.
 
 ### Previous Releases
+
+**1.7.0** — Performance parity with R on OLS first-call (578 ms →
+5 ms via lazy torch provenance probe), polr (277 ms → 23 ms via
+vectorised `_cumulative_probs_vectorized`), and SARIMA airline-model
+fit (2,100 ms → 14 ms via a numba-JIT'd Kalman state-space path +
+factored-parameter optimisation + MA sign-convention fix). Added
+`numba>=0.59` as a required dependency.
 
 **1.6.2** — Re-shipped the 1.6.1 fixes after a release-process bug
 left them out of the PyPI wheel. Closes five Rule 1 silent-failure
