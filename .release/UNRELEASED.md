@@ -10,15 +10,4 @@
 
 ## Changes
 
-### README — catch-up for 1.8.0 and 1.9.0
-
-- **README's "What's New" section updated** to reflect the 1.8.0
-  and 1.9.0 releases (the full GPU backend sweep, Whittle ARIMA,
-  GPU-resident PCAResult, `arima_batch`). Both prior releases
-  shipped with README still describing 1.7.0 as current. Doc-only
-  change — no code is touched.
-
-- **`.release/CHECKLIST.md` already states** that the feature-
-  summary prose in README is manual work that `release.py` does
-  not auto-generate; the issue was the step being skipped, not the
-  checklist being missing.
+*(empty — no unreleased changes yet)*
