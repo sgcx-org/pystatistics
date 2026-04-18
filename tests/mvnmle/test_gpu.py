@@ -353,6 +353,59 @@ class TestLittleMCARGPU:
         assert 0.0 <= result.p_value <= 1.0
         assert result.df > 0
 
+    def test_gpu_on_small_data_emits_warning(self):
+        """Rule 1: any GPU dispatch that is likely worse than CPU must
+        surface the tradeoff to the user, not proceed silently."""
+        import warnings as _warnings
+        from pystatistics.mvnmle import mlest
+        # apple is 18x2 → n*v=36, far below the 1500 threshold.
+        with _warnings.catch_warnings(record=True) as captured:
+            _warnings.simplefilter("always")
+            mlest(datasets.apple, algorithm='em', backend='gpu')
+        assert any(
+            "below the empirical GPU-worth-it threshold" in str(w.message)
+            for w in captured
+        ), (
+            "backend='gpu' on small data must emit a visible warning "
+            "about the expected performance trade-off."
+        )
+
+    def test_auto_skipping_gpu_for_small_data_emits_warning(self):
+        """When backend='auto' picks CPU despite a GPU being available
+        (because the data are too small), the dispatch decision must
+        be surfaced to the user. No silent 'for your own good'."""
+        import warnings as _warnings
+        from pystatistics.mvnmle import mlest
+        with _warnings.catch_warnings(record=True) as captured:
+            _warnings.simplefilter("always")
+            mlest(datasets.apple, algorithm='em', backend='auto')
+        assert any(
+            "dispatching EM to CPU" in str(w.message)
+            and "below the empirical GPU-worth-it threshold" in str(w.message)
+            for w in captured
+        ), (
+            "backend='auto' picking CPU despite GPU availability "
+            "must emit a visible warning explaining the choice."
+        )
+
+    def test_gpu_on_large_data_no_warning(self):
+        """Sanity: when backend='gpu' is actually a good choice, no
+        warning clutter."""
+        import warnings as _warnings
+        import numpy as _np
+        rng = _np.random.default_rng(0)
+        # 200x10 = 2000, above the 1500 threshold.
+        X = rng.standard_normal((200, 10))
+        X[rng.random(X.shape) < 0.1] = _np.nan
+        X = X[~_np.all(_np.isnan(X), axis=1)]
+        from pystatistics.mvnmle import mlest
+        with _warnings.catch_warnings(record=True) as captured:
+            _warnings.simplefilter("always")
+            mlest(X, algorithm='em', backend='gpu')
+        assert not any(
+            "GPU-worth-it threshold" in str(w.message) for w in captured
+        ), "backend='gpu' on large data should not emit size warnings."
+
     def test_gpu_matches_cpu_within_fp32_tolerance(self):
         from pystatistics.mvnmle import little_mcar_test
         cpu = little_mcar_test(datasets.apple, backend='cpu')
@@ -360,3 +413,5 @@ class TestLittleMCARGPU:
         assert gpu.df == cpu.df
         # FP32 mlest → ~1e-3 level agreement on the chi-sq statistic
         assert abs(gpu.statistic - cpu.statistic) < 1e-2
+
+

@@ -17,6 +17,15 @@ from pystatistics.core.compute.timing import Timer
 from pystatistics.mvnmle.design import MVNDesign
 from pystatistics.mvnmle.solution import MVNParams
 from pystatistics.mvnmle._objectives.base import MLEObjectiveBase, PatternData
+from pystatistics.mvnmle.backends._em_batched import (
+    _e_step_full_torch,
+    _loglik_full_torch,
+    build_pattern_index,
+    compute_conditional_parameters_np,
+    compute_conditional_parameters_torch,
+    compute_loglik_batched_np,
+)
+from pystatistics.mvnmle.backends._squarem import squarem_step, squarem_step_torch
 
 
 class EMBackend:
@@ -54,6 +63,7 @@ class EMBackend:
         *,
         tol: float = 1e-4,
         max_iter: int = 1000,
+        accelerate: bool = True,
     ) -> Result[MVNParams]:
         """
         Solve MVN MLE using EM algorithm.
@@ -87,32 +97,88 @@ class EMBackend:
             mu = obj.sample_mean.copy()
             sigma = obj.sample_cov.copy()
 
+            # Precompute batched pattern index (once per solve — patterns
+            # don't change across EM iterations). Used by the batched
+            # E-step to collapse the O(P) per-pattern Cholesky / solve
+            # calls into a single batched kernel pair.
+            self._pattern_index = build_pattern_index(patterns, p)
+
         # --- EM iteration ---
         loglik_history = []
         converged = False
         n_iter = 0
+        param_change = float('inf')
+
+        # Fully-batched device-resident EM path. Data + pattern tensors
+        # are transferred once, the entire EM loop runs on-device, and
+        # only the final (mu, sigma) come back to host. Falls back to
+        # the numpy path if the device is CPU.
+        if self._use_gpu:
+            mu, sigma, n_iter, converged, param_change, loglik = (
+                self._run_em_loop_gpu(
+                    patterns, n, p, tol, max_iter,
+                    initial_mu=mu, initial_sigma=sigma, accelerate=accelerate,
+                )
+            )
+            loglik_history = [loglik]
+            timer.stop()
+
+            params = MVNParams(
+                muhat=mu, sigmahat=sigma, loglik=loglik,
+                n_iter=n_iter, converged=converged, gradient_norm=None,
+            )
+            if not converged:
+                warnings_list.append(
+                    f"EM did not converge after {max_iter} iterations "
+                    f"(final param change: {param_change:.2e}, tol: {tol:.2e})"
+                )
+            return Result(
+                params=params,
+                info={
+                    'algorithm': 'em',
+                    'convergence_criterion': 'parameter',
+                    'final_param_change': float(param_change),
+                    'loglik_history': loglik_history,
+                    'device': self._device,
+                    'batched': True,
+                },
+                timing=timer.result(),
+                backend_name=self.name,
+                warnings=tuple(warnings_list),
+            )
 
         with timer.section('em_iterations'):
-            for iteration in range(max_iter):
-                # Pack current parameters for convergence check
+            def em_step(mu_in, sigma_in):
+                T1, T2 = self._e_step(mu_in, sigma_in, patterns, n, p)
+                mu_out, sigma_out = self._m_step(T1, T2, n, p)
+                return mu_out, sigma_out
+
+            def loglik_fn(mu_in, sigma_in):
+                return self._compute_loglik(mu_in, sigma_in, patterns)
+
+            def ensure_pd(sigma_in):
+                return self._ensure_pd(sigma_in, p)
+
+            em_steps_consumed = 0
+            while em_steps_consumed < max_iter:
                 theta_old = self._pack_params(mu, sigma, p)
 
-                # E-step: accumulate sufficient statistics
-                T1, T2 = self._e_step(mu, sigma, patterns, n, p)
+                if accelerate:
+                    mu_new, sigma_new, steps_used = squarem_step(
+                        mu, sigma, p, em_step, loglik_fn, ensure_pd,
+                    )
+                    em_steps_consumed += steps_used
+                else:
+                    mu_new, sigma_new = em_step(mu, sigma)
+                    sigma_new = ensure_pd(sigma_new)
+                    em_steps_consumed += 1
 
-                # M-step: update parameters
-                mu_new, sigma_new = self._m_step(T1, T2, n, p)
-
-                # Positive definiteness guard
-                sigma_new = self._ensure_pd(sigma_new, p)
-
-                # Convergence check (parameter convergence, R's norm approach)
                 theta_new = self._pack_params(mu_new, sigma_new, p)
                 param_change = np.max(np.abs(theta_new - theta_old))
 
                 mu = mu_new
                 sigma = sigma_new
-                n_iter = iteration + 1
+                n_iter = em_steps_consumed
 
                 if param_change <= tol:
                     converged = True
@@ -169,10 +235,16 @@ class EMBackend:
         """
         E-step: compute expected sufficient statistics.
 
-        For each missingness pattern, compute conditional expectations of
-        missing values given observed values and current parameters, then
-        accumulate into sufficient statistics T1 = Σ E[x_i] and
-        T2 = Σ E[x_i x_i^T].
+        Computes conditional regression parameters for every pattern in
+        a single batched pair of Cholesky + triangular-solve calls, then
+        applies those parameters to each pattern's observations to build
+        sufficient statistics T1 = Σ E[x_i] and T2 = Σ E[x_i x_i^T].
+
+        The batched Cholesky / solve step eliminates the O(P) Python-
+        loop + kernel-launch overhead that previously dominated this
+        step on GPU and contributed substantially on CPU for datasets
+        with many missingness patterns (e.g. wine has 107 patterns at
+        15% random missingness).
 
         Returns
         -------
@@ -184,54 +256,44 @@ class EMBackend:
         T1 = np.zeros(p)
         T2 = np.zeros((p, p))
 
-        for pattern in patterns:
+        # One batched Cholesky + batched solve across all patterns at once.
+        batch_beta, batch_cond_cov = compute_conditional_parameters_np(
+            mu, sigma, self._pattern_index,
+        )
+
+        for k, pattern in enumerate(patterns):
             obs = pattern.observed_indices
             mis = pattern.missing_indices
             n_k = pattern.n_obs
-            data_k = pattern.data  # (n_k, len(obs))
+            data_k = pattern.data
 
             if len(mis) == 0:
-                # Complete pattern: no imputation needed
                 T1[obs] += data_k.sum(axis=0)
                 T2[np.ix_(obs, obs)] += data_k.T @ data_k
                 continue
 
             if len(obs) == 0:
-                # All missing: impute with current mean, add sigma
                 T1 += n_k * mu
                 T2 += n_k * (sigma + np.outer(mu, mu))
                 continue
 
-            # Submatrices of current parameters
+            v_obs_k = len(obs)
+            v_mis_k = len(mis)
+            beta = batch_beta[k, :v_mis_k, :v_obs_k]
+            cond_cov = batch_cond_cov[k, :v_mis_k, :v_mis_k]
+
             mu_o = mu[obs]
             mu_m = mu[mis]
-            sigma_oo = sigma[np.ix_(obs, obs)]
-            sigma_mo = sigma[np.ix_(mis, obs)]
-            sigma_mm = sigma[np.ix_(mis, mis)]
 
-            # Regression coefficient: beta = Sigma_mo @ Sigma_oo^{-1}
-            # Use solve for numerical stability: beta^T = solve(Sigma_oo, Sigma_om)
-            beta = np.linalg.solve(sigma_oo, sigma_mo.T).T  # (n_mis, n_obs)
+            centered = data_k - mu_o
+            x_m_hat = mu_m + centered @ beta.T
 
-            # Conditional covariance: Sigma_{M|O} = Sigma_mm - beta @ Sigma_mo^T
-            cond_cov = sigma_mm - beta @ sigma_mo.T
-
-            # Vectorized over all n_k observations in this pattern
-            centered = data_k - mu_o  # (n_k, n_obs)
-            x_m_hat = mu_m + centered @ beta.T  # (n_k, n_mis)
-
-            # Reconstruct full imputed data matrix
             x_full = np.empty((n_k, p))
             x_full[:, obs] = data_k
             x_full[:, mis] = x_m_hat
 
-            # Accumulate sufficient statistics
             T1 += x_full.sum(axis=0)
             T2 += x_full.T @ x_full
-
-            # Correction for conditional covariance of missing values
-            # E[x_m x_m^T | x_o] = E[x_m|x_o] E[x_m|x_o]^T + Var[x_m|x_o]
-            # The outer product term is in x_full.T @ x_full; add n_k * cond_cov
             T2[np.ix_(mis, mis)] += n_k * cond_cov
 
         return T1, T2
@@ -268,38 +330,14 @@ class EMBackend:
 
         ℓ(μ, Σ) = Σ_k Σ_{i in k} [-½ log|Σ_OO| - ½ (x_i - μ_O)^T Σ_OO^{-1} (x_i - μ_O)]
 
-        Note: The log(2π) normalizing constant is omitted to match R's mvnmle
-        convention. This ensures EM and direct MLE report consistent loglik values.
+        The log(2π) normalizing constant is omitted to match R's mvnmle
+        convention, so EM and direct MLE report consistent loglik values.
+
+        Uses the batched pattern index built at the start of ``solve``;
+        the per-pattern Python loop now runs one matrix solve per
+        pattern rather than one Cholesky + one slogdet + one solve.
         """
-        loglik = 0.0
-
-        for pattern in patterns:
-            obs = pattern.observed_indices
-            n_k = pattern.n_obs
-            p_k = len(obs)
-
-            if p_k == 0:
-                continue
-
-            mu_o = mu[obs]
-            sigma_oo = sigma[np.ix_(obs, obs)]
-
-            # Log determinant
-            sign, logdet = np.linalg.slogdet(sigma_oo)
-            if sign <= 0:
-                return -np.inf
-
-            # Centered data
-            centered = pattern.data - mu_o  # (n_k, p_k)
-
-            # Quadratic forms: sum_i (x_i - mu_o)^T Sigma_oo^{-1} (x_i - mu_o)
-            # Solve Sigma_oo @ Z = centered^T, then quad = sum(centered * Z^T)
-            Z = np.linalg.solve(sigma_oo, centered.T)  # (p_k, n_k)
-            quad_sum = np.sum(centered.T * Z)
-
-            loglik += n_k * (-0.5 * logdet) - 0.5 * quad_sum
-
-        return float(loglik)
+        return compute_loglik_batched_np(mu, sigma, patterns, self._pattern_index)
 
     # ------------------------------------------------------------------
     # Utilities
@@ -308,6 +346,107 @@ class EMBackend:
     def _pack_params(self, mu: np.ndarray, sigma: np.ndarray, p: int) -> np.ndarray:
         """Pack mu and lower triangle of sigma into a flat vector for convergence check."""
         return np.concatenate([mu, sigma[np.tril_indices(p)]])
+
+    def _run_em_loop_gpu(
+        self, patterns, n, p, tol, max_iter, *,
+        initial_mu, initial_sigma, accelerate,
+    ):
+        """Fully device-resident EM loop.
+
+        All per-iteration work (E-step, M-step, convergence check)
+        runs on the GPU via ``_e_step_full_torch``. Data and pattern
+        metadata are transferred once at entry. Only ``(mu, sigma,
+        loglik)`` come back to host at exit.
+
+        Preserves numerical equivalence with the CPU numpy path to
+        within GPU-FP32 tolerance when the device dtype is FP32, and
+        to within 1e-10 on FP64 (cuda double precision).
+        """
+        torch = self._torch
+        device = self._torch_device
+        dtype = self._dtype
+
+        index = self._pattern_index
+
+        # One-time host → device transfers.
+        mu_t = torch.as_tensor(initial_mu, device=device, dtype=dtype)
+        sigma_t = torch.as_tensor(initial_sigma, device=device, dtype=dtype)
+        data_padded_t = torch.as_tensor(index.data_padded, device=device, dtype=dtype)
+        obs_pattern_id_t = torch.as_tensor(
+            index.obs_pattern_id, device=device, dtype=torch.long,
+        )
+        n_per_pattern_t = torch.as_tensor(
+            index.n_per_pattern, device=device, dtype=dtype,
+        )
+        obs_idx_t = torch.as_tensor(index.obs_idx, device=device, dtype=torch.long)
+        obs_mask_t = torch.as_tensor(index.obs_mask, device=device, dtype=torch.bool)
+        mis_idx_t = torch.as_tensor(index.mis_idx, device=device, dtype=torch.long)
+        mis_mask_t = torch.as_tensor(index.mis_mask, device=device, dtype=torch.bool)
+
+        eye_oo = torch.eye(
+            index.v_obs_max, device=device, dtype=dtype,
+        ).expand(index.n_patterns, -1, -1)
+
+        converged = False
+        n_iter = 0
+        param_change = float('inf')
+        tril_i, tril_j = torch.tril_indices(p, p, device=device).unbind(0)
+
+        def em_step_gpu(mu_in, sigma_in):
+            T1, T2 = _e_step_full_torch(
+                mu_in, sigma_in, index, data_padded_t, obs_pattern_id_t,
+                n_per_pattern_t, obs_idx_t, obs_mask_t, mis_idx_t, mis_mask_t,
+                eye_oo, torch, device, dtype,
+            )
+            mu_out = T1 / n
+            sigma_out = T2 / n - torch.outer(mu_out, mu_out)
+            sigma_out = 0.5 * (sigma_out + sigma_out.T)
+            return mu_out, sigma_out
+
+        def loglik_gpu(mu_in, sigma_in):
+            return _loglik_full_torch(
+                mu_in, sigma_in, index, data_padded_t, obs_pattern_id_t,
+                n_per_pattern_t, obs_idx_t, obs_mask_t, eye_oo,
+                torch, device, dtype,
+            )
+
+        em_steps_consumed = 0
+        while em_steps_consumed < max_iter:
+            theta_old = torch.cat([mu_t, sigma_t[tril_i, tril_j]])
+
+            if accelerate:
+                mu_new, sigma_new, steps_used = squarem_step_torch(
+                    mu_t, sigma_t, p, em_step_gpu, loglik_gpu,
+                    torch, device, dtype,
+                )
+                em_steps_consumed += steps_used
+            else:
+                mu_new, sigma_new = em_step_gpu(mu_t, sigma_t)
+                em_steps_consumed += 1
+
+            theta_new = torch.cat([mu_new, sigma_new[tril_i, tril_j]])
+            param_change_t = (theta_new - theta_old).abs().max()
+
+            mu_t = mu_new
+            sigma_t = sigma_new
+            n_iter = em_steps_consumed
+            param_change = float(param_change_t.item())
+
+            if param_change <= tol:
+                converged = True
+                break
+
+        loglik = float(_loglik_full_torch(
+            mu_t, sigma_t, index, data_padded_t, obs_pattern_id_t,
+            n_per_pattern_t, obs_idx_t, obs_mask_t, eye_oo,
+            torch, device, dtype,
+        ).item())
+
+        mu_out = mu_t.detach().cpu().numpy().astype(np.float64)
+        sigma_out = sigma_t.detach().cpu().numpy().astype(np.float64)
+        sigma_out = self._ensure_pd(sigma_out, p)
+
+        return mu_out, sigma_out, n_iter, converged, param_change, loglik
 
     def _ensure_pd(self, sigma: np.ndarray, p: int) -> np.ndarray:
         """Check positive definiteness — raise on failure instead of silent ridge."""

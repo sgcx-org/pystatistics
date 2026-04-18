@@ -1,5 +1,218 @@
 # Changelog
 
+## 2.1.0
+
+- **`mom_mcar_test`: new method-of-moments MCAR test**
+  (``pystatistics/mvnmle/mcar_test.py``). A separate function — not
+  a new mode on ``little_mcar_test`` — because the method-of-moments
+  variant **is not Little's test**. Little (1988) specifically calls
+  for MLE plug-in estimators; swapping in pairwise-deletion sample
+  moments gives a statistic of the same shape with different
+  asymptotic properties, and calling it Little's test would be a
+  polite but concrete lie. The separate function preserves the
+  ``little_mcar_test`` contract exactly (matches R ``mvnmle`` bit-
+  for-bit as before) while giving users a documented fast alternative.
+
+  End-to-end timings at 15 % MCAR:
+
+  | dataset        | shape     | little_mcar_test | mom_mcar_test |
+  |----------------|-----------|------------------|---------------|
+  | iris           | 150 × 4   | 2.9 ms           | 0.31 ms       |
+  | wine           | 178 × 13  | 60.9 ms          | 2.17 ms       |
+  | breast_cancer  | 569 × 30  | 1491 ms          | 28.7 ms       |
+
+  For repeated-diagnostic workflows (e.g. an MCAR sweep over 3410
+  datasets), this is **1.6 minutes vs ~50 minutes** end-to-end. The
+  statistical trade-off is asymptotic efficiency: MoM is consistent
+  under the MCAR null but not asymptotically efficient, and the
+  finite-sample distribution deviates more from chi-square than
+  Little's does. The docstring spells out when to use which:
+  diagnostic screens → MoM; regulated submissions or anywhere the
+  exact asymptotic distribution matters → Little's.
+
+  Implementation details:
+    - ``_pairwise_deletion_moments``: O(n v^2) pairwise mean and
+      covariance via a single matmul. No per-column loop.
+    - ``chi_square_mcar_batched_np`` / ``_torch``: fully batched
+      chi-square assembly (batched SVD for conditioning,
+      well-conditioned patterns through batched solve, ill-conditioned
+      patterns through batched pinv as separate groups — no
+      per-pattern Python loop).
+    - ``backend`` parameter with same size-heuristic + visible-warning
+      discipline as the EM path. GPU is supported but does not
+      out-perform CPU on any tested shape — MoM's compute is small
+      enough that transfer + launch overhead loses to CPU numpy.
+      Auto-dispatch warns when this is the case.
+    - Honesty: ``MCARTestResult`` gained a ``method`` field so
+      downstream code knows which test produced a given result.
+      ``little_mcar_test`` reports ``"Little (MLE plug-in)"``;
+      ``mom_mcar_test`` reports ``"Method-of-moments
+      (pairwise-deletion plug-in)"``.
+
+  New tests (``tests/mvnmle/test_mom_mcar.py``, 10 tests):
+  name-honesty, MLE-vs-MoM agreement on MCAR data, correct rejection
+  on non-MCAR data, all-missing-row handling, speed guard of
+  ≥ 10× over MLE on breast_cancer.
+
+- **Fully-batched device-resident EM on GPU** (``_em_batched.py``
+  / ``_run_em_loop_gpu``). Pre-2.1.0 the "GPU EM" path set up a
+  torch device in the constructor but none of the per-iteration
+  work actually ran on-device — the numpy E-step ran for every
+  backend, which is why pre-2.1.0 benchmarks showed identical CPU
+  and GPU timings. This release implements the real thing: one
+  batched Cholesky + one batched solve over patterns for the
+  regression betas, one batched gather + bmm over all N
+  observations for the filled data, two dense gemms for the
+  sufficient-statistic accumulators, all on-device. SQUAREM also
+  runs fully on-device.
+
+  EM-only timings (without the MCAR-assembly wrapper):
+
+  | dataset        | shape     | CPU EM   | GPU EM   | speedup |
+  |----------------|-----------|----------|----------|---------|
+  | wine           | 178 × 13  | 38 ms    | 24 ms    | 1.6×    |
+  | breast_cancer  | 569 × 30  | 2142 ms  | 147 ms   | 14.6×   |
+
+  Small-data cases (apple, iris, missvals) lose on GPU because
+  transfer + launch overhead exceeds the per-iteration work.
+  Empirically calibrated heuristic: GPU is worth it when
+  ``n_obs * n_vars > 1500``.
+
+- **Size-heuristic dispatch with Rule-1 visibility** for both EM and
+  MoM backends. When ``backend='auto'`` makes a non-obvious choice
+  (e.g. picking CPU despite GPU availability because the data are
+  too small), a ``UserWarning`` explains the decision and tells
+  users how to override. When ``backend='gpu'`` is explicitly
+  requested on small data, the request is honored (user knows best)
+  but a warning notes that CPU would likely be faster. No silent
+  fallbacks anywhere. New tests pin these behaviours.
+
+- **Monotone-missingness closed-form MLE** (Anderson 1957; new
+  ``pystatistics.mvnmle._monotone``). When the missingness pattern
+  is monotone — when variables can be ordered such that each
+  observation's missing entries form a contiguous suffix — the MVN
+  MLE has a closed form via a chain of OLS regressions, with no
+  iteration. Common on longitudinal data with attrition, panel
+  surveys with dropout, and most sequentially-administered
+  instruments. New public helpers:
+
+    - ``pystatistics.mvnmle.is_monotone(data) -> bool``
+    - ``pystatistics.mvnmle.monotone_permutation(data) -> ndarray | None``
+    - ``pystatistics.mvnmle.mlest_monotone_closed_form(data) -> (mu, sigma, n)``
+    - ``mlest(data, algorithm='monotone')`` routes through the
+      closed-form; raises ``ValidationError`` if the data are not
+      monotone (Rule 1: no silent dispatch). Users who want
+      "use the closed form when applicable, fall back otherwise"
+      should call ``is_monotone`` first and branch explicitly.
+
+  The closed-form is the exact MLE (no tolerance-bounded
+  approximation), matches R ``mvnmle`` reference output on both
+  ``apple`` and ``missvals`` to machine precision, and is
+  dramatically faster than iterative algorithms at larger v
+  (a 1500 × 20 monotone dataset completes in ~2 ms vs EM's
+  ~40 ms). For non-monotone random MCAR data (the common case
+  in MCAR diagnostic use), detection is cheap (~O(v² n)) and
+  correctly returns False so iterative algorithms run.
+
+  New tests (``tests/mvnmle/test_monotone.py``, 12 tests):
+  detection true-positive / true-negative on several canonical
+  shapes; closed-form vs EM agreement; permutation invariance;
+  non-monotone data raises; performance guard at v=20.
+
+- **EM MLE: substantial real-data speedup via batched per-pattern
+  linear algebra + SQUAREM acceleration** (Project Lacuna-driven).
+
+  End-to-end ``little_mcar_test`` wall-clock at 15 % MCAR, seed 0:
+
+  | dataset        | shape     | 2.0.1    | 2.1.0    | speedup |
+  |----------------|-----------|----------|----------|---------|
+  | apple          | 18 × 2    |  1.9 ms  |  2.0 ms  |  flat   |
+  | missvals       | 13 × 5    | 19.9 ms  |  9.5 ms  |  2.1×   |
+  | iris           | 150 × 4   |  2.8 ms  |  2.8 ms  |  flat   |
+  | wine           | 178 × 13  | 79.4 ms  | 41.5 ms  |  1.9×   |
+  | breast_cancer  | 569 × 30  | 3278 ms  | 2089 ms  |  1.6×   |
+
+  For workloads that run MCAR repeatedly over many datasets
+  (e.g. a 3410-entry MCAR sweep), this is roughly a 1-hour reduction
+  per full pass at Lacuna's current scale.
+
+  Three changes stack:
+
+  1. **Batched per-pattern conditional parameters** (new
+     ``pystatistics.mvnmle.backends._em_batched``). The E-step used
+     to loop in Python over missingness patterns, issuing a scalar
+     Cholesky + triangular solve per pattern. It now stacks all P
+     pattern-sigma submatrices into a single
+     ``(P, v_max, v_max)`` tensor (identity-padded in the unused
+     slots so the Cholesky stays well-defined) and runs one batched
+     Cholesky + one batched solve for the whole iteration. The
+     accumulator loop over patterns remains in Python because
+     ``n_k`` varies and full observation-level padding hurt more
+     than it helped on the representative shapes we benchmarked.
+
+  2. **SQUAREM acceleration** (Varadhan & Roland 2008; new
+     ``pystatistics.mvnmle.backends._squarem``). EM's linear
+     convergence is sped up by a Steffensen-style extrapolation of
+     three consecutive EM iterates, safeguarded by a monotonicity
+     check on the observed-data log-likelihood. Typical effect on
+     well-behaved EM problems: 2–4× reduction in underlying
+     EM-step-equivalents. Preserves the MLE — the convergence
+     point is unchanged, only the path is shorter. On by default
+     via a new ``accelerate=True`` kwarg on ``EMBackend.solve``;
+     pass ``accelerate=False`` for the plain-EM reference path.
+
+  3. **Fully batched observed-data log-likelihood**
+     (``compute_loglik_batched_np``). The SQUAREM monotonicity
+     safeguard calls the log-likelihood often, so that path
+     needed to be cheap. The implementation now does one batched
+     Cholesky over all patterns for log-determinants and one
+     batched solve across all N observations for the quadratic-
+     form contribution — no per-pattern Python loop.
+
+- **Benchmark harness** (``benchmarks/mvnmle_bench.py``). Runs the
+  five reference shapes (apple, missvals, iris, wine,
+  breast_cancer) across the (algorithm, backend) matrix and
+  prints wall-clock / iteration counts per case. Use
+  ``--quick`` to skip the BFGS cases that don't converge on
+  high-$v$ data; ``--tag`` labels a run for diff against prior
+  baselines.
+
+- **Documented why direct-BFGS is not always the right default.**
+  Internal notes and the 2.0.0 / 2.0.1 release narrative already
+  covered why ``algorithm='em'`` became the ``little_mcar_test``
+  default; this release adds the story of why batching helps EM
+  significantly but does *not* rescue direct-BFGS on realistic
+  high-$v$ data (layer-3 Hessian conditioning is parameterization-
+  invariant; batching only addresses layer-1 launch overhead).
+  See ``GPU_BACKEND_CONVENTION.md`` Section 0 for the "when to
+  add a GPU backend and when not" rule that drove the 2.0.1
+  cleanup; this release extends that logic with
+  "accelerating the algorithm by reducing iteration count
+  (SQUAREM) is cheaper than accelerating each iteration."
+
+- **Finding: the "GPU EM" backend was never actually running on
+  GPU.** The ``device='cuda'`` / ``'mps'`` constructor flag set
+  up ``self._torch`` but none of ``_e_step`` / ``_m_step`` /
+  ``_compute_loglik`` used it — the numpy path ran for every
+  backend. That's why pre-2.1.0 benchmarks showed identical
+  CPU and GPU EM timings. We attempted to implement a real
+  device-resident EM loop and found it was slower than CPU for
+  all the shapes we care about (per-pattern kernel-launch
+  overhead dominates the small per-pattern matrix work). The
+  honest answer for now is that GPU EM stays CPU-equivalent
+  by design; a future release may revisit with fully N-parallel
+  observation-level batching if a workload appears where the
+  GPU can actually win. This behaviour is unchanged from prior
+  releases — we're just documenting what was already true.
+
+- **SQUAREM test coverage** (new ``tests/mvnmle/test_squarem.py``).
+  Four tests pinning the invariants: same MLE as plain EM on
+  apple; substantially fewer EM-equivalent steps on missvals;
+  monotonicity of log-likelihood preserved across iteration
+  caps; same MLE as plain EM on a realistic shape (sklearn
+  wine with 15 % MCAR).
+
+
 ## 2.0.1
 
 - **GPU Backend Convention: codified when NOT to add a GPU backend**

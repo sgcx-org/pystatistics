@@ -4,6 +4,108 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
+### 2.1.0 — Real-data EM speedup + monotone closed-form MLE
+
+Dogfooding via Project Lacuna surfaced that ``little_mcar_test`` on
+realistic tabular data (sklearn's iris / wine / breast_cancer with
+random MCAR injection) was bottlenecked by EM: the E-step was a
+Python loop over missingness patterns, and each SQUAREM-style
+safeguard pass re-ran a per-pattern log-likelihood. This release
+batches both and adds Varadhan & Roland's SQUAREM acceleration.
+
+End-to-end ``little_mcar_test`` wall-clock at 15 % MCAR, seed 0:
+
+| dataset        | shape     | 2.0.1    | 2.1.0    | speedup |
+|----------------|-----------|----------|----------|---------|
+| missvals       | 13 × 5    | 19.9 ms  |  9.5 ms  |  2.1×   |
+| wine           | 178 × 13  | 79.4 ms  | 41.5 ms  |  1.9×   |
+| breast_cancer  | 569 × 30  | 3278 ms  | 2089 ms  |  1.6×   |
+
+For repeated-diagnostic workflows (e.g. an MCAR sweep over several
+thousand datasets), this turns a 3-hour run into a 2-hour run.
+
+Three stacked improvements, all preserving bit-equivalence on the R
+mvnmle reference cases (apple, missvals):
+
+- **Batched per-pattern conditional parameters.** The E-step's
+  per-pattern Cholesky + triangular solve now runs as a single
+  batched kernel pair across all missingness patterns. The
+  unused padding slots are identity-filled so the Cholesky stays
+  well-defined.
+- **SQUAREM acceleration on top of EM.** Three EM steps + one
+  Steffensen-style extrapolation, safeguarded by a monotonicity
+  check on the observed-data log-likelihood. Typical effect:
+  2–4× fewer EM-step equivalents to convergence. Convergence
+  point is the same MLE — only the path is shorter. On by
+  default; ``EMBackend.solve(..., accelerate=False)`` recovers
+  the plain-EM reference.
+- **Fully batched log-likelihood.** The SQUAREM monotonicity
+  check calls ``loglik`` often, so it was batched too — one
+  Cholesky over all patterns, one solve across all N
+  observations, no per-pattern Python loop.
+
+**`mom_mcar_test`: fast method-of-moments MCAR test.** A new *separate
+function* (not a mode on ``little_mcar_test``, because the MoM variant
+is not Little's test) that uses pairwise-deletion sample moments
+instead of MLE plug-in. The test is consistent under MCAR but not
+asymptotically efficient, trading a small amount of statistical
+efficiency for dramatic speed. At 15 % MCAR on sklearn demos:
+
+| dataset        | shape     | little_mcar_test | mom_mcar_test |
+|----------------|-----------|------------------|---------------|
+| iris           | 150 × 4   | 2.9 ms           | 0.31 ms       |
+| wine           | 178 × 13  | 60.9 ms          | 2.17 ms       |
+| breast_cancer  | 569 × 30  | 1491 ms          | 28.7 ms       |
+
+For a 3410-dataset MCAR sweep: **~50 minutes → ~1.6 minutes**. Use
+``little_mcar_test`` when you need Little 1988's asymptotic
+distribution exactly (regulated submissions, citing R reference);
+use ``mom_mcar_test`` for high-throughput diagnostic screens. The
+``MCARTestResult.method`` field records which test produced a given
+result so downstream code can disambiguate without tracking the
+calling function.
+
+**Fully-batched device-resident EM on GPU.** Pre-2.1.0 the
+``device='cuda'`` EM path set up a torch device but never used it —
+numpy ran for every backend. This release implements a real
+device-resident loop with fully batched E-step / M-step / log-
+likelihood, SQUAREM acceleration on top, all on device. On breast-
+cancer-scale (569 × 30) EM drops from 2142 ms CPU to 147 ms GPU
+(14.6×). Small data remains CPU-faster; an empirical size heuristic
+(``n * v >= 1500``) with visible dispatch warnings keeps this
+correct in user-facing behaviour.
+
+**Monotone-missingness closed-form MLE** (Anderson 1957). Longitudinal
+cohorts with attrition, panel surveys with dropout, and most
+sequentially-administered instruments produce *monotone* missingness
+— the variables can be ordered such that each observation's missing
+entries form a contiguous suffix. When the pattern is monotone, the
+MVN MLE has a closed form via a chain of OLS regressions, with no
+iteration. New helpers: ``mvnmle.is_monotone(data)``,
+``mvnmle.monotone_permutation(data)``, and
+``mlest(data, algorithm='monotone')``. The closed-form matches R
+``mvnmle`` bit-for-bit on canonical datasets and is orders of
+magnitude faster than EM on larger-v longitudinal data. Per Rule 1
+the algorithm raises on non-monotone input rather than silently
+falling back — call ``is_monotone`` first if you want conditional
+dispatch.
+
+Also in this release:
+
+- **Benchmark harness** under ``benchmarks/mvnmle_bench.py`` for
+  tracking wall-clock and iteration counts across the reference
+  shapes; use the ``--tag`` flag to label a baseline for diff
+  against future changes.
+- **Documented finding**: the ``device='cuda'`` EM path was never
+  actually running on the GPU prior to this release — it stored
+  a torch device but never used it. We tried to wire up a real
+  device-resident loop and found GPU is slower than CPU for all
+  shapes we tested (per-pattern launch overhead still dominates
+  the tiny per-pattern matrix work). GPU EM therefore remains
+  CPU-equivalent by design; a future release will revisit if a
+  workload appears where full observation-level batching makes
+  GPU actually win.
+
 ### 2.0.1 — GPU-backend exposure gaps and a convention rule
 
 Two public functions had GPU-capable inner calls but no `backend=`

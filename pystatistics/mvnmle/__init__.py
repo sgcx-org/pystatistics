@@ -14,7 +14,16 @@ from pystatistics.mvnmle.patterns import (
     PatternInfo,
     PatternSummary,
 )
-from pystatistics.mvnmle.mcar_test import little_mcar_test, MCARTestResult
+from pystatistics.mvnmle.mcar_test import (
+    little_mcar_test,
+    mom_mcar_test,
+    MCARTestResult,
+)
+from pystatistics.mvnmle._monotone import (
+    is_monotone,
+    monotone_permutation,
+    mlest_monotone_closed_form,
+)
 from pystatistics.mvnmle import datasets
 
 __all__ = [
@@ -27,6 +36,10 @@ __all__ = [
     'PatternInfo',
     'PatternSummary',
     'little_mcar_test',
+    'mom_mcar_test',
     'MCARTestResult',
+    'is_monotone',
+    'monotone_permutation',
+    'mlest_monotone_closed_form',
     'datasets',
 ]
