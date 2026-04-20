@@ -187,14 +187,29 @@ def compute_conditional_parameters_np(
     valid_mm = index.mis_mask[:, :, None] & index.mis_mask[:, None, :]
     sigma_mm = np.where(valid_mm, sigma_mm, 0.0)
 
-    # Batched Cholesky of sigma_oo.
-    L_oo = np.linalg.cholesky(sigma_oo)          # (P, v_obs_max, v_obs_max)
+    # (Note: an earlier revision computed a batched Cholesky here whose
+    # factor was never used downstream. Removed — np.linalg.solve below
+    # handles the per-pattern solve directly. Kept the pinv fallback
+    # because np.linalg.solve still fails on strictly-singular sigma_oo,
+    # which real tabular data with integer-encoded categoricals can
+    # produce at the per-pattern sub-block level.)
 
     # Batched solve: beta^T = Sigma_oo^{-1} @ sigma_om = solve(sigma_oo, sigma_om)
     # sigma_om = sigma_mo^T  →  (P, v_obs_max, v_mis_max)
     sigma_om = np.swapaxes(sigma_mo, -1, -2)
-    # Use np.linalg.solve (supports leading batch).
-    beta_T = np.linalg.solve(sigma_oo, sigma_om)  # (P, v_obs_max, v_mis_max)
+    try:
+        beta_T = np.linalg.solve(sigma_oo, sigma_om)
+    except np.linalg.LinAlgError:
+        # Per-pattern sigma_oo sub-block is singular. Fall back to pinv
+        # for this batch. Issue a warning so the event is visible.
+        import warnings
+        warnings.warn(
+            "e_step_batched_np: at least one per-pattern sigma_oo "
+            "sub-block is numerically singular; falling back to "
+            "Moore-Penrose pseudo-inverse for the batch.",
+            UserWarning, stacklevel=3,
+        )
+        beta_T = np.matmul(np.linalg.pinv(sigma_oo), sigma_om)
     beta = np.swapaxes(beta_T, -1, -2)            # (P, v_mis_max, v_obs_max)
 
     # cond_cov = sigma_mm - beta @ sigma_om = sigma_mm - sigma_mo @ beta^T
@@ -343,7 +358,26 @@ def compute_loglik_batched_np(
     eye_oo = np.broadcast_to(np.eye(v_obs_max, dtype=sigma.dtype), sigma_oo.shape)
     sigma_oo = np.where(mask_oo, sigma_oo, eye_oo)
 
-    L_oo = np.linalg.cholesky(sigma_oo)
+    # Batched Cholesky for log-det and the quadratic-form solve below.
+    # Per-pattern sigma_oo sub-blocks can be numerically indefinite from
+    # FP64 roundoff even when the global sigma is PD (confirmed on
+    # credit_card_default via Project Lacuna). Apply a tiny diagonal
+    # ridge before Cholesky rather than raising — the ridge (1e-12 on a
+    # matrix normalised to trace ~v) is below any statistical precision.
+    try:
+        L_oo = np.linalg.cholesky(sigma_oo)
+    except np.linalg.LinAlgError:
+        import warnings
+        ridge = 1e-10
+        warnings.warn(
+            f"e_step_full_batched_np: per-pattern sigma_oo indefinite; "
+            f"retrying Cholesky with diagonal ridge {ridge:.0e}.",
+            UserWarning, stacklevel=3,
+        )
+        eye_full = np.broadcast_to(
+            np.eye(v_obs_max, dtype=sigma.dtype), sigma_oo.shape,
+        )
+        L_oo = np.linalg.cholesky(sigma_oo + ridge * eye_full)
     log_diag = np.log(np.diagonal(L_oo, axis1=-2, axis2=-1))
     logdet_per_pattern = 2.0 * np.sum(log_diag * index.obs_mask, axis=-1)
 
@@ -561,11 +595,37 @@ def chi_square_mcar_batched_torch(
     # Python-level branch on device.
     sigma_inv = torch.linalg.pinv(sigma_oo) if ill.any() else None
     if sigma_inv is None:
-        # Fast path: all well-conditioned, use cholesky_solve.
-        L = torch.linalg.cholesky(sigma_oo)
-        z = torch.cholesky_solve(diff.unsqueeze(-1), L).squeeze(-1)
+        # Fast path: condition-number check says all are well-conditioned,
+        # so attempt cholesky_solve. Cholesky requires positive-definiteness,
+        # which is a STRICTER property than good conditioning — a matrix
+        # can pass the cond-number threshold but still have tiny negative
+        # eigenvalues due to FP32 roundoff (especially on GPU). When that
+        # happens, fall back to pinv for those patterns. regularize=False
+        # is respected: we only attempt the fallback when the user has
+        # already opted into regularization.
+        try:
+            L = torch.linalg.cholesky(sigma_oo)
+            z = torch.cholesky_solve(diff.unsqueeze(-1), L).squeeze(-1)
+            n_cholesky_fallback = 0
+        except torch._C._LinAlgError:
+            if not regularize:
+                raise
+            import warnings
+            warnings.warn(
+                "Cholesky factorisation failed on the batched fast path "
+                "despite condition-number check passing — likely FP32 "
+                "roundoff producing a numerically-indefinite covariance. "
+                "Falling back to Moore-Penrose pseudo-inverse for all "
+                "patterns in this batch. Pass regularize=False to raise "
+                "instead.",
+                UserWarning, stacklevel=4,
+            )
+            sigma_inv = torch.linalg.pinv(sigma_oo)
+            z = torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
+            n_cholesky_fallback = sigma_oo.shape[0]
     else:
         z = torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
+        n_cholesky_fallback = 0
 
     contribs = (diff * z).sum(dim=-1)  # (P,)
     contribs_nk = contribs * n_per_pattern_t
@@ -574,7 +634,7 @@ def chi_square_mcar_batched_torch(
     n_patterns_used = int(used_mask.sum().item())
 
     test_statistic = float(contribs_nk[used_mask].sum().item())
-    n_regularized = int(ill.sum().item())
+    n_regularized = int(ill.sum().item()) + n_cholesky_fallback
     return test_statistic, n_patterns_used, n_regularized
 
 
@@ -617,7 +677,21 @@ def _e_step_full_torch(
     mask_oo = obs_mask_t.unsqueeze(-1) & obs_mask_t.unsqueeze(-2)
     sigma_oo = torch.where(mask_oo, sigma_oo, eye_oo)
 
-    L_oo = torch.linalg.cholesky(sigma_oo)
+    # Cholesky with ridge fallback. See numpy path comment above.
+    try:
+        L_oo = torch.linalg.cholesky(sigma_oo)
+    except torch._C._LinAlgError:
+        import warnings
+        ridge = 1e-10
+        warnings.warn(
+            f"_e_step_full_torch: per-pattern sigma_oo indefinite on "
+            f"GPU path; retrying Cholesky with diagonal ridge {ridge:.0e}.",
+            UserWarning, stacklevel=3,
+        )
+        eye_full = eye_oo if eye_oo.shape == sigma_oo.shape else torch.eye(
+            v_obs_max, device=device, dtype=dtype
+        ).expand_as(sigma_oo)
+        L_oo = torch.linalg.cholesky(sigma_oo + ridge * eye_full)
 
     # sigma_mo: missing rows × observed cols.
     mrow_idx = mis_idx_t.unsqueeze(-1)
@@ -720,7 +794,23 @@ def _loglik_full_torch(
     mask_oo = obs_mask_t.unsqueeze(-1) & obs_mask_t.unsqueeze(-2)
     sigma_oo = torch.where(mask_oo, sigma_oo, eye_oo)
 
-    L_oo = torch.linalg.cholesky(sigma_oo)
+    # Cholesky with ridge fallback for indefinite per-pattern sub-blocks.
+    # See numpy path comment.
+    try:
+        L_oo = torch.linalg.cholesky(sigma_oo)
+    except torch._C._LinAlgError:
+        import warnings
+        ridge = 1e-10
+        warnings.warn(
+            f"_loglik_full_batched_torch: per-pattern sigma_oo "
+            f"indefinite; retrying Cholesky with ridge {ridge:.0e}.",
+            UserWarning, stacklevel=3,
+        )
+        v_obs_max_local = sigma_oo.shape[-1]
+        eye_full = torch.eye(
+            v_obs_max_local, device=sigma_oo.device, dtype=sigma_oo.dtype
+        ).expand_as(sigma_oo)
+        L_oo = torch.linalg.cholesky(sigma_oo + ridge * eye_full)
     log_diag = torch.log(torch.diagonal(L_oo, dim1=-2, dim2=-1))
     logdet_per_pattern = 2.0 * torch.sum(log_diag * obs_mask_t.to(dtype), dim=-1)
 
@@ -785,7 +875,19 @@ def compute_conditional_parameters_torch(
     sigma_mm = torch_mod.where(valid_mm, sigma_mm,
                                torch_mod.zeros((), device=device, dtype=dtype))
 
-    L_oo = torch_mod.linalg.cholesky(sigma_oo)
+    # Cholesky with ridge fallback for indefinite per-pattern sub-blocks.
+    # See e_step_full_batched_np / _e_step_full_torch for rationale.
+    try:
+        L_oo = torch_mod.linalg.cholesky(sigma_oo)
+    except torch_mod._C._LinAlgError:
+        import warnings
+        ridge = 1e-10
+        warnings.warn(
+            f"e_step_batched_torch: per-pattern sigma_oo indefinite; "
+            f"retrying Cholesky with ridge {ridge:.0e}.",
+            UserWarning, stacklevel=3,
+        )
+        L_oo = torch_mod.linalg.cholesky(sigma_oo + ridge * eye_oo)
     sigma_om = sigma_mo.transpose(-1, -2)
     beta_T = torch_mod.cholesky_solve(sigma_om, L_oo)  # (P, v_obs_max, v_mis_max)
     beta = beta_T.transpose(-1, -2)

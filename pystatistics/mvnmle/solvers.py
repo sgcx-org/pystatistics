@@ -26,6 +26,7 @@ def mlest(
     method: str | None = None,
     tol: float | None = None,
     max_iter: int | None = None,
+    regularize: bool = True,
     verbose: bool = False,
 ) -> MVNSolution:
     """
@@ -95,7 +96,7 @@ def mlest(
               f"{design.missing_rate:.1%} missing")
 
     if algorithm == 'em':
-        result = _solve_em(design, backend, tol, max_iter, verbose)
+        result = _solve_em(design, backend, tol, max_iter, regularize, verbose)
     elif algorithm == 'direct':
         result = _solve_direct(design, backend, method, tol, max_iter, verbose)
     elif algorithm == 'monotone':
@@ -186,7 +187,7 @@ def _solve_direct(design, backend, method, tol, max_iter, verbose):
     return backend_impl.solve(design, **solve_kwargs)
 
 
-def _solve_em(design, backend, tol, max_iter, verbose):
+def _solve_em(design, backend, tol, max_iter, regularize, verbose):
     """Dispatch EM algorithm."""
     from pystatistics.mvnmle.backends.em import EMBackend
 
@@ -202,7 +203,12 @@ def _solve_em(design, backend, tol, max_iter, verbose):
     if verbose:
         print(f"Backend: {backend_impl.name}")
 
-    return backend_impl.solve(design, tol=effective_tol, max_iter=effective_max_iter)
+    return backend_impl.solve(
+        design,
+        tol=effective_tol,
+        max_iter=effective_max_iter,
+        regularize=regularize,
+    )
 
 
 # ---------------------------------------------------------------------------

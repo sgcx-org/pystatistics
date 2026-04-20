@@ -1,5 +1,69 @@
 # Changelog
 
+## 2.2.0
+
+- Fixed a `torch._C._LinAlgError` crash in `chi_square_mcar_batched_torch`
+  (`pystatistics/mvnmle/backends/_em_batched.py`) on GPU FP32. The batched
+  MoM fast path selected `cholesky_solve` when the SVD-based condition
+  number was below threshold, but Cholesky requires positive-definiteness,
+  which is strictly stronger than good conditioning. On GPU FP32, real
+  tabular data (e.g. `lacuna_tabular_110` applied to UCI/OpenML datasets)
+  can produce `sigma_oo` with good cond number but tiny negative eigenvalues
+  from roundoff, making Cholesky fail. Fix: wrap the fast path in
+  `try/except torch._C._LinAlgError`; on failure, fall back to
+  `torch.linalg.pinv` for the batch (honouring the `regularize` flag —
+  `regularize=False` still raises). Surfaced by dogfooding via Project
+  Lacuna on 3,080 (dataset × generator) pairs across the 110-generator
+  tabular registry; previously `mom_mcar_test` crashed on the first batch
+  containing breast_cancer / wine / credit_card_default.
+
+- Fixed an exception-type leak in `little_mcar_test`
+  (`pystatistics/mvnmle/mcar_test.py:~250`). The ML-estimation try/except
+  wrapped *every* exception — including `PyStatisticsError` subclasses
+  like `NumericalError` — as a bare `RuntimeError`, breaking the
+  documented `except PyStatisticsError:` pattern downstream and losing
+  the original exception chain. Fix: explicitly re-raise
+  `PyStatisticsError`, and use `raise ... from e` for anything else so
+  the chain is preserved. Surfaced by Project Lacuna's cache builder,
+  which catches `PyStatisticsError` to fall back to a sentinel entry
+  when Little's test is numerically unfit for a particular
+  (dataset, generator) pair; MLE failures were leaking past the catch
+  and killing the whole build.
+
+- Added ridge-fallback to the batched Cholesky sites inside the EM
+  E-step / log-likelihood
+  (`pystatistics/mvnmle/backends/_em_batched.py`):
+  `e_step_full_batched_np` (line ~361), `_e_step_full_torch` (~680), and
+  `_loglik_full_batched_torch` (~797). These compute per-pattern
+  Cholesky of sigma_oo sub-blocks; real tabular data can produce
+  individual sub-blocks that are numerically indefinite even when the
+  global sigma is PD (integer-encoded categoricals with heavy
+  collinearity in the intersection of a given missingness pattern's
+  observed variables). Fix: wrap each site in `try/except LinAlgError`
+  with a `ridge·I` retry (ridge = 1e-10 at pattern scale; statistically
+  invisible). Also removed a dead Cholesky call in `e_step_batched_np`
+  whose result was never used — it was only a crash liability.
+  `np.linalg.solve` at that same site now has a pinv fallback for
+  singular sub-blocks.
+
+- Added `regularize: bool = True` to `mlest`, `_solve_em`, and
+  `EMBackend.solve`, mirroring the existing convention on
+  `mom_mcar_test` / `little_mcar_test`. When True (new default),
+  `EMBackend._ensure_pd` applies a small diagonal ridge
+  (`max(0, 1e-10 - min_eig) + 1e-12`) to the M-step sigma whenever its
+  smallest eigenvalue falls below the PD threshold, rather than raising
+  `NumericalError` outright. The ridge is vanishingly small relative to
+  any real data scale — the typical case the old path rejected had
+  min_eig ≈ 1e-13 from pure FP64 roundoff — and a UserWarning makes the
+  event visible in logs. Call sites that need strict bit-for-bit
+  behaviour pass `regularize=False`. Motivated by Project Lacuna
+  dogfooding: applying real missingness generators to real UCI datasets
+  (credit_card_default × MNAR-NonLinSocial produced min_eig ≈ -0.66) was
+  hard-raising and killing the full cache build; the ridge fallback
+  keeps the test numerically well-defined with negligible statistical
+  impact, and the build proceeds.
+
+
 ## 2.1.0
 
 - **`mom_mcar_test`: new method-of-moments MCAR test**

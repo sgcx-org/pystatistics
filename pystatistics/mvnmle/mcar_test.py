@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 import warnings
 
+from pystatistics.core.exceptions import PyStatisticsError
 from pystatistics.mvnmle.patterns import PatternInfo, identify_missingness_patterns
 
 
@@ -242,12 +243,21 @@ def little_mcar_test(data,
 
     try:
         ml_result = mlest(
-            data_array, backend=backend, algorithm=algorithm, verbose=False,
+            data_array,
+            backend=backend,
+            algorithm=algorithm,
+            regularize=regularize,
+            verbose=False,
         )
         mu_ml = ml_result.muhat
         sigma_ml = ml_result.sigmahat
+    except PyStatisticsError:
+        # Preserve pystatistics exception type so callers using a
+        # `except PyStatisticsError:` catch (the documented pattern)
+        # actually catch MLE failures here.
+        raise
     except Exception as e:
-        raise RuntimeError(f"ML estimation failed: {e}")
+        raise RuntimeError(f"ML estimation failed: {e}") from e
 
     # Rule 1: do not quietly hand the caller a statistic built on top
     # of unconverged ML estimates. If BFGS ran out of iterations (the

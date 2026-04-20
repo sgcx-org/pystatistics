@@ -42,8 +42,13 @@ def test_auto_drops_all_missing_rows_with_warning():
 
 
 def test_strict_all_missing_rows_still_rejected():
+    from pystatistics.core.exceptions import PyStatisticsError
     X = np.array([[1.0, 2.0], [np.nan, np.nan], [3.0, 4.0]])
-    with pytest.raises((ValueError, RuntimeError)):
+    # PyStatisticsError covers ValidationError (the actual type raised
+    # by MVNDesign.from_array). Keep ValueError / RuntimeError in the
+    # allowlist for forward-compat if the implementation ever routes
+    # through one of those instead.
+    with pytest.raises((PyStatisticsError, ValueError, RuntimeError)):
         little_mcar_test(X, drop_all_missing_rows=False)
 
 
