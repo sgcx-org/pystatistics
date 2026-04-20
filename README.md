@@ -4,73 +4,71 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
+### 2.3.0 — Nonparametric MCAR tests for heavy-tailed tabular data
+
+Little's MCAR test (1988) and the method-of-moments variant both assume
+multivariate normality of the observed values. On realistic tabular
+data — heavy-tailed, skewed, integer-encoded categoricals — MVN is
+badly violated, and Project Lacuna's 2026-04 ablation study found that
+cached Little's features add nothing to mechanism classification.
+This release ships three distribution-free alternatives in a new
+`pystatistics.nonparametric_mcar` subpackage so downstream projects
+can test which family (if any) provides useful MCAR-detection signal
+when MVN fails.
+
+**`propensity_mcar_test`** fits a random forest (or gradient boosting)
+classifier to predict each column's missingness indicator from the
+other columns (mean-imputed + per-column missing-indicator features),
+computes out-of-fold AUC, and calibrates against a permutation null.
+Native mixed-type handling, nonlinear; deterministic under a seed.
+Exposes `statistic = mean_observed_auc − 0.5` (clipped to [0, 0.5])
+and a permutation-smoothed p-value. Optional scikit-learn dependency:
+`pip install pystatistics[nonparametric_mcar]`.
+
+**`hsic_mcar_test`** is a Hilbert-Schmidt Independence Criterion test
+(Gretton et al. 2005/2008) between stochastically-imputed observed
+values and the missingness-indicator matrix, with a Gaussian RBF
+kernel and median-heuristic bandwidth. Pure numpy, no sklearn. Uses
+**stochastic** imputation rather than plain mean imputation — the
+latter pulls heavy-missing rows toward the column centroid, which
+creates a systematic X-R coupling that rejects MCAR spuriously on
+MCAR-generated data.
+
+**`missmech_mcar_test`** is a Jamshidian-Jalal-style (2010)
+nonparametric test of homogeneity of means across missingness
+patterns. Groups rows by pattern, k-NN imputes to full columns, and
+calibrates a between-pattern weighted sum-of-squared-mean-differences
+statistic against a permutation null over the pattern labels.
+Equivalent in hypothesis to Jamshidian & Jalal's bootstrap but faster
+for the cached-scalar use case.
+
+All three return a shared `NonparametricMCARResult` dataclass
+(statistic, p_value, rejected, alpha, method, n_observations,
+n_variables, n_missing_cells, extra) — intentionally narrower than
+the MVN-based `MCARTestResult` from `mvnmle`, since concepts like
+`df` / `ml_mean` / `ml_cov` / `patterns` don't apply to
+distribution-free tests. 30 new tests across propensity, HSIC, and
+MissMech; no mvnmle regressions.
+
+**Internal refactor.** Split
+`pystatistics/mvnmle/backends/_em_batched.py` (501 SLOC, over the
+Rule 4 hard limit) into three focused modules — patterns,
+NumPy backend, Torch backend — plus a compatibility shim that
+re-exports every symbol so no importer needs to change. Code-quality
+suite now reports zero files over 500 SLOC.
+
 ### 2.2.0 — Real-data robustness from Project Lacuna dogfooding
 
-Continuation of the 2.1.0 dogfooding track. Running `little_mcar_test`
-and `mom_mcar_test` on 3,080 (dataset × generator) pairs drawn from 28
-real UCI / OpenML / sklearn tabular datasets under
-`lacuna_tabular_110` missingness generators surfaced four classes of
-numerical failure that synthetic unit tests did not exhibit. All fixed
-in this release; no API breaks.
-
-**Batched MoM GPU Cholesky crash.** `chi_square_mcar_batched_torch`'s
-fast path selected `cholesky_solve` whenever the SVD-based condition
-number check passed, on the assumption that good conditioning implies
-positive-definiteness. On GPU FP32, roundoff can produce covariances
-that pass the cond-number check but have tiny negative eigenvalues —
-Cholesky fails, the call raises `torch._C._LinAlgError`. The fast path
-is now wrapped with `try/except` and falls back to pseudo-inverse when
-the ``regularize`` flag allows. Surfaced on `credit_card_default` ×
-`MNAR-NonLinSocial` during the Lacuna cache build.
-
-**Exception-type preservation in `little_mcar_test`.** The
-ML-estimation `try/except` at the top of `little_mcar_test` wrapped
-*every* exception as a bare `RuntimeError` — including
-`PyStatisticsError` subclasses. This broke the documented
-`except PyStatisticsError:` catch pattern downstream: users falling
-back to a sentinel on MLE failure saw their handler bypassed and the
-full build crash. Fix: explicitly re-raise `PyStatisticsError`, and
-use `raise ... from e` for anything else so the chain is preserved.
-
-**`regularize=True` default on the EM path (opt-out).** `mlest`,
-`_solve_em`, and `EMBackend.solve` gain `regularize: bool = True`,
-mirroring the existing convention on `mom_mcar_test` and
-`little_mcar_test`. When True, `EMBackend._ensure_pd` applies a small
-diagonal ridge — `max(0, 1e-10 − min_eig) + 1e-12` — to the M-step
-sigma whenever its smallest eigenvalue falls below the PD threshold,
-rather than raising `NumericalError`. The ridge is well below any
-statistical precision on real data — the typical case the old path
-rejected had `min_eig ≈ 1e-13` from pure FP64 roundoff on a matrix
-that's theoretically PSD. Dogfooding surfaced cases where `min_eig`
-hit `−0.66` on realistic MNAR mechanisms; the ridge fallback keeps EM
-progressing. Callers needing strict bit-for-bit behaviour pass
-`regularize=False` to restore the old raise.
-
-**Three additional Cholesky ridge-fallbacks** in `_em_batched.py`:
-`e_step_full_batched_np`, `_e_step_full_torch`, and
-`_loglik_full_batched_torch` all compute per-pattern Cholesky of
-`sigma_oo` sub-blocks. Real tabular data can produce individual
-sub-blocks that are numerically indefinite even when the global sigma
-is PD (integer-encoded categoricals with heavy collinearity in the
-intersection of a given missingness pattern's observed variables).
-Each site now wraps Cholesky in `try/except LinAlgError` with a
-`ridge·I` retry (ridge = 1e-10 at pattern scale; statistically
-invisible). Also removed a dead Cholesky call in `e_step_batched_np`
-whose factor was never used downstream — pure crash liability — and
-added a `pinv` fallback to the `np.linalg.solve` at the same site for
-singular sub-blocks.
-
-**Impact.** The Project Lacuna cache build on 3,080 (dataset ×
-generator) pairs went from crashing on the first batch containing
-`breast_cancer` or `credit_card_default` (pre-2.2.0) to completing in
-a single pass at 0.9% MoM sentinel rate and 16.4% MLE sentinel rate
-(the MLE sentinels are legitimate EM non-convergence on 1000-pattern
-datasets — not crashes). Synthetic unit tests: 125/125 mvnmle pass.
-
-**No API breaks.** New defaults (`regularize=True`) are strictly more
-permissive than the old raises — any caller that was crashing before
-will now proceed with a small `UserWarning`. Callers needing strict
-behaviour pass `regularize=False`.
+Four classes of numerical failure on realistic tabular data — Cholesky
+fast-path crash on GPU FP32 roundoff, bare-`RuntimeError` wrapping
+breaking `PyStatisticsError` catch patterns, M-step sigma PD-check
+false negatives from FP64 roundoff, and per-pattern Cholesky on
+indefinite sub-blocks — all fixed in this release with a unified
+`regularize=True` opt-out-to-strict convention across `mlest`,
+`mom_mcar_test`, `little_mcar_test`, and the batched E-step. The
+Project Lacuna cache build on 3,080 (dataset × generator) pairs went
+from crashing on the first batch to completing in a single pass at
+0.9% MoM / 16.4% MLE sentinel rates. No API breaks.
 
 ### 2.1.0 — Real-data EM speedup + monotone closed-form MLE
 
