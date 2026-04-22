@@ -4,58 +4,106 @@ GPU-accelerated statistical computing for Python.
 
 ## What's New
 
-### 2.3.0 — Nonparametric MCAR tests for heavy-tailed tabular data
+### 3.0.0 — Scope correction: Lacuna-specific MCAR helpers removed (breaking)
 
-Little's MCAR test (1988) and the method-of-moments variant both assume
-multivariate normality of the observed values. On realistic tabular
-data — heavy-tailed, skewed, integer-encoded categoricals — MVN is
-badly violated, and Project Lacuna's 2026-04 ablation study found that
-cached Little's features add nothing to mechanism classification.
-This release ships three distribution-free alternatives in a new
-`pystatistics.nonparametric_mcar` subpackage so downstream projects
-can test which family (if any) provides useful MCAR-detection signal
-when MVN fails.
+Two years of feature creep are being rolled back. In 2.2.0 and 2.3.0
+pystatistics accumulated MCAR-test variants — `mom_mcar_test` plus a
+whole `nonparametric_mcar` subpackage (propensity / HSIC / MissMech) —
+added specifically to serve Project Lacuna's cache-scale screening
+use case. On reflection that was a scope mistake: pystatistics is a
+general-purpose statistical library, not a Lacuna helper. These tests
+are project-specific feature-extraction utilities, not textbook
+methods, and their presence in pystatistics diluted the library's
+identity and forced us to carry maintenance burden for a use case
+that had nothing to do with general statistical inference.
 
-**`propensity_mcar_test`** fits a random forest (or gradient boosting)
-classifier to predict each column's missingness indicator from the
-other columns (mean-imputed + per-column missing-indicator features),
-computes out-of-fold AUC, and calibrates against a permutation null.
-Native mixed-type handling, nonlinear; deterministic under a seed.
-Exposes `statistic = mean_observed_auc − 0.5` (clipped to [0, 0.5])
-and a permutation-smoothed p-value. Optional scikit-learn dependency:
-`pip install pystatistics[nonparametric_mcar]`.
+**Removed (breaking):**
+  - `pystatistics.mvnmle.mom_mcar_test` and its helpers
+    (`_pairwise_deletion_moments`, `_resolve_mom_backend`, and the
+    `_MOM_GPU_WORTH_IT_THRESHOLD` constant).
+  - `pystatistics.nonparametric_mcar` subpackage in its entirety
+    (`propensity_mcar_test`, `hsic_mcar_test`, `missmech_mcar_test`,
+    `NonparametricMCARResult`).
+  - The `[nonparametric_mcar]` optional-dependency extra.
+  - 109 tests across `tests/mvnmle/test_mom_mcar.py` and
+    `tests/nonparametric_mcar/`.
 
-**`hsic_mcar_test`** is a Hilbert-Schmidt Independence Criterion test
-(Gretton et al. 2005/2008) between stochastically-imputed observed
-values and the missingness-indicator matrix, with a Gaussian RBF
-kernel and median-heuristic bandwidth. Pure numpy, no sklearn. Uses
-**stochastic** imputation rather than plain mean imputation — the
-latter pulls heavy-missing rows toward the column centroid, which
-creates a systematic X-R coupling that rejects MCAR spuriously on
-MCAR-generated data.
+**Removed (dead code, not breaking):** the batched MCAR chi-square
+machinery (`chi_square_mcar_batched_np` and
+`chi_square_mcar_batched_torch` in `pystatistics/mvnmle/backends/`)
+was only ever called from `mom_mcar_test`. Those two functions and
+their shim re-exports in `backends/_em_batched.py` are gone. Net
+effect: `_em_batched_np.py` shrank from 416 → 300 lines and
+`_em_batched_torch.py` from 381 → 271 lines, with no functional
+change to the EM or log-likelihood paths.
 
-**`missmech_mcar_test`** is a Jamshidian-Jalal-style (2010)
-nonparametric test of homogeneity of means across missingness
-patterns. Groups rows by pattern, k-NN imputes to full columns, and
-calibrates a between-pattern weighted sum-of-squared-mean-differences
-statistic against a permutation null over the pattern labels.
-Equivalent in hypothesis to Jamshidian & Jalal's bootstrap but faster
-for the cached-scalar use case.
+**Retained (unchanged):**
+  - `little_mcar_test` — the canonical Little (1988) MLE-plug-in test.
+    Textbook, general-purpose, stays.
+  - `MCARTestResult` dataclass.
+  - `mlest`, `analyze_patterns`, `PatternInfo`, the full MVN MLE
+    machinery, and every EM / SQUAREM / monotone-closed-form path
+    unchanged.
 
-All three return a shared `NonparametricMCARResult` dataclass
-(statistic, p_value, rejected, alpha, method, n_observations,
-n_variables, n_missing_cells, extra) — intentionally narrower than
-the MVN-based `MCARTestResult` from `mvnmle`, since concepts like
-`df` / `ml_mean` / `ml_cov` / `patterns` don't apply to
-distribution-free tests. 30 new tests across propensity, HSIC, and
-MissMech; no mvnmle regressions.
+**Where the removed code went:** all four removed tests are now
+maintained by Project Lacuna at `lacuna.analysis.mcar.*`. If you were
+using these from pystatistics and are also a Lacuna user, migration
+is a one-line import change. If you were using them standalone, the
+MoM test is ~100 LOC of pairwise-deletion moments + per-pattern
+chi-square and is trivial to re-inline; the nonparametric variants
+are self-contained single-file implementations you can vendor.
 
-**Internal refactor.** Split
-`pystatistics/mvnmle/backends/_em_batched.py` (501 SLOC, over the
-Rule 4 hard limit) into three focused modules — patterns,
-NumPy backend, Torch backend — plus a compatibility shim that
-re-exports every symbol so no importer needs to change. Code-quality
-suite now reports zero files over 500 SLOC.
+**Flaky GAM GPU FP64 test fixed.** The
+`TestGAMGPU::test_gpu_fp64_matches_cpu_fitted_and_gcv` test had been
+intermittently failing on `total_edf` since 1.8.0 with a ~1.4e-3
+CPU/GPU drift against a 1e-3 tolerance. Diagnosis: the primary fit
+statistics (fitted_values, deviance, GCV) sit at the GCV-minimising
+λ — locally flat in λ, so cross-backend λ drift barely moves them
+(measured ≤3e-5). `total_edf`, however, is LINEAR in λ near that
+optimum and passes through tr((X'WX + λ·S)⁻¹·X'WX) on a
+cond-1e16-17 penalised normal matrix — structurally more sensitive.
+Tolerance widened to `rel=5e-3` on `total_edf` only, with a test
+comment explaining the λ-sensitivity analysis so this doesn't get
+tightened back by accident. Other three assertions keep their 1e-4
+margin.
+
+**GAM GPU smooth-term chi-squared fixed.** While investigating the
+`total_edf` flake above, also found and fixed a latent bug: the
+chi-squared statistic reported in `smooth_terms` was diverging ~8×
+between CPU and GPU backends (CPU ≈ 19, GPU ≈ 156 on the `sine_data`
+fixture) despite fitted values agreeing to FP64 precision. Root
+cause: the penalised normal matrix `A = X'WX + Σ λⱼ Sⱼ` has condition
+number up to ~1e17 when λ is small — the penalty does not fully
+eliminate the design matrix's null space. On such `A`,
+`torch.linalg.solve` (LU on device) and `np.linalg.cholesky`
+(CPU path) converge to the same `X·β` but pick DIFFERENT null-space-
+representative `β`. Fitted values were identical; coefficients were
+shifted by a constant in the penalty null space, throwing off the
+chi-squared statistic (which is computed directly from `β`). Fix:
+the GPU backend now canonicalises the final `β` by re-solving
+`A·β = b` via numpy's Cholesky-with-LU-fallback path — matching CPU
+bit-for-bit. In-loop P-IRLS still uses torch's fast LU (where
+null-space ambiguity doesn't matter — only the resulting `μ` drives
+convergence). Test tightened to pin coefficient-level agreement
+(`rtol=1e-3`) and chi-squared agreement (`rel=1e-3`) so this
+regression is caught if it returns.
+
+**Process change:** a new **"Cross-Project Scope Boundary"** rule
+(Rule 9) has been added to `CLAUDE.md`, instructing future Claude
+Code sessions working on pystatistics not to modify sibling projects
+without explicit user authorisation, and to implement project-
+specific helpers in those projects rather than in this one. This
+release is the retroactive enforcement of that rule. The matching
+rule has been added to the Lacuna and pystatsbio `CLAUDE.md` files.
+
+**Suite status at release:** 2401 passed, 19 skipped, 0 failed.
+
+### 2.3.0 — Nonparametric MCAR tests (introduced, now removed in 3.0.0)
+
+Originally shipped three distribution-free MCAR tests in a new
+`nonparametric_mcar` subpackage. Removed in 3.0.0 as a scope
+correction — see that section for the rationale. Code now lives in
+Lacuna.
 
 ### 2.2.0 — Real-data robustness from Project Lacuna dogfooding
 
@@ -65,10 +113,12 @@ breaking `PyStatisticsError` catch patterns, M-step sigma PD-check
 false negatives from FP64 roundoff, and per-pattern Cholesky on
 indefinite sub-blocks — all fixed in this release with a unified
 `regularize=True` opt-out-to-strict convention across `mlest`,
-`mom_mcar_test`, `little_mcar_test`, and the batched E-step. The
-Project Lacuna cache build on 3,080 (dataset × generator) pairs went
-from crashing on the first batch to completing in a single pass at
-0.9% MoM / 16.4% MLE sentinel rates. No API breaks.
+`little_mcar_test`, and the batched E-step. (Note: `mom_mcar_test`
+was also part of this release; it was removed in 3.0.0 along with the
+rest of the Lacuna-specific MCAR helpers.) The Project Lacuna cache
+build on 3,080 (dataset × generator) pairs went from crashing on the
+first batch to completing in a single pass. No API breaks at the time
+of 2.2.0 release.
 
 ### 2.1.0 — Real-data EM speedup + monotone closed-form MLE
 
@@ -110,26 +160,13 @@ mvnmle reference cases (apple, missvals):
   Cholesky over all patterns, one solve across all N
   observations, no per-pattern Python loop.
 
-**`mom_mcar_test`: fast method-of-moments MCAR test.** A new *separate
-function* (not a mode on ``little_mcar_test``, because the MoM variant
-is not Little's test) that uses pairwise-deletion sample moments
-instead of MLE plug-in. The test is consistent under MCAR but not
-asymptotically efficient, trading a small amount of statistical
-efficiency for dramatic speed. At 15 % MCAR on sklearn demos:
-
-| dataset        | shape     | little_mcar_test | mom_mcar_test |
-|----------------|-----------|------------------|---------------|
-| iris           | 150 × 4   | 2.9 ms           | 0.31 ms       |
-| wine           | 178 × 13  | 60.9 ms          | 2.17 ms       |
-| breast_cancer  | 569 × 30  | 1491 ms          | 28.7 ms       |
-
-For a 3410-dataset MCAR sweep: **~50 minutes → ~1.6 minutes**. Use
-``little_mcar_test`` when you need Little 1988's asymptotic
-distribution exactly (regulated submissions, citing R reference);
-use ``mom_mcar_test`` for high-throughput diagnostic screens. The
-``MCARTestResult.method`` field records which test produced a given
-result so downstream code can disambiguate without tracking the
-calling function.
+**`mom_mcar_test`: fast method-of-moments MCAR test** *(introduced in
+2.1.0, removed in 3.0.0 — see the 3.0.0 section above).* Originally
+shipped as a separate function using pairwise-deletion sample moments
+instead of MLE plug-in. Consistent under MCAR but not asymptotically
+efficient; the speedup numbers for this feature still hold, but the
+function is no longer in pystatistics — see `lacuna.analysis.mcar` if
+you need it.
 
 **Fully-batched device-resident EM on GPU.** Pre-2.1.0 the
 ``device='cuda'`` EM path set up a torch device but never used it —

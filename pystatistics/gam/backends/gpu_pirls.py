@@ -143,6 +143,48 @@ class GAMGPUFitter:
             ) * 1e-8
             return torch.linalg.solve(A, b)
 
+    def _canonicalise_beta(self, A: Any, b: Any) -> Any:
+        """Recompute beta via the CPU's Cholesky-with-LU-fallback path.
+
+        The in-loop P-IRLS solve uses ``torch.linalg.solve`` (LU on
+        device) for speed, which is fine while P-IRLS is still iterating
+        — it only needs a stable Newton direction. But the *final*
+        converged beta needs to be the same null-space representative
+        that the CPU path produces, because downstream code (smooth-term
+        chi-squared, coefficient reporting, R-cross-validation tests)
+        compares coefficients directly.
+
+        The penalised normal matrix ``A = X'WX + sum lam_j S_j`` has
+        condition number up to ~1e17 when λ is small — the penalty
+        does not fully eliminate the design matrix's null space. On
+        such A, ``torch.linalg.solve`` and ``np.linalg.cholesky``
+        converge to the same fitted values (the null-space components
+        don't affect ``X · beta``) but pick DIFFERENT
+        null-space-representative coefficients. Example on a simple
+        sine GAM: CPU vs GPU fitted values agree to 7e-8 but the
+        intercept and smooth coefficients differ by a constant ±1.73
+        shift. That invalidates every downstream comparison of
+        individual coefficients.
+
+        Fix: route the final beta solve through numpy LAPACK using the
+        exact same Cholesky-first / LU-fallback logic the CPU ``_pirls_step``
+        uses. The A and b tensors are small (p×p / p×1), so the D2H
+        round-trip is cheap. Output is guaranteed to match CPU to
+        FP64 precision.
+        """
+        torch = self._torch
+        A_np = A.detach().to(torch.float64).cpu().numpy()
+        b_np = b.detach().to(torch.float64).cpu().numpy()
+        try:
+            L = np.linalg.cholesky(A_np)
+            beta_np = np.linalg.solve(L.T, np.linalg.solve(L, b_np))
+        except np.linalg.LinAlgError:
+            A_np = A_np + 1e-8 * np.eye(A_np.shape[0])
+            beta_np = np.linalg.solve(A_np, b_np)
+        return torch.as_tensor(
+            beta_np, device=self._device, dtype=self._dtype,
+        )
+
     def _solve_for_edf(self, A: Any, XtWX: Any) -> Any:
         """Compute ``F = A^{-1} XtWX`` for EDF / hat-trace, using numpy
         LAPACK to match the CPU reference bit-for-bit.
@@ -253,15 +295,40 @@ class GAMGPUFitter:
         """Full P-IRLS at a fixed ``lambdas`` vector.
 
         Returns numpy arrays / scalars matching the CPU
-        ``_fit_gam_fixed_lambda`` contract.
+        ``_fit_gam_fixed_lambda`` contract — including coefficient-
+        level equivalence, not just fitted-value equivalence. See
+        ``_canonicalise_beta``'s docstring for why the final solve is
+        re-routed through numpy LAPACK.
         """
         torch = self._torch
         lambdas_gpu = torch.as_tensor(
             np.asarray(lambdas, dtype=np.float64),
             device=self._device, dtype=self._dtype,
         )
-        (beta, mu, eta, w, dev_t, n_iter, converged,
+        (_beta_loop, mu, eta, w, dev_t, n_iter, converged,
          _XtWX, _A) = self._fit_loop(lambdas_gpu, tol, max_iter)
+
+        # Canonicalise final beta through CPU's Cholesky path so
+        # coefficient-level comparisons (smooth-term chi_sq, R cross-
+        # validation) match the CPU backend bit-for-bit. The in-loop
+        # beta is good enough for mu / eta / deviance but can land on
+        # a shifted null-space representative when the penalised
+        # normal matrix is near-singular (small λ regime).
+        XtWX_final, A_final = self._final_XtWX_A(w, lambdas_gpu)
+        dmu_deta = self._fam.mu_eta(eta)
+        z_final = eta + (self._y - mu) / torch.clamp(dmu_deta, min=1e-20)
+        XtW_final = self._X.T * w.unsqueeze(0)
+        b_final = XtW_final @ z_final
+        beta = self._canonicalise_beta(A_final, b_final)
+
+        # Refresh mu / eta from the canonicalised beta. Fitted values
+        # should match the loop's output to FP64 precision by
+        # construction (A beta = b is the same equation P-IRLS was
+        # converging to); recomputing keeps the tuple internally
+        # consistent.
+        eta = self._X @ beta
+        mu = self._fam.linkinv(eta)
+
         return (
             beta.detach().to(torch.float64).cpu().numpy(),
             mu.detach().to(torch.float64).cpu().numpy(),
@@ -325,7 +392,7 @@ class GAMGPUFitter:
             np.asarray(lambdas, dtype=np.float64),
             device=self._device, dtype=self._dtype,
         )
-        (beta, mu, eta, w, dev_t, n_iter, converged,
+        (_beta_loop, mu, eta, w, dev_t, n_iter, converged,
          XtWX, A) = self._fit_loop(lambdas_gpu, tol, max_iter)
 
         # Recompute XtWX / A with the final W (W can drift in the last
@@ -333,6 +400,22 @@ class GAMGPUFitter:
         XtW = self._X.T * w.unsqueeze(0)
         XtWX_final = XtW @ self._X
         A_final = XtWX_final + self._penalty_sum(lambdas_gpu)
+
+        # Canonicalise the final beta through CPU's Cholesky path so
+        # coefficient-level comparisons match bit-for-bit even when the
+        # penalised normal matrix is near-singular (small-λ regime) and
+        # torch vs numpy would land on different null-space
+        # representatives. See ``_canonicalise_beta`` docstring.
+        dmu_deta = self._fam.mu_eta(eta)
+        z_final = eta + (self._y - mu) / torch.clamp(dmu_deta, min=1e-20)
+        b_final = XtW @ z_final
+        beta = self._canonicalise_beta(A_final, b_final)
+        # Refresh mu / eta from canonicalised beta for internal
+        # consistency (identical to the loop's output modulo FP64 noise
+        # by construction of the canonicalisation).
+        eta = self._X @ beta
+        mu = self._fam.linkinv(eta)
+
         F = self._solve_for_edf(A_final, XtWX_final)
         F_diag = torch.diagonal(F)
         total_edf = float(F_diag.sum().detach().cpu().item())

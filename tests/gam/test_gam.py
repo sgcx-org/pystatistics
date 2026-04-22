@@ -549,13 +549,45 @@ class TestGAMGPU:
         # matching the multinom / polr two-tier convention. Pin
         # statistical quantities at a conservative cross-implementation
         # tier rather than demanding bitwise equivalence.
+        #
+        # Primary fit statistics (fitted_values, deviance, GCV) are at
+        # the minimum of GCV(λ), i.e. locally flat in λ, so the tiny
+        # cross-backend λ drift barely moves them — measured drift is
+        # ≤3e-5 on this fixture. The tolerance here (1e-4) has a
+        # comfortable ~30× safety margin. total_edf, by contrast, is
+        # NOT flat in λ: it passes through a trace of
+        # (X'WX + λ·S)⁻¹ · X'WX, which is linear in λ near the
+        # optimum. At cond ≈ 1e16 the trace moves O(10⁻³) per O(10⁻⁶)
+        # shift in λ, so EDF needs a ~5e-3 tolerance to absorb the
+        # λ-drift without masking real regressions. Empirically the
+        # measured total_edf drift on this fixture is ~1.4e-3 (well
+        # inside 5e-3 but narrowly over the old 1e-3 setting).
         np.testing.assert_allclose(
             r_cpu.fitted_values, r_gpu.fitted_values,
             rtol=1e-4, atol=1e-6,
         )
         assert r_cpu.deviance == pytest.approx(r_gpu.deviance, rel=1e-4)
         assert r_cpu.gcv == pytest.approx(r_gpu.gcv, rel=1e-4)
-        assert r_cpu.total_edf == pytest.approx(r_gpu.total_edf, rel=1e-3)
+        assert r_cpu.total_edf == pytest.approx(r_gpu.total_edf, rel=5e-3)
+        # Coefficient-level agreement. Pre-3.0.0, the GPU final beta
+        # could land on a different null-space representative than CPU
+        # (torch.linalg.solve and numpy Cholesky diverge on near-
+        # singular A), producing fitted values identical to FP64 but
+        # coefficients shifted by a constant in the penalty null space.
+        # That broke smooth_terms.chi_sq (which is computed from the
+        # coefficients directly) by factors of ~8×. The GPU backend now
+        # canonicalises the final beta through the same numpy Cholesky
+        # path CPU uses; these tolerances pin that invariant.
+        np.testing.assert_allclose(
+            r_cpu.coefficients, r_gpu.coefficients,
+            rtol=1e-3, atol=1e-4,
+        )
+        assert r_cpu.smooth_terms[0].chi_sq == pytest.approx(
+            r_gpu.smooth_terms[0].chi_sq, rel=1e-3,
+        )
+        assert r_cpu.smooth_terms[0].p_value == pytest.approx(
+            r_gpu.smooth_terms[0].p_value, rel=1e-2,
+        )
 
     def test_gpu_fp32_matches_cpu_at_tier(self, sine_data):
         """GPU FP32 matches CPU at the ``GPU_FP32`` tier on fitted

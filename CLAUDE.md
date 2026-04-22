@@ -218,6 +218,45 @@ file, that's a process failure.
 
 ---
 
+## 9. Cross-Project Scope Boundary — Stay in the Project You Were Invited Into
+
+A Claude Code session is invoked on one project. It does not have a licence to edit
+any other project visible on disk. Seeing sibling repos in `/mnt/projects/` does not
+constitute an invitation to modify them.
+
+**Rules:**
+- Never modify source, tests, configs, or documentation in a sibling project (any
+  repo outside the current one) on your own initiative.
+- When you believe a change belongs in a sibling project — "this belongs upstream",
+  "this helper is more general than the current project", "I should fix a bug in
+  their API" — stop and raise it with the user. Describe what you'd change, where,
+  and why. Wait for explicit authorisation before editing the sibling repo.
+- "Explicit authorisation" means the user said, in the current session, something
+  like "yes, also modify project X". It is NOT a precedent from a prior session. It
+  is NOT "the user probably wouldn't mind". It is NOT inferred from the fact that
+  the user depends on project X.
+
+**Corollary — Scope Creep Is a Design Decision, Not a Technical One:**
+Pushing project-A-specific functionality into general-purpose project B because it's
+technically convenient dilutes project B's identity, breaks the expectations of other
+downstream consumers, and forces project B to carry maintenance burden for a use case
+it was never meant to serve. "Project A needs X, and X involves statistics, therefore
+X belongs in pystatistics" is not a valid reasoning chain. X belongs in project A
+until (a) multiple sibling projects demonstrably need it AND (b) a decision has been
+made to promote it — either into an existing general-purpose library or into a new
+dedicated sibling.
+
+**What to do when you think a sibling needs a change:**
+1. Implement the helper inside your OWN project first. It lives there until proven
+   general.
+2. Surface the "belongs upstream" thought to the user explicitly. Propose the
+   migration as a separate task. Do not pre-emptively modify the sibling repo.
+3. If the user authorises the migration, treat it as its own first-class task with
+   its own review, tests, and release cadence — not as a side-effect of the
+   originating feature.
+
+---
+
 ## Meta-Rule
 
 If any of these rules feel inconvenient, that feeling is the point. These rules exist

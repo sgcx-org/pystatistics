@@ -85,11 +85,11 @@ class EMBackend:
             negligible statistical impact (ridge ~ -2*min_eig + 1e-12).
             Emits a warning so the event is visible in logs. When False,
             raise `NumericalError` on near-indefinite sigma (the strict
-            behaviour from earlier releases). True matches the convention
-            of `mom_mcar_test(regularize=...)` and is the right default
-            for real tabular data where FP roundoff produces
-            numerically-indefinite covariances on perfectly well-posed
-            statistical problems.
+            behaviour from earlier releases). True matches the
+            convention of `little_mcar_test(regularize=...)` and is the
+            right default for real tabular data where FP roundoff
+            produces numerically-indefinite covariances on perfectly
+            well-posed statistical problems.
 
         Returns
         -------

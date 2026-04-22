@@ -1,4 +1,4 @@
-"""NumPy batched building blocks for the EM E-step and MCAR chi-square.
+"""NumPy batched building blocks for the EM E-step.
 
 Extracted from ``_em_batched.py`` on 2026-04-20 to keep each file under
 the 500-SLOC hard limit (Coding Bible rule 4). See module ``_em_batched``
@@ -6,6 +6,10 @@ for a compatibility shim that re-exports these symbols.
 
 All functions are FP64 and bit-faithful to the scalar reference
 implementation on CPU.
+
+The ``chi_square_mcar_batched_np`` function that lived here through
+2.3.x was removed in 3.0.0 along with ``mom_mcar_test`` (which was its
+only caller); the MCAR chi-square machinery now lives in Lacuna.
 """
 from __future__ import annotations
 
@@ -298,119 +302,3 @@ def compute_loglik_batched_np(
     ))
 
     return float(-0.5 * logdet_sum - 0.5 * quad_total)
-
-
-def chi_square_mcar_batched_np(
-    mu: np.ndarray,
-    sigma: np.ndarray,
-    patterns,
-    index: _BatchedPatternIndex,
-    condition_threshold: float = 1e12,
-    regularize: bool = True,
-) -> tuple:
-    """Batched MCAR chi-square assembly.
-
-    Computes Σ_k n_k (ȳ_k - μ_o_k)^T Σ_{o_k}^{-1} (ȳ_k - μ_o_k)
-    in a single batched Cholesky + batched solve + batched
-    quadratic-form pass, with per-pattern ill-conditioning handled
-    by falling back to Moore-Penrose pseudo-inverse where needed.
-
-    Replaces a P-long Python loop that issued a separate
-    ``np.linalg.cond`` (internally SVD) + ``np.linalg.inv`` per
-    pattern — typically 30-50 % of MoM's wall-clock on
-    many-pattern data.
-
-    Returns
-    -------
-    test_statistic : float
-    n_patterns_used : int
-    n_regularized : int
-        Number of patterns that fell through to pseudo-inverse.
-    """
-    v_obs_max = index.v_obs_max
-
-    row_idx = index.obs_idx[:, :, None]
-    col_idx = index.obs_idx[:, None, :]
-    sigma_oo = sigma[row_idx, col_idx]
-    mask_oo = index.obs_mask[:, :, None] & index.obs_mask[:, None, :]
-    eye_oo = np.broadcast_to(np.eye(v_obs_max, dtype=sigma.dtype), sigma_oo.shape)
-    sigma_oo = np.where(mask_oo, sigma_oo, eye_oo)
-
-    # Batched condition-number check via batched SVD.
-    cond = np.linalg.cond(sigma_oo)  # (P,)
-    ill = cond > condition_threshold
-
-    test_statistic = 0.0
-    n_patterns_used = 0
-    n_regularized = 0
-
-    # Pre-compute pattern means (ȳ_k) for each pattern — one matmul per
-    # pattern's data, but n_k is small so this loop is cheap relative
-    # to the old per-pattern-SVD cost. Keeping scalar here avoids a
-    # pad-by-n_max allocation.
-    y_bars = np.zeros((index.n_patterns, v_obs_max), dtype=mu.dtype)
-    n_per_pattern = index.n_per_pattern
-    for k, pattern in enumerate(patterns):
-        if pattern.n_observed == 0:
-            continue
-        v_obs_k = pattern.n_observed
-        y_bars[k, :v_obs_k] = np.mean(pattern.data, axis=0)
-
-    # Batched mu gather (P, v_obs_max) zeroed at padded slots.
-    mu_obs_padded = mu[index.obs_idx] * index.obs_mask
-    diff_padded = (y_bars - mu_obs_padded) * index.obs_mask  # (P, v_obs_max)
-
-    # For well-conditioned patterns: batched solve of sigma_oo z = diff.
-    # diff @ z gives the quadratic form.
-    # For ill-conditioned patterns: fall back to pinv per-pattern.
-    # Strategy: compute both paths and select by condition.
-    if ill.any() and regularize:
-        import warnings
-        worst = float(cond[ill].max())
-        warnings.warn(
-            f"Covariance matrix for at least one missingness pattern is "
-            f"ill-conditioned (worst cond={worst:.2e} > threshold="
-            f"{condition_threshold:.0e}). Using Moore-Penrose "
-            f"pseudo-inverse on {int(ill.sum())} of {index.n_patterns} "
-            f"patterns; chi-square contribution for those patterns may "
-            f"have reduced precision. Pass regularize=False to raise "
-            f"instead.",
-            UserWarning, stacklevel=4,
-        )
-    elif ill.any() and not regularize:
-        from pystatistics.core.exceptions import NumericalError
-        raise NumericalError(
-            f"Covariance matrix for {int(ill.sum())} pattern(s) is "
-            f"ill-conditioned (worst cond={float(cond[ill].max()):.2e} > "
-            f"threshold={condition_threshold:.0e}). Pass "
-            f"regularize=True to fall back to Moore-Penrose pseudo-"
-            f"inverse, or increase condition_threshold."
-        )
-
-    diff_3d = diff_padded[:, :, None]  # (P, v_obs_max, 1)
-    z = np.zeros_like(diff_padded)
-
-    # Split patterns by conditioning and batch each group separately.
-    # Well-conditioned patterns go through the cheap batched solve;
-    # ill-conditioned patterns through batched pinv. Both branches
-    # run as one BLAS call each — no Python loop over patterns.
-    ok = ~ill
-    if ok.any():
-        z_ok = np.linalg.solve(sigma_oo[ok], diff_3d[ok]).squeeze(-1)
-        z[ok] = z_ok
-    if ill.any():
-        sigma_pinv = np.linalg.pinv(sigma_oo[ill])
-        z_ill = np.matmul(sigma_pinv, diff_3d[ill]).squeeze(-1)
-        z[ill] = z_ill
-        n_regularized = int(ill.sum())
-
-    # Quadratic form per pattern: contribution_k = n_k * diff_k · z_k
-    contribs = (diff_padded * z).sum(axis=-1)  # (P,) — padded slots contribute 0
-    contribs_nk = contribs * n_per_pattern.astype(mu.dtype)
-
-    # Count patterns used: those with at least one observed variable.
-    used_mask = index.obs_mask.any(axis=-1)
-    n_patterns_used = int(used_mask.sum())
-
-    test_statistic = float(contribs_nk[used_mask].sum())
-    return test_statistic, n_patterns_used, n_regularized

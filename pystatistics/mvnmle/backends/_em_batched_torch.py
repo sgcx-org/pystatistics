@@ -1,4 +1,4 @@
-"""Torch/GPU batched building blocks for the EM E-step and MCAR chi-square.
+"""Torch/GPU batched building blocks for the EM E-step.
 
 Extracted from ``_em_batched.py`` on 2026-04-20 to keep each file under
 the 500-SLOC hard limit (Coding Bible rule 4). See module ``_em_batched``
@@ -6,120 +6,14 @@ for a compatibility shim that re-exports these symbols.
 
 All functions take ``torch_mod`` (the imported ``torch`` module) as an
 explicit parameter so CPU-only installs never trigger a torch import.
+
+The ``chi_square_mcar_batched_torch`` function that lived here through
+2.3.x was removed in 3.0.0 along with ``mom_mcar_test`` (which was its
+only caller); the MCAR chi-square machinery now lives in Lacuna.
 """
 from __future__ import annotations
 
 from pystatistics.mvnmle.backends._em_batched_patterns import _BatchedPatternIndex
-
-
-def chi_square_mcar_batched_torch(
-    mu, sigma, index, n_per_pattern_t, obs_idx_t, obs_mask_t,
-    y_bars_t, eye_oo, torch_mod, device, dtype,
-    condition_threshold: float = 1e12,
-    regularize: bool = True,
-):
-    """Torch/GPU version of ``chi_square_mcar_batched_np``.
-
-    Same algorithmic structure; the ill-conditioned fallback uses
-    batched SVD-based pseudo-inverse to avoid Python-level branching
-    between per-pattern solve and pinv on device.
-    """
-    torch = torch_mod
-
-    row_idx = obs_idx_t.unsqueeze(-1)
-    col_idx = obs_idx_t.unsqueeze(-2)
-    sigma_oo = sigma[row_idx, col_idx]
-    mask_oo = obs_mask_t.unsqueeze(-1) & obs_mask_t.unsqueeze(-2)
-    sigma_oo = torch.where(mask_oo, sigma_oo, eye_oo)
-
-    # Batched cond via batched SVD singular values.
-    svals = torch.linalg.svdvals(sigma_oo)  # (P, v_obs_max)
-    # Ignore the zero singular values from padded rows (mask their
-    # contribution by the obs_mask); avoid div-by-zero for all-padded
-    # rows which shouldn't occur in practice.
-    smax = svals[:, 0]
-    # Smallest valid singular value per pattern: take the smallest
-    # among positions that are genuine observed dims.
-    n_obs_per_pattern = obs_mask_t.sum(dim=-1).clamp(min=1)
-    # Gather the (n_obs_k-1)-th singular value per pattern as smin;
-    # for padded slots svdvals are zeros; so smin = svals[torch.arange(P), n_obs_per_pattern - 1].
-    P = svals.shape[0]
-    smin = svals[torch.arange(P, device=device), n_obs_per_pattern - 1]
-    cond = smax / smin.clamp(min=1e-300)
-    ill = cond > condition_threshold
-
-    if ill.any() and regularize:
-        import warnings
-        worst = float(cond[ill].max().item())
-        warnings.warn(
-            f"Covariance matrix for at least one missingness pattern is "
-            f"ill-conditioned (worst cond={worst:.2e} > threshold="
-            f"{condition_threshold:.0e}). Using Moore-Penrose "
-            f"pseudo-inverse on {int(ill.sum().item())} patterns; "
-            f"chi-square contribution may have reduced precision. Pass "
-            f"regularize=False to raise instead.",
-            UserWarning, stacklevel=4,
-        )
-    elif ill.any() and not regularize:
-        from pystatistics.core.exceptions import NumericalError
-        raise NumericalError(
-            f"Covariance matrix for {int(ill.sum().item())} pattern(s) "
-            f"is ill-conditioned. Pass regularize=True to fall back to "
-            f"Moore-Penrose pseudo-inverse, or raise condition_threshold."
-        )
-
-    # Build a per-pattern inverse: cholesky_solve for well-conditioned,
-    # pinv for ill-conditioned. All batched.
-    mu_obs_padded = mu[obs_idx_t] * obs_mask_t.to(dtype)
-    diff = (y_bars_t - mu_obs_padded) * obs_mask_t.to(dtype)  # (P, v_obs_max)
-
-    # Always use pinv when regularize is True and there are any ill
-    # patterns — it's bit-safe across patterns. For well-conditioned
-    # sigma_oo, pinv == inv; we pay a modest perf overhead to avoid a
-    # Python-level branch on device.
-    sigma_inv = torch.linalg.pinv(sigma_oo) if ill.any() else None
-    if sigma_inv is None:
-        # Fast path: condition-number check says all are well-conditioned,
-        # so attempt cholesky_solve. Cholesky requires positive-definiteness,
-        # which is a STRICTER property than good conditioning — a matrix
-        # can pass the cond-number threshold but still have tiny negative
-        # eigenvalues due to FP32 roundoff (especially on GPU). When that
-        # happens, fall back to pinv for those patterns. regularize=False
-        # is respected: we only attempt the fallback when the user has
-        # already opted into regularization.
-        try:
-            L = torch.linalg.cholesky(sigma_oo)
-            z = torch.cholesky_solve(diff.unsqueeze(-1), L).squeeze(-1)
-            n_cholesky_fallback = 0
-        except torch._C._LinAlgError:
-            if not regularize:
-                raise
-            import warnings
-            warnings.warn(
-                "Cholesky factorisation failed on the batched fast path "
-                "despite condition-number check passing — likely FP32 "
-                "roundoff producing a numerically-indefinite covariance. "
-                "Falling back to Moore-Penrose pseudo-inverse for all "
-                "patterns in this batch. Pass regularize=False to raise "
-                "instead.",
-                UserWarning, stacklevel=4,
-            )
-            sigma_inv = torch.linalg.pinv(sigma_oo)
-            z = torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
-            n_cholesky_fallback = sigma_oo.shape[0]
-    else:
-        z = torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
-        n_cholesky_fallback = 0
-
-    contribs = (diff * z).sum(dim=-1)  # (P,)
-    contribs_nk = contribs * n_per_pattern_t
-
-    used_mask = obs_mask_t.any(dim=-1)
-    n_patterns_used = int(used_mask.sum().item())
-
-    test_statistic = float(contribs_nk[used_mask].sum().item())
-    n_regularized = int(ill.sum().item()) + n_cholesky_fallback
-    return test_statistic, n_patterns_used, n_regularized
 
 
 def _e_step_full_torch(
