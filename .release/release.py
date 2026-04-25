@@ -2,36 +2,52 @@
 """
 Release utility for pystatistics / pystatsbio.
 
+This script ONLY automates the mechanical, judgement-free parts of a
+release. Everything that needs human authorship — in particular, the
+public-facing CHANGELOG.md entry — is left to you.
+
+Why: UNRELEASED.md is written in internal developer voice (rule numbers,
+project names, test counts, development rationale). CHANGELOG.md is a
+public file read by strangers on PyPI. Copying one into the other is a
+Rule-10 violation. The translation must be done by hand.
+
 Usage:
-    python .release/release.py 1.2.0            # bump + changelog + reset
-    python .release/release.py --commit 1.2.0   # bump + changelog + reset + git commit/tag/push
-    python .release/release.py --check 1.2.0    # show what would change
-    python .release/release.py --status         # show current state
+    python .release/release.py --status              # show version state + unreleased summary
+    python .release/release.py --check X.Y.Z         # dry-run: validate the bump
+    python .release/release.py --bump X.Y.Z          # bump pyproject.toml + __init__.py
+    python .release/release.py --reset-unreleased    # wipe UNRELEASED.md to template
+                                                       (only after CHANGELOG entry is written)
 
-What it does (in order):
-    1. Reads .release/UNRELEASED.md for the change log
-    2. Validates the new version > current version
-    3. Updates pyproject.toml version
-    4. Updates __init__.py __version__
-    5. Prepends the new entry to CHANGELOG.md
-    6. Resets UNRELEASED.md for the next cycle
-    7. Prints a checklist of remaining manual steps
+What this script does:
+    --bump:
+      1. Validates new version > current version
+      2. Writes new version to pyproject.toml
+      3. Writes new version to <package>/__init__.py
 
-What it does NOT do (you must do these yourself):
-    - Update the README (version badges, "what's new" prose) — pre-stage
-      those edits with `git add README.md` before running --commit so they
-      ride along in the release commit
-    - Create the GitHub release (`gh release create vX.Y.Z`) — this is what
-      triggers the publish.yml workflow that pushes to PyPI
-    - In plain (non --commit) mode: git add / commit / push / tag
+    --reset-unreleased:
+      1. Overwrites UNRELEASED.md with the empty template
 
-Place this file in .release/ at the repo root.
+What this script does NOT do (you must do these yourself):
+    - Write the CHANGELOG.md entry. Translate UNRELEASED.md into
+      user-facing prose by hand. Do not copy verbatim.
+    - Update the README "What's New" section.
+    - git add / commit / tag / push.
+    - gh release create.
+
+Typical flow:
+    1. `--status`                                       (sanity check)
+    2. Write the CHANGELOG.md entry by hand.            (translation)
+    3. Update README.md "What's New" by hand.           (translation)
+    4. `--bump X.Y.Z`                                   (mechanical)
+    5. `git diff`                                       (review)
+    6. git add / commit / tag / push                    (manual)
+    7. `--reset-unreleased`                             (only after commit)
+    8. Commit the reset, then `gh release create`.
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -42,7 +58,7 @@ UNRELEASED_PATH = RELEASE_DIR / "UNRELEASED.md"
 
 
 # ---------------------------------------------------------------------------
-# Discovery: find the package name and version locations
+# Discovery
 # ---------------------------------------------------------------------------
 
 def find_package() -> str:
@@ -56,7 +72,6 @@ def find_package() -> str:
 
 
 def get_current_version() -> str:
-    """Read current version from pyproject.toml."""
     toml = (REPO_ROOT / "pyproject.toml").read_text()
     m = re.search(r'^version\s*=\s*"([^"]+)"', toml, re.MULTILINE)
     if not m:
@@ -65,7 +80,6 @@ def get_current_version() -> str:
 
 
 def get_init_version(package: str) -> str:
-    """Read __version__ from __init__.py."""
     init = (REPO_ROOT / package / "__init__.py").read_text()
     m = re.search(r'__version__\s*=\s*"([^"]+)"', init)
     if not m:
@@ -74,7 +88,6 @@ def get_init_version(package: str) -> str:
 
 
 def get_changelog_version() -> str | None:
-    """Read the latest version from CHANGELOG.md."""
     changelog = REPO_ROOT / "CHANGELOG.md"
     if not changelog.exists():
         return None
@@ -84,15 +97,26 @@ def get_changelog_version() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Unreleased changes
+# UNRELEASED.md
 # ---------------------------------------------------------------------------
 
-def get_unreleased_content() -> str:
-    """Read the ## Changes section from UNRELEASED.md.
+EMPTY_UNRELEASED = textwrap.dedent("""\
+    # Unreleased Changes
 
-    Captures everything after `## Changes` to EOF — works with both flat
-    bullet lists and structured `### Summary/Added/Changed/Fixed` subsections.
-    """
+    > This file tracks all changes since the last stable release.
+    > Updated by whoever makes a change, on whatever machine.
+    > Synced via git so all sessions (Mac, Linux, etc.) see the same state.
+    >
+    > When ready to release, run: `python .release/release.py --status`
+    > and follow the manual release flow in the script docstring.
+
+    ## Changes
+
+    *(empty — no unreleased changes yet)*
+""")
+
+
+def get_unreleased_content() -> str:
     if not UNRELEASED_PATH.exists():
         return ""
     text = UNRELEASED_PATH.read_text()
@@ -106,22 +130,7 @@ def get_unreleased_content() -> str:
 
 
 def reset_unreleased() -> None:
-    """Reset UNRELEASED.md to empty template."""
-    UNRELEASED_PATH.write_text(textwrap.dedent("""\
-        # Unreleased Changes
-
-        > This file tracks all changes since the last stable release.
-        > Updated by whoever makes a change, on whatever machine.
-        > Synced via git so all sessions (Mac, Linux, etc.) see the same state.
-        >
-        > When ready to release, run: `python .release/release.py <version>`
-        > That script uses this file to build the CHANGELOG entry, bumps versions
-        > everywhere, and resets this file for the next cycle.
-
-        ## Changes
-
-        *(empty — no unreleased changes yet)*
-    """))
+    UNRELEASED_PATH.write_text(EMPTY_UNRELEASED)
 
 
 # ---------------------------------------------------------------------------
@@ -153,30 +162,6 @@ def bump_init(package: str, new_version: str) -> None:
     path.write_text(text)
 
 
-def update_changelog(new_version: str, content: str) -> None:
-    """Prepend new version entry to CHANGELOG.md."""
-    path = REPO_ROOT / "CHANGELOG.md"
-    if not path.exists():
-        path.write_text("# Changelog\n")
-
-    existing = path.read_text()
-
-    # Build new entry
-    entry = f"## {new_version}\n\n{content}\n\n"
-
-    # Insert after "# Changelog\n"
-    if existing.startswith("# Changelog"):
-        new_text = existing.replace("# Changelog\n", f"# Changelog\n\n{entry}", 1)
-    else:
-        new_text = f"# Changelog\n\n{entry}{existing}"
-
-    path.write_text(new_text)
-
-
-# ---------------------------------------------------------------------------
-# Version validation
-# ---------------------------------------------------------------------------
-
 def parse_version(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.split("."))
 
@@ -192,60 +177,6 @@ def validate_version(new: str, current: str) -> None:
         raise ValueError(
             f"New version {new} must be greater than current {current}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Git operations (for --commit mode)
-# ---------------------------------------------------------------------------
-
-def run_git(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """Run a git command at REPO_ROOT. Fails loudly (Rule 1) unless check=False."""
-    return subprocess.run(
-        ["git", "-C", str(REPO_ROOT), *args],
-        check=check,
-        capture_output=True,
-        text=True,
-    )
-
-
-def get_current_branch() -> str:
-    return run_git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
-
-
-def tag_exists(tag: str) -> bool:
-    return bool(run_git(["tag", "-l", tag], check=False).stdout.strip())
-
-
-def commit_and_push(new_version: str, package: str) -> None:
-    """Stage release files, commit, tag, and push. Fails loud on any error.
-
-    Stages release.py's own mutations on top of whatever the user has already
-    staged (e.g. README changes), so pre-staged edits ride along in the
-    release commit.
-    """
-    tag = f"v{new_version}"
-    if tag_exists(tag):
-        raise RuntimeError(f"Tag {tag} already exists — aborting")
-
-    branch = get_current_branch()
-    files = [
-        "pyproject.toml",
-        f"{package}/__init__.py",
-        "CHANGELOG.md",
-        ".release/UNRELEASED.md",
-    ]
-    run_git(["add", *files])
-    run_git(["commit", "-m", f"Release {tag}"])
-    print(f"  ✓ git commit: Release {tag}")
-
-    run_git(["tag", tag])
-    print(f"  ✓ git tag: {tag}")
-
-    run_git(["push", "origin", branch])
-    print(f"  ✓ git push: {branch}")
-
-    run_git(["push", "origin", tag])
-    print(f"  ✓ git push: {tag}")
 
 
 # ---------------------------------------------------------------------------
@@ -269,19 +200,13 @@ def cmd_status() -> None:
     if v_log and v_toml != v_log:
         print(f"\n  WARNING: pyproject ({v_toml}) != CHANGELOG ({v_log})")
 
-    print(f"\nUnreleased changes:")
+    print("\nUnreleased changes (internal voice — do NOT paste into CHANGELOG.md):")
     if unreleased:
         lines = unreleased.split("\n")
-        sections = [l for l in lines if l.startswith("### ")]
-        if sections:
-            print(f"  {len(lines)} lines across {len(sections)} section(s):")
-            for s in sections:
-                print(f"    {s}")
-        else:
-            for line in lines[:10]:
-                print(f"  {line}")
-            if len(lines) > 10:
-                print(f"  ... ({len(lines) - 10} more lines)")
+        for line in lines[:12]:
+            print(f"  {line}")
+        if len(lines) > 12:
+            print(f"  ... ({len(lines) - 12} more lines)")
     else:
         print("  (none)")
 
@@ -290,131 +215,75 @@ def cmd_check(new_version: str) -> None:
     package = find_package()
     current = get_current_version()
     validate_version(new_version, current)
-    unreleased = get_unreleased_content()
 
     print(f"Package:    {package}")
     print(f"Current:    {current}")
     print(f"New:        {new_version}")
-    print(f"\nWould update:")
+    print("\nWould update (only these two files):")
     print(f"  pyproject.toml:          {current} → {new_version}")
     print(f"  {package}/__init__.py:   {current} → {new_version}")
-    print(f"  CHANGELOG.md:            prepend {new_version} entry")
-    print(f"  .release/UNRELEASED.md:  reset to empty")
-
-    if unreleased:
-        print(f"\nChangelog content ({len(unreleased.split(chr(10)))} lines):")
-        print(textwrap.indent(unreleased[:500], "  "))
-    else:
-        print("\n  WARNING: UNRELEASED.md is empty — changelog entry will be blank")
+    print("\nThis script will NOT touch CHANGELOG.md, README.md, UNRELEASED.md, or git.")
 
 
-def cmd_release(new_version: str, commit: bool = False) -> None:
+def cmd_bump(new_version: str) -> None:
     package = find_package()
     current = get_current_version()
     validate_version(new_version, current)
-    unreleased = get_unreleased_content()
 
-    if not unreleased:
-        print("ERROR: .release/UNRELEASED.md has no changes.")
-        print("Add changes there before releasing.")
-        sys.exit(1)
+    print(f"Bumping {package} {current} → {new_version}\n")
 
-    # Pre-flight: if --commit, refuse when tag already exists (before any mutation)
-    if commit and tag_exists(f"v{new_version}"):
-        print(f"ERROR: Tag v{new_version} already exists — aborting before any file changes.")
-        sys.exit(1)
-
-    # Pre-flight: in --commit mode, refuse if there are unstaged source
-    # edits in the package. The release commit only stages pyproject.toml,
-    # __init__.py, CHANGELOG.md, UNRELEASED.md, plus anything the user
-    # pre-staged with `git add`. Unstaged source edits would be left out
-    # of the release commit, producing a tagged wheel that is missing the
-    # very fixes it is supposed to ship.  (This happened with v1.6.1 and
-    # required a same-day 1.6.2 patch-of-a-patch.)
-    if commit:
-        package_dir = REPO_ROOT / package
-        # `git diff --name-only` lists UNSTAGED changes (modified but not
-        # added). We only care about changes inside the package directory.
-        diff_proc = run_git(["diff", "--name-only"], check=False)
-        unstaged = [
-            line for line in diff_proc.stdout.splitlines()
-            if line.startswith(f"{package}/")
-        ]
-        if unstaged:
-            print(
-                f"ERROR: {len(unstaged)} unstaged file(s) inside {package}/ "
-                "would be left out of the release commit:"
-            )
-            for f in unstaged:
-                print(f"    {f}")
-            print()
-            print(
-                "Release aborted before any file changes. Either:\n"
-                f"  - `git add` these files to include them in Release v{new_version}, or\n"
-                "  - `git stash` them if they should not ship in this release.\n"
-                "See: .release/CHECKLIST.md — 'Historical context' (v1.6.1 foot-gun)."
-            )
-            sys.exit(1)
-
-    print(f"Releasing {package} {current} → {new_version}\n")
-
-    # 1. Bump versions
     bump_pyproject(new_version)
     print(f"  ✓ pyproject.toml → {new_version}")
 
     bump_init(package, new_version)
     print(f"  ✓ {package}/__init__.py → {new_version}")
 
-    # 2. Update changelog
-    update_changelog(new_version, unreleased)
-    print(f"  ✓ CHANGELOG.md — prepended {new_version} entry")
-
-    # 3. Reset unreleased
-    reset_unreleased()
-    print(f"  ✓ .release/UNRELEASED.md — reset for next cycle")
-
-    # 4. Commit + tag + push (only in --commit mode)
-    if commit:
-        print()
-        commit_and_push(new_version, package)
-
-    # 5. Checklist
     print(f"\n{'='*50}")
     print(f"  Version bumped to {new_version}")
     print(f"{'='*50}")
-    if commit:
-        print(f"\nRemaining steps (manual):")
-        print(f"  1. Create GitHub Release (triggers PyPI publish):")
-        print(f"       gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
-        print(f"  2. Verify on PyPI:")
-        print(f"       pip install {package}=={new_version}")
-    else:
-        print(f"\nRemaining steps (manual):")
-        print(f"  1. Review the changes:")
-        print(f"       git diff")
-        print(f"  2. Commit:")
-        print(f"       git add -A && git commit -m 'Release {new_version}'")
-        print(f"  3. Push:")
-        print(f"       git push origin main")
-        print(f"  4. Tag:")
-        print(f"       git tag v{new_version} && git push origin v{new_version}")
-        print(f"  5. Create GitHub Release (triggers PyPI publish):")
-        print(f"       gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
-        print(f"  6. Verify on PyPI:")
-        print(f"       pip install {package}=={new_version}")
+    print("\nRemaining steps (all manual):")
+    print("  1. Verify CHANGELOG.md has a hand-written entry for this version")
+    print("     (do NOT paste UNRELEASED.md verbatim — translate to user-facing prose).")
+    print("  2. Verify README.md 'What's New' reflects the same user-facing summary.")
+    print("  3. git diff     # review")
+    print(f"  4. git add pyproject.toml {package}/__init__.py CHANGELOG.md README.md")
+    print(f"  5. git commit -m 'Release {new_version}'")
+    print(f"  6. git tag v{new_version}")
+    print(f"  7. git push origin <branch> && git push origin v{new_version}")
+    print("  8. python .release/release.py --reset-unreleased")
+    print("     git add .release/UNRELEASED.md && git commit -m 'Reset UNRELEASED.md'")
+    print("     git push")
+    print(f"  9. gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
+    print(f" 10. Verify: pip install {package}=={new_version}")
+
+
+def cmd_reset_unreleased() -> None:
+    reset_unreleased()
+    print(f"  ✓ {UNRELEASED_PATH.relative_to(REPO_ROOT)} reset to empty template")
+    print("\nRemember to commit the reset:")
+    print("  git add .release/UNRELEASED.md")
+    print("  git commit -m 'Reset UNRELEASED.md for next cycle'")
+    print("  git push")
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+USAGE = """\
+Usage:
+  python .release/release.py --status              # show version state
+  python .release/release.py --check X.Y.Z         # dry-run: validate the bump
+  python .release/release.py --bump X.Y.Z          # bump pyproject.toml + __init__.py
+  python .release/release.py --reset-unreleased    # wipe UNRELEASED.md to template
+
+See the module docstring for the full manual release flow.
+"""
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python .release/release.py <version>            # bump + changelog + reset")
-        print("  python .release/release.py --commit <version>   # also commit + tag + push")
-        print("  python .release/release.py --check <version>    # dry run")
-        print("  python .release/release.py --status             # show current state")
+        print(USAGE)
         sys.exit(1)
 
     arg = sys.argv[1]
@@ -423,16 +292,20 @@ def main() -> None:
         cmd_status()
     elif arg == "--check":
         if len(sys.argv) < 3:
-            print("Usage: python .release/release.py --check <version>")
+            print("Usage: python .release/release.py --check X.Y.Z")
             sys.exit(1)
         cmd_check(sys.argv[2])
-    elif arg == "--commit":
+    elif arg == "--bump":
         if len(sys.argv) < 3:
-            print("Usage: python .release/release.py --commit <version>")
+            print("Usage: python .release/release.py --bump X.Y.Z")
             sys.exit(1)
-        cmd_release(sys.argv[2], commit=True)
+        cmd_bump(sys.argv[2])
+    elif arg == "--reset-unreleased":
+        cmd_reset_unreleased()
     else:
-        cmd_release(arg, commit=False)
+        print(f"Unknown command: {arg}\n")
+        print(USAGE)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

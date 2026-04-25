@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.0.1
+
+Metadata and documentation polish. No API changes.
+
+- **Development Status classifier updated.** `pyproject.toml` now
+  declares `Development Status :: 5 - Production/Stable` (previously
+  `3 - Alpha`). This only affects the PyPI classifier — no runtime
+  behaviour changes.
+
+- **Stale optional-dependency extra removed.** The
+  `[nonparametric_mcar]` extra has been removed from `pyproject.toml`.
+  The subpackage it referenced was removed in 3.0.0, but the extra had
+  remained listed on PyPI. `pip install pystatistics[nonparametric_mcar]`
+  will now fail with an "extra not provided" message instead of
+  silently installing a dependency for a subpackage that does not exist.
+
+- **README restructured.** The README now leads with the library's
+  design philosophy and module table, with the changelog near the
+  bottom. A first-time reader on PyPI sees what PyStatistics is before
+  seeing what has changed release-to-release.
+
 ## 3.0.0
 
 ### BREAKING: Removed MoM MCAR test and the entire `nonparametric_mcar` subpackage

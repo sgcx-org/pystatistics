@@ -2,365 +2,6 @@
 
 GPU-accelerated statistical computing for Python.
 
-## What's New
-
-### 3.0.0 — Scope correction: Lacuna-specific MCAR helpers removed (breaking)
-
-Two years of feature creep are being rolled back. In 2.2.0 and 2.3.0
-pystatistics accumulated MCAR-test variants — `mom_mcar_test` plus a
-whole `nonparametric_mcar` subpackage (propensity / HSIC / MissMech) —
-added specifically to serve Project Lacuna's cache-scale screening
-use case. On reflection that was a scope mistake: pystatistics is a
-general-purpose statistical library, not a Lacuna helper. These tests
-are project-specific feature-extraction utilities, not textbook
-methods, and their presence in pystatistics diluted the library's
-identity and forced us to carry maintenance burden for a use case
-that had nothing to do with general statistical inference.
-
-**Removed (breaking):**
-  - `pystatistics.mvnmle.mom_mcar_test` and its helpers
-    (`_pairwise_deletion_moments`, `_resolve_mom_backend`, and the
-    `_MOM_GPU_WORTH_IT_THRESHOLD` constant).
-  - `pystatistics.nonparametric_mcar` subpackage in its entirety
-    (`propensity_mcar_test`, `hsic_mcar_test`, `missmech_mcar_test`,
-    `NonparametricMCARResult`).
-  - The `[nonparametric_mcar]` optional-dependency extra.
-  - 109 tests across `tests/mvnmle/test_mom_mcar.py` and
-    `tests/nonparametric_mcar/`.
-
-**Removed (dead code, not breaking):** the batched MCAR chi-square
-machinery (`chi_square_mcar_batched_np` and
-`chi_square_mcar_batched_torch` in `pystatistics/mvnmle/backends/`)
-was only ever called from `mom_mcar_test`. Those two functions and
-their shim re-exports in `backends/_em_batched.py` are gone. Net
-effect: `_em_batched_np.py` shrank from 416 → 300 lines and
-`_em_batched_torch.py` from 381 → 271 lines, with no functional
-change to the EM or log-likelihood paths.
-
-**Retained (unchanged):**
-  - `little_mcar_test` — the canonical Little (1988) MLE-plug-in test.
-    Textbook, general-purpose, stays.
-  - `MCARTestResult` dataclass.
-  - `mlest`, `analyze_patterns`, `PatternInfo`, the full MVN MLE
-    machinery, and every EM / SQUAREM / monotone-closed-form path
-    unchanged.
-
-**Where the removed code went:** all four removed tests are now
-maintained by Project Lacuna at `lacuna.analysis.mcar.*`. If you were
-using these from pystatistics and are also a Lacuna user, migration
-is a one-line import change. If you were using them standalone, the
-MoM test is ~100 LOC of pairwise-deletion moments + per-pattern
-chi-square and is trivial to re-inline; the nonparametric variants
-are self-contained single-file implementations you can vendor.
-
-**Flaky GAM GPU FP64 test fixed.** The
-`TestGAMGPU::test_gpu_fp64_matches_cpu_fitted_and_gcv` test had been
-intermittently failing on `total_edf` since 1.8.0 with a ~1.4e-3
-CPU/GPU drift against a 1e-3 tolerance. Diagnosis: the primary fit
-statistics (fitted_values, deviance, GCV) sit at the GCV-minimising
-λ — locally flat in λ, so cross-backend λ drift barely moves them
-(measured ≤3e-5). `total_edf`, however, is LINEAR in λ near that
-optimum and passes through tr((X'WX + λ·S)⁻¹·X'WX) on a
-cond-1e16-17 penalised normal matrix — structurally more sensitive.
-Tolerance widened to `rel=5e-3` on `total_edf` only, with a test
-comment explaining the λ-sensitivity analysis so this doesn't get
-tightened back by accident. Other three assertions keep their 1e-4
-margin.
-
-**GAM GPU smooth-term chi-squared fixed.** While investigating the
-`total_edf` flake above, also found and fixed a latent bug: the
-chi-squared statistic reported in `smooth_terms` was diverging ~8×
-between CPU and GPU backends (CPU ≈ 19, GPU ≈ 156 on the `sine_data`
-fixture) despite fitted values agreeing to FP64 precision. Root
-cause: the penalised normal matrix `A = X'WX + Σ λⱼ Sⱼ` has condition
-number up to ~1e17 when λ is small — the penalty does not fully
-eliminate the design matrix's null space. On such `A`,
-`torch.linalg.solve` (LU on device) and `np.linalg.cholesky`
-(CPU path) converge to the same `X·β` but pick DIFFERENT null-space-
-representative `β`. Fitted values were identical; coefficients were
-shifted by a constant in the penalty null space, throwing off the
-chi-squared statistic (which is computed directly from `β`). Fix:
-the GPU backend now canonicalises the final `β` by re-solving
-`A·β = b` via numpy's Cholesky-with-LU-fallback path — matching CPU
-bit-for-bit. In-loop P-IRLS still uses torch's fast LU (where
-null-space ambiguity doesn't matter — only the resulting `μ` drives
-convergence). Test tightened to pin coefficient-level agreement
-(`rtol=1e-3`) and chi-squared agreement (`rel=1e-3`) so this
-regression is caught if it returns.
-
-**Process change:** a new **"Cross-Project Scope Boundary"** rule
-(Rule 9) has been added to `CLAUDE.md`, instructing future Claude
-Code sessions working on pystatistics not to modify sibling projects
-without explicit user authorisation, and to implement project-
-specific helpers in those projects rather than in this one. This
-release is the retroactive enforcement of that rule. The matching
-rule has been added to the Lacuna and pystatsbio `CLAUDE.md` files.
-
-**Suite status at release:** 2401 passed, 19 skipped, 0 failed.
-
-### 2.3.0 — Nonparametric MCAR tests (introduced, now removed in 3.0.0)
-
-Originally shipped three distribution-free MCAR tests in a new
-`nonparametric_mcar` subpackage. Removed in 3.0.0 as a scope
-correction — see that section for the rationale. Code now lives in
-Lacuna.
-
-### 2.2.0 — Real-data robustness from Project Lacuna dogfooding
-
-Four classes of numerical failure on realistic tabular data — Cholesky
-fast-path crash on GPU FP32 roundoff, bare-`RuntimeError` wrapping
-breaking `PyStatisticsError` catch patterns, M-step sigma PD-check
-false negatives from FP64 roundoff, and per-pattern Cholesky on
-indefinite sub-blocks — all fixed in this release with a unified
-`regularize=True` opt-out-to-strict convention across `mlest`,
-`little_mcar_test`, and the batched E-step. (Note: `mom_mcar_test`
-was also part of this release; it was removed in 3.0.0 along with the
-rest of the Lacuna-specific MCAR helpers.) The Project Lacuna cache
-build on 3,080 (dataset × generator) pairs went from crashing on the
-first batch to completing in a single pass. No API breaks at the time
-of 2.2.0 release.
-
-### 2.1.0 — Real-data EM speedup + monotone closed-form MLE
-
-Dogfooding via Project Lacuna surfaced that ``little_mcar_test`` on
-realistic tabular data (sklearn's iris / wine / breast_cancer with
-random MCAR injection) was bottlenecked by EM: the E-step was a
-Python loop over missingness patterns, and each SQUAREM-style
-safeguard pass re-ran a per-pattern log-likelihood. This release
-batches both and adds Varadhan & Roland's SQUAREM acceleration.
-
-End-to-end ``little_mcar_test`` wall-clock at 15 % MCAR, seed 0:
-
-| dataset        | shape     | 2.0.1    | 2.1.0    | speedup |
-|----------------|-----------|----------|----------|---------|
-| missvals       | 13 × 5    | 19.9 ms  |  9.5 ms  |  2.1×   |
-| wine           | 178 × 13  | 79.4 ms  | 41.5 ms  |  1.9×   |
-| breast_cancer  | 569 × 30  | 3278 ms  | 2089 ms  |  1.6×   |
-
-For repeated-diagnostic workflows (e.g. an MCAR sweep over several
-thousand datasets), this turns a 3-hour run into a 2-hour run.
-
-Three stacked improvements, all preserving bit-equivalence on the R
-mvnmle reference cases (apple, missvals):
-
-- **Batched per-pattern conditional parameters.** The E-step's
-  per-pattern Cholesky + triangular solve now runs as a single
-  batched kernel pair across all missingness patterns. The
-  unused padding slots are identity-filled so the Cholesky stays
-  well-defined.
-- **SQUAREM acceleration on top of EM.** Three EM steps + one
-  Steffensen-style extrapolation, safeguarded by a monotonicity
-  check on the observed-data log-likelihood. Typical effect:
-  2–4× fewer EM-step equivalents to convergence. Convergence
-  point is the same MLE — only the path is shorter. On by
-  default; ``EMBackend.solve(..., accelerate=False)`` recovers
-  the plain-EM reference.
-- **Fully batched log-likelihood.** The SQUAREM monotonicity
-  check calls ``loglik`` often, so it was batched too — one
-  Cholesky over all patterns, one solve across all N
-  observations, no per-pattern Python loop.
-
-**`mom_mcar_test`: fast method-of-moments MCAR test** *(introduced in
-2.1.0, removed in 3.0.0 — see the 3.0.0 section above).* Originally
-shipped as a separate function using pairwise-deletion sample moments
-instead of MLE plug-in. Consistent under MCAR but not asymptotically
-efficient; the speedup numbers for this feature still hold, but the
-function is no longer in pystatistics — see `lacuna.analysis.mcar` if
-you need it.
-
-**Fully-batched device-resident EM on GPU.** Pre-2.1.0 the
-``device='cuda'`` EM path set up a torch device but never used it —
-numpy ran for every backend. This release implements a real
-device-resident loop with fully batched E-step / M-step / log-
-likelihood, SQUAREM acceleration on top, all on device. On breast-
-cancer-scale (569 × 30) EM drops from 2142 ms CPU to 147 ms GPU
-(14.6×). Small data remains CPU-faster; an empirical size heuristic
-(``n * v >= 1500``) with visible dispatch warnings keeps this
-correct in user-facing behaviour.
-
-**Monotone-missingness closed-form MLE** (Anderson 1957). Longitudinal
-cohorts with attrition, panel surveys with dropout, and most
-sequentially-administered instruments produce *monotone* missingness
-— the variables can be ordered such that each observation's missing
-entries form a contiguous suffix. When the pattern is monotone, the
-MVN MLE has a closed form via a chain of OLS regressions, with no
-iteration. New helpers: ``mvnmle.is_monotone(data)``,
-``mvnmle.monotone_permutation(data)``, and
-``mlest(data, algorithm='monotone')``. The closed-form matches R
-``mvnmle`` bit-for-bit on canonical datasets and is orders of
-magnitude faster than EM on larger-v longitudinal data. Per Rule 1
-the algorithm raises on non-monotone input rather than silently
-falling back — call ``is_monotone`` first if you want conditional
-dispatch.
-
-Also in this release:
-
-- **Benchmark harness** under ``benchmarks/mvnmle_bench.py`` for
-  tracking wall-clock and iteration counts across the reference
-  shapes; use the ``--tag`` flag to label a baseline for diff
-  against future changes.
-- **Documented finding**: the ``device='cuda'`` EM path was never
-  actually running on the GPU prior to this release — it stored
-  a torch device but never used it. We tried to wire up a real
-  device-resident loop and found GPU is slower than CPU for all
-  shapes we tested (per-pattern launch overhead still dominates
-  the tiny per-pattern matrix work). GPU EM therefore remains
-  CPU-equivalent by design; a future release will revisit if a
-  workload appears where full observation-level batching makes
-  GPU actually win.
-
-### 2.0.1 — GPU-backend exposure gaps and a convention rule
-
-Two public functions had GPU-capable inner calls but no `backend=`
-parameter, so there was no way to route them through the GPU path —
-exactly the regression the 2.0.0 CPU-default sweep was trying *not*
-to create. Both fixed:
-
-- **`little_mcar_test`** now accepts `backend=` and `algorithm=`,
-  forwarded to `mlest`. The per-pattern test-statistic accumulation
-  still runs on CPU (O(P × v³) for tiny v — never the bottleneck).
-  GPU results match CPU within FP32 tolerance (Δ stat ≈ 1.4e-4 on
-  the apple dataset).
-- **`auto_arima`** now accepts `backend=` and `method=`, threaded
-  through `_stepwise_search` / `_grid_search` / `_try_fit` so every
-  candidate fit honours the same backend. Pass
-  `method='Whittle', backend='gpu'` to run each candidate on GPU.
-
-Also codified the "when to add a GPU backend, and when not to" rule
-as Section 0 of `pystatistics/GPU_BACKEND_CONVENTION.md` — the
-absence of `backends/gpu*.py` in a module (`anova`, `ets`, `coxph`,
-`factor_analysis`, acf / stationarity) is a deliberate statement,
-not an oversight. GPU backends belong on workloads that actually
-map to GPU hardware (large dense linear algebra, big-N likelihoods,
-batched fits, frequency-domain transforms), not on everything.
-
-### 2.0.0 — CPU is now the default backend everywhere (breaking)
-
-Every public solver that previously defaulted to `backend='auto'` now
-defaults to **CPU — the R-reference, validated-for-regulated-industries
-path**. GPU is never selected implicitly. Affected entry points:
-
-- `regression.fit` (OLS and all GLM families)
-- `mvnmle.mlest`
-- `survival.discrete_time` and `discrete_time_fit`
-- `montecarlo.boot`, `montecarlo.permutation_test`
-- `descriptive.describe`, `.cor`, `.cov`, `.var`, `.quantile`, `.summary`
-- `hypothesis.*` (signatures normalized — behaviour unchanged; CPU was
-  already the effective default)
-
-The GPU path is opt-in:
-
-```python
-result = fit(X, y, backend='gpu')    # require GPU; fail loud if absent
-result = fit(X, y, backend='auto')   # prefer GPU, fall back to CPU
-```
-
-Rationale: GPU behaviour is not guaranteed across installs, and
-regulated-industry users need "unspecified backend" to mean the
-validated path. This formalises the convention already documented in
-`pystatistics/GPU_BACKEND_CONVENTION.md` and followed by the
-`multivariate.pca`, `multinomial`, `ordinal`, `timeseries.arima`, and
-`gam` modules since 1.6.0.
-
-Migration: if you were relying on implicit GPU selection on a
-GPU-equipped box, add `backend='auto'` (best-effort GPU) or
-`backend='gpu'` (require GPU) to the affected calls.
-
-### 1.9.0 — Device-resident PCA results and batched ARMA fits
-
-Two follow-ons to the 1.8.0 GPU sweep, focused on removing remaining
-PCIe transfer bottlenecks and on making many-series workflows fast.
-
-- **GPU-resident `PCAResult`** (`pca(..., device_resident=True)`).
-  Numeric fields (`sdev`, `rotation`, `center`, `scale`, `x`) stay
-  as `torch.Tensor` on the fit's device instead of being copied
-  back to numpy. On a 1M × 100 FP32 PCA via a GPU `DataSource`,
-  skipping the scores D2H copy cuts per-fit wall time from 202.9 ms
-  to 59.3 ms — **3.4×** — and removes what was otherwise the
-  dominant cost of any downstream GPU computation that consumes PCA
-  output. Explicit `PCAResult.to_numpy()` / `.to(device)` materialise
-  a numpy-backed copy; `.device` reports where the fields live.
-  Default `device_resident=False` preserves 1.8.0 behaviour.
-- **`arima_batch(Y, order=(p, d, q), method='Whittle')`.** Fits K
-  independent ARMA models on the rows of a `(K, n)` matrix
-  simultaneously. One batched `torch.fft.rfft` computes the full
-  `(K, m)` periodogram; batched Adam runs K independent
-  optimizations on a shared `(K, p+q)` parameter tensor with
-  per-row gradient-norm convergence freezing. Non-seasonal,
-  Whittle-method only; CPU path is a Python loop over the
-  single-series `arima(method='Whittle')` (no batch speedup).
-  Crossover at **K ≈ 100**; measured 6.9× at K=500, **13× at
-  K=1000**, 10.7× at K=500/n=10000.
-
-Validation: 2,371 pystatistics tests, 117 R-vs-Python cross-validation.
-
-### 1.8.0 — GPU backends for the 1.6.x modules
-
-Major release adding GPU backends across the five modules introduced
-in 1.6.0 plus GEE in pystatsbio, a new `DataSource.to(device)` API
-for amortised-transfer workflows, and a frequency-domain ARIMA method.
-Also includes a CPU-only perf win for the multinomial vcov step that
-fell out of the GPU work.
-
-**New GPU backends** (measured on an RTX 5070 Ti; see CHANGELOG for
-shape-by-shape tables):
-
-| Module | Approach | Typical speedup vs CPU |
-|---|---|---|
-| PCA | SVD or Gram-matrix eigh, cond-gated | 3–4× (SVD), up to 100× (Gram, tall-skinny) |
-| Multinomial logit | Analytical block-Hessian `X'·diag(Wⱼₖ)·X` | 49–183× |
-| Ordinal polr | Autograd NLL + Hessian-via-autograd vcov | **448× at n=100k** |
-| GAM (P-IRLS) | Batched penalty-sum + LU, hat-trace via numpy LAPACK | 10–29× with 3 smooths |
-| GEE (pystatsbio 1.6.0) | Cluster-size grouped batched `torch.linalg.solve` | 13–67× at K=500–5000 |
-| ARIMA Whittle | FFT-based approximate MLE, all on device | **36× at n=1M** |
-
-Two-tier validation convention is documented in
-`GPU_BACKEND_CONVENTION.md`: CPU is validated against R; GPU is
-validated against CPU at the `GPU_FP32` tolerance tier for FP32
-runs and to machine precision on CUDA FP64.
-
-**`DataSource.to(device)`** — pay the host→device transfer once up
-front, reach the compute ceiling on every subsequent fit. Rule-1
-safe (explicit device mismatches raise). Underpins the amortised
-numbers above.
-
-**Whittle ARIMA** (`method='Whittle'`) — FFT-based approximate MLE
-alongside CSS / ML / CSS-ML. Non-seasonal only in 1.8.0; `vcov`
-returned as NaN (use ML/CSS-ML for SEs). CPU-only Whittle still
-wins 1.4–17.5× over CSS-ML at n ≥ 2000 via precomputed cos/sin
-tables; GPU Whittle hits 36× at n=1M.
-
-**CPU multinomial analytical Hessian (backport).** The CPU vcov
-step now uses the same block `X'·diag(Wⱼₖ)·X` formula the GPU
-backend does, replacing the central-difference Hessian. **29–33×
-CPU speedup** on the vcov step alone with no new dependencies.
-
-Validation: 2,353 pystatistics tests, 117 R-vs-Python cross-validation.
-
-### Previous Releases
-
-**1.7.0** — Performance parity with R on OLS first-call (578 ms →
-5 ms via lazy torch provenance probe), polr (277 ms → 23 ms via
-vectorised `_cumulative_probs_vectorized`), and SARIMA airline-model
-fit (2,100 ms → 14 ms via a numba-JIT'd Kalman state-space path +
-factored-parameter optimisation + MA sign-convention fix). Added
-`numba>=0.59` as a required dependency.
-
-**1.6.2** — Re-shipped the 1.6.1 fixes after a release-process bug
-left them out of the PyPI wheel. Closes five Rule 1 silent-failure
-violations: ARIMA CSS-ML fails loud on refinement failure;
-ARIMA(0,d,0) uses closed-form MLE; Gamma GLM returns explicit NaN
-on non-positive dispersion; `descriptive.var(n=1)` returns NaN
-without numpy warnings; scipy 1.18 forward-compat.
-
-**1.6.0** — Five new modules (`ordinal`, `multinomial`, `multivariate`, `timeseries`, `gam`), two new GLM families (`Gamma`, `NegativeBinomial`), ~650 new tests.
-
-**1.2.1** — No silent model switches; `backend='gpu'` is honest; reproducible Monte Carlo via `seed=`; module structure refactoring.
-
-**1.1** — Named coefficients via `names=`; `result.coef` dict; OLS/Cox summary improvements matching R output.
-
----
-
 ## Design Philosophy
 
 PyStatistics maintains two parallel computational paths with distinct goals:
@@ -377,6 +18,41 @@ PyStatistics maintains two parallel computational paths with distinct goals:
 2. **Fail fast, fail loud** — no silent fallbacks or "helpful" defaults
 3. **Explicit over implicit** — require parameters, don't assume intent
 4. **Two-tier validation** — CPU vs R, then GPU vs CPU
+
+---
+
+## Modules
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| `regression/` LM | Complete | Linear models (OLS) with CPU QR and GPU Cholesky |
+| `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson, Gamma, Negative Binomial) via IRLS |
+| `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
+| `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
+| `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
+| `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
+| `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
+| `anova/` | Complete | ANOVA: one-way, factorial, ANCOVA, repeated measures, Type I/II/III SS, Tukey/Bonferroni/Dunnett, Levene's test |
+| `mixed/` LMM/GLMM | Complete | Linear and generalized linear mixed models (random intercepts/slopes, nested/crossed, REML/ML, Satterthwaite df, GLMM Laplace) |
+| `ordinal/` | Complete | Proportional odds (cumulative link) models matching R MASS::polr |
+| `multinomial/` | Complete | Multinomial logit (softmax) regression matching R nnet::multinom |
+| `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
+| `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
+| `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
+
+## Architecture
+
+Every module follows the same pattern:
+
+```
+DataSource -> Design -> fit() -> Backend.solve() -> Result[Params] -> Solution
+```
+
+- **CPU backends** are the gold standard, validated against R to rtol = 1e-10.
+- **GPU backends** are validated against CPU backends per the tolerances below.
+- **Two-tier validation** ensures correctness at any scale: Python-CPU vs R, then Python-GPU vs Python-CPU.
 
 ---
 
@@ -631,39 +307,6 @@ print(result.edf, result.gcv)
 print(result.summary())
 ```
 
-## Modules
-
-| Module | Status | Description |
-|--------|--------|-------------|
-| `regression/` LM | Complete | Linear models (OLS) with CPU QR and GPU Cholesky |
-| `regression/` GLM | Complete | Generalized linear models (Gaussian, Binomial, Poisson, Gamma, Negative Binomial) via IRLS |
-| `mvnmle/` | Complete | Multivariate normal MLE with missing data (Direct + EM) |
-| `descriptive/` | Complete | Descriptive statistics, correlation, quantiles, skewness, kurtosis |
-| `hypothesis/` | Complete | t-test, chi-squared, Fisher exact, Wilcoxon, KS, proportions, F-test, p.adjust |
-| `montecarlo/` | Complete | Bootstrap (ordinary, balanced, parametric), permutation tests, 5 CI methods, batched GPU solver |
-| `survival/` | Complete | Survival analysis: Kaplan-Meier, log-rank test, Cox PH (CPU), discrete-time (GPU) |
-| `anova/` | Complete | ANOVA: one-way, factorial, ANCOVA, repeated measures, Type I/II/III SS, Tukey/Bonferroni/Dunnett, Levene's test |
-| `mixed/` LMM/GLMM | Complete | Linear and generalized linear mixed models (random intercepts/slopes, nested/crossed, REML/ML, Satterthwaite df, GLMM Laplace) |
-| `ordinal/` | Complete | Proportional odds (cumulative link) models matching R MASS::polr |
-| `multinomial/` | Complete | Multinomial logit (softmax) regression matching R nnet::multinom |
-| `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
-| `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
-| `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
-
-See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
-
-## Architecture
-
-Every module follows the same pattern:
-
-```
-DataSource -> Design -> fit() -> Backend.solve() -> Result[Params] -> Solution
-```
-
-- **CPU backends** are the gold standard, validated against R to rtol = 1e-10.
-- **GPU backends** are validated against CPU backends per the tolerances above.
-- **Two-tier validation** ensures correctness at any scale: Python-CPU vs R, then Python-GPU vs Python-CPU.
-
 ## Installation
 
 ```bash
@@ -675,6 +318,137 @@ pip install pystatistics[gpu]
 # Development
 pip install pystatistics[dev]
 ```
+
+---
+
+## What's New
+
+### 3.0.1 — Metadata and documentation polish
+
+- Development Status classifier bumped from Alpha to Production/Stable.
+- Stale `[nonparametric_mcar]` optional-dependency extra removed from
+  `pyproject.toml` (the subpackage itself was removed in 3.0.0).
+- README restructured to lead with library identity and module overview
+  rather than changelog.
+
+No API changes.
+
+### 3.0.0 — MCAR helpers removed (breaking)
+
+**Removed (breaking):**
+  - `pystatistics.mvnmle.mom_mcar_test` and its helpers.
+  - `pystatistics.nonparametric_mcar` subpackage in its entirety
+    (`propensity_mcar_test`, `hsic_mcar_test`, `missmech_mcar_test`,
+    `NonparametricMCARResult`).
+  - The `[nonparametric_mcar]` optional-dependency extra.
+
+If you were using these tests, `little_mcar_test` (the canonical Little
+1988 MLE-plug-in test) remains and is unchanged. The removed tests were
+project-specific feature-extraction utilities rather than textbook
+methods.
+
+**Retained (unchanged):** `little_mcar_test`, `MCARTestResult`, `mlest`,
+`analyze_patterns`, `PatternInfo`, and every EM / SQUAREM /
+monotone-closed-form path.
+
+**Bug fixes:**
+  - GAM GPU smooth-term chi-squared no longer diverges from CPU on
+    ill-conditioned penalised normal matrices. The GPU backend now
+    canonicalises the final coefficients via Cholesky-with-LU-fallback
+    to match CPU bit-for-bit.
+  - GAM GPU FP64 `total_edf` test tolerance widened to `rel=5e-3` on
+    that quantity only, reflecting its linear sensitivity to λ near the
+    GCV optimum.
+
+### 2.3.0 — Nonparametric MCAR tests (introduced, removed in 3.0.0)
+
+Shipped three distribution-free MCAR tests in a new `nonparametric_mcar`
+subpackage. Removed in 3.0.0 — see above.
+
+### 2.2.0 — Real-data robustness
+
+Four classes of numerical failure on realistic tabular data fixed —
+Cholesky fast-path crash on GPU FP32 roundoff, bare-`RuntimeError`
+wrapping that broke `PyStatisticsError` catch patterns, M-step sigma
+PD-check false negatives from FP64 roundoff, and per-pattern Cholesky on
+indefinite sub-blocks — with a unified `regularize=True` opt-out-to-strict
+convention across `mlest`, `little_mcar_test`, and the batched E-step.
+
+### 2.1.0 — EM speedup + monotone closed-form MLE
+
+`little_mcar_test` on realistic tabular data sped up 1.6–2.1× via batched
+per-pattern E-step, SQUAREM acceleration, and fully batched
+log-likelihood. Fully-batched device-resident EM on GPU added: 14.6× at
+n=569, v=30. New `mvnmle.is_monotone`, `mvnmle.monotone_permutation`,
+and `mlest(data, algorithm='monotone')` — Anderson (1957) closed-form
+MLE for monotone missingness, bit-equivalent to R `mvnmle` on canonical
+datasets and orders of magnitude faster than EM on larger-v longitudinal
+data.
+
+### 2.0.1 — GPU-backend exposure gaps closed
+
+`little_mcar_test` and `auto_arima` gained `backend=` and
+`algorithm=`/`method=` parameters that had been missing, so GPU paths are
+now reachable from both entry points.
+
+### 2.0.0 — CPU is the default backend everywhere (breaking)
+
+Every public solver that previously defaulted to `backend='auto'` now
+defaults to **CPU** — the R-reference, validated-for-regulated-industries
+path. GPU is never selected implicitly. Affected: `regression.fit`,
+`mvnmle.mlest`, `survival.discrete_time`, `montecarlo.boot`,
+`montecarlo.permutation_test`, `descriptive.*`, `hypothesis.*`.
+
+The GPU path is opt-in:
+
+```python
+result = fit(X, y, backend='gpu')    # require GPU; fail loud if absent
+result = fit(X, y, backend='auto')   # prefer GPU, fall back to CPU
+```
+
+Migration: if you relied on implicit GPU selection on a GPU-equipped box,
+add `backend='auto'` or `backend='gpu'` to the affected calls.
+
+### 1.9.0 — Device-resident PCA results and batched ARMA fits
+
+- **GPU-resident `PCAResult`** (`pca(..., device_resident=True)`).
+  Numeric fields stay as `torch.Tensor` on the fit's device. 3.4× speedup
+  on 1M × 100 FP32 PCA by skipping the D2H score copy.
+- **`arima_batch(Y, order=(p, d, q), method='Whittle')`.** Fits K
+  independent ARMA models on the rows of a `(K, n)` matrix simultaneously.
+  Crossover at K ≈ 100; 13× at K=1000.
+
+### 1.8.0 — GPU backends for the 1.6.x modules
+
+GPU backends added across PCA, multinomial logit, ordinal polr, GAM, and
+ARIMA Whittle. Typical speedups: 3–4× (PCA SVD), up to 100× (PCA Gram on
+tall-skinny), 49–183× (multinomial), **448× at n=100k** (ordinal polr),
+10–29× (GAM with 3 smooths), **36× at n=1M** (ARIMA Whittle). New
+`DataSource.to(device)` API for amortised-transfer workflows. Whittle
+ARIMA (`method='Whittle'`) added as a FFT-based approximate MLE alongside
+CSS / ML / CSS-ML. CPU multinomial `vcov` now uses the analytical block
+Hessian (29–33× CPU speedup on that step).
+
+### Previous Releases
+
+**1.7.0** — Performance parity with R on OLS first-call (578 ms → 5 ms),
+polr (277 ms → 23 ms), and SARIMA airline-model fit (2,100 ms → 14 ms via
+numba-JIT'd Kalman state-space path).
+
+**1.6.2** — Re-shipped 1.6.1 fixes left out of the PyPI wheel. Fail-loud
+fixes in ARIMA CSS-ML, ARIMA(0,d,0) closed-form MLE, Gamma GLM dispersion,
+`descriptive.var(n=1)`, scipy 1.18 forward-compat.
+
+**1.6.0** — Five new modules (`ordinal`, `multinomial`, `multivariate`,
+`timeseries`, `gam`), two new GLM families (`Gamma`, `NegativeBinomial`).
+
+**1.2.1** — No silent model switches; `backend='gpu'` is honest;
+reproducible Monte Carlo via `seed=`; module structure refactoring.
+
+**1.1** — Named coefficients via `names=`; `result.coef` dict; OLS/Cox
+summary improvements matching R output.
+
+---
 
 ## License
 

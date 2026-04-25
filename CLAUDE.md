@@ -257,6 +257,54 @@ dedicated sibling.
 
 ---
 
+## 10. Audience Awareness for Public-Facing Files
+
+Before modifying any public-facing file (`README.md`, `pyproject.toml`,
+user-facing documentation, the PyPI description), explicitly identify the
+audience: **a stranger on the internet who has never seen this codebase.**
+That person has no knowledge of `CLAUDE.md`, internal project names,
+development rationale, rule numbers, or implementation history. They need
+to know what the library does, how to install it, and how to use it —
+nothing else.
+
+**The test:** *would a first-time user finding this on PyPI find this
+useful or confusing?* If confusing, omit it.
+
+**Rules (all specific instances of the principle above):**
+
+- **Changelog entries must not reference internal development artifacts.**
+  Entries in `README.md`, `CHANGELOG.md`, or any public-facing document must
+  never reference `CLAUDE.md`, internal rule numbers, internal project
+  names, development process, or test counts. Acceptable content:
+  user-facing behaviour changes, API additions/removals, bug fixes, and
+  performance numbers.
+
+  Example of what must **not** appear in a public changelog:
+  > "a new Cross-Project Scope Boundary rule (Rule 9) has been added to
+  > CLAUDE.md"
+
+- **Do not document `CLAUDE.md` changes in `README.md`.** When updating
+  `CLAUDE.md`, do not document those changes in `README.md` or any other
+  public-facing file. `CLAUDE.md` is internal developer guidance; `README.md`
+  reflects the public API, installation, and usage. `README.md` must never
+  reference `CLAUDE.md` by name or by implication.
+
+- **`README.md` is a user document, not a changelog mirror.** When updating
+  `README.md` from `CHANGELOG.md` or release notes, do not copy entries
+  verbatim or structurally. Translate them: extract only user-facing
+  behaviour changes, rewrite in present tense describing the library's
+  current state, and omit internal process details (references to
+  `CLAUDE.md`, rule numbers, internal project names, test counts,
+  development rationale). A user reading the README should understand what
+  the library does today — not the history of how it got there.
+
+**Corollary — The Internal Audience Already Has CLAUDE.md:**
+Rationale that belongs in `CLAUDE.md` does not need to be duplicated into
+public-facing files to "motivate" a change for users. Users do not need to
+be sold on the rule behind the change — only told what changed.
+
+---
+
 ## Meta-Rule
 
 If any of these rules feel inconvenient, that feeling is the point. These rules exist
