@@ -114,6 +114,25 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **GPU applicability**: MODERATE — depends on specific methods; Kalman filtering has sequential dependencies but spectral analysis parallelizes well
 - **R validation**: `arima()`, `forecast` package
 
+#### Demand-driven primitives (pulled in when a domain vertical needs them)
+
+These are genuinely general-purpose primitives identified while scoping the
+`pystats[domain]` libraries (clinical / genomic / finance / insurance). They
+belong here rather than in any single domain library because **≥2 separate
+domains share the exact same underlying mechanic** (the promotion rule). But
+they are specialized enough that they are **not worth implementing in isolation**
+— we implement each one *when the first domain vertical actually needs it*, then
+that domain pegs the new `pystatistics` version. Until then they stay on this
+list as candidates, not commitments.
+
+- [ ] **Parametric distribution fitting (`fitdist`)** — MLE fit of common
+  parametric distributions (lognormal, gamma, Pareto, Weibull, …) with
+  goodness-of-fit. *Shared by:* insurance severity modeling, finance
+  parametric return/loss distributions. **Priority**: ON-DEMAND.
+- [ ] **Extreme-value theory / peaks-over-threshold (GPD)** — generalized Pareto
+  tail fitting and tail-quantile estimation. *Shared by:* finance tail risk,
+  insurance large-loss modeling. **Priority**: ON-DEMAND.
+
 ---
 
 ## Implementation Priority

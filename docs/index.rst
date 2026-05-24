@@ -8,6 +8,11 @@ GPU-accelerated statistical computing for Python. Validated against R to machine
    :caption: Modules
 
    regression
+   ordinal
+   multinomial
+   multivariate
+   timeseries
+   gam
    descriptive
    hypothesis
    montecarlo
