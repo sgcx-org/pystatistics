@@ -25,6 +25,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
+
 
 class MultinomialGPULikelihood:
     """Stateful holder of GPU tensors for a multinomial fit.
@@ -113,7 +115,7 @@ class MultinomialGPULikelihood:
 
         nll_t.backward()
         nll_val = float(nll_t.detach().cpu().item())
-        grad_val = params_gpu.grad.detach().to(torch.float64).cpu().numpy()
+        grad_val = to_host_f64(params_gpu.grad)
 
         return nll_val, grad_val
 
@@ -153,7 +155,7 @@ class MultinomialGPULikelihood:
             eta_nonref = self._X @ beta.T
             eta = torch.cat([eta_nonref, self._zero_ref], dim=1)
             probs = torch.softmax(eta, dim=1)
-        return probs.to(torch.float64).cpu().numpy()
+        return to_host_f64(probs)
 
     def compute_vcov(
         self, params_flat: NDArray[np.floating[Any]],
@@ -218,4 +220,4 @@ class MultinomialGPULikelihood:
             except RuntimeError:
                 vcov = torch.linalg.pinv(hessian)
 
-        return vcov.to(torch.float64).cpu().numpy()
+        return to_host_f64(vcov)

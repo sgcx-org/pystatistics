@@ -30,6 +30,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
+
 
 class WhittleGPULikelihood:
     """Stateful holder of GPU tensors for a Whittle ARMA fit.
@@ -159,7 +161,7 @@ class WhittleGPULikelihood:
         nll_t.backward()
         return (
             float(nll_t.detach().cpu().item()),
-            params_gpu.grad.detach().to(torch.float64).cpu().numpy(),
+            to_host_f64(params_gpu.grad),
         )
 
     def _ensure_cached(self, params_flat: NDArray[np.floating[Any]]) -> None:

@@ -20,9 +20,17 @@ def _gpu_available() -> bool:
         import torch
     except ImportError:
         return False
-    # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks several
-    # linalg ops. FP32 MPS support is tracked as a separate effort.
-    return torch.cuda.is_available()
+    # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
+    # (FP32 path — DataSource.to('mps') downcasts float64 to float32).
+    return torch.cuda.is_available() or (
+        hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    )
+
+
+def _gpu_device() -> str:
+    """The available GPU device string for ``.to(...)`` calls."""
+    import torch
+    return "cuda" if torch.cuda.is_available() else "mps"
 
 
 class TestDataSourceDevice:
@@ -44,31 +52,39 @@ class TestDataSourceDevice:
         if not _gpu_available():
             pytest.skip("no GPU available")
         import torch
+        dev = _gpu_device()
         X = np.random.randn(10, 3)
         ds = DataSource.from_arrays(X=X)
-        gds = ds.to("cuda")
+        gds = ds.to(dev)
         # Immutability: original is untouched
         assert ds.device == "cpu"
         assert isinstance(ds["X"], np.ndarray)
         # New one is device-resident
-        assert gds.device.startswith("cuda")
+        assert gds.device.startswith(dev)
         assert isinstance(gds["X"], torch.Tensor)
-        assert gds["X"].device.type == "cuda"
+        assert gds["X"].device.type == dev
         assert gds.supports("gpu_native")
 
     def test_roundtrip_cuda_cpu_preserves_values(self):
         if not _gpu_available():
             pytest.skip("no GPU available")
+        dev = _gpu_device()
         X = np.random.randn(50, 5)
         y = np.random.randn(50)
         ds = DataSource.from_arrays(X=X, y=y)
-        gds = ds.to("cuda")
+        gds = ds.to(dev)
         cds = gds.to("cpu")
         # Roundtrip produces numpy again
         assert isinstance(cds["X"], np.ndarray)
         assert isinstance(cds["y"], np.ndarray)
-        np.testing.assert_array_equal(cds["X"], X)
-        np.testing.assert_array_equal(cds["y"], y)
+        # CUDA preserves float64 exactly; MPS downcasts to float32, so
+        # the roundtrip is lossy there — compare at float32 tolerance.
+        if dev == "cuda":
+            np.testing.assert_array_equal(cds["X"], X)
+            np.testing.assert_array_equal(cds["y"], y)
+        else:
+            np.testing.assert_allclose(cds["X"], X, rtol=1e-6, atol=1e-6)
+            np.testing.assert_allclose(cds["y"], y, rtol=1e-6, atol=1e-6)
         assert cds.device == "cpu"
 
     def test_same_device_is_same_object(self):
@@ -76,9 +92,10 @@ class TestDataSourceDevice:
         unnecessary copy)."""
         if not _gpu_available():
             pytest.skip("no GPU available")
+        dev = _gpu_device()
         ds = DataSource.from_arrays(X=np.ones((10, 3)))
-        gds = ds.to("cuda")
-        assert gds.to("cuda") is gds
+        gds = ds.to(dev)
+        assert gds.to(dev) is gds
 
     def test_to_cuda_without_gpu_raises(self, monkeypatch):
         """When no GPU is available, `.to('cuda')` fails loudly (Rule 1
@@ -94,7 +111,7 @@ class TestDataSourceDevice:
         if not _gpu_available():
             pytest.skip("no GPU available")
         ds = DataSource.from_arrays(X=np.ones((10, 3)), y=np.zeros(10))
-        gds = ds.to("cuda")
+        gds = ds.to(_gpu_device())
         assert gds.n_observations == 10
         assert gds.keys() == ds.keys()
 
@@ -108,10 +125,16 @@ class TestGpuDatasourceIntegration:
         from pystatistics.core.compute.tolerances import GPU_FP32
         if not _gpu_available():
             pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            # PCA GPU is CUDA-only — its SVD/eigendecomposition has no
+            # Metal kernel and the backend raises on MPS. DataSource.to()
+            # device residency itself is covered by TestDataSourceDevice.
+            pytest.skip("PCA GPU is CUDA-only (no MPS eigendecomposition)")
         rng = np.random.default_rng(0)
         X = rng.standard_normal((1000, 20))
         ds = DataSource.from_arrays(X=X)
-        gds = ds.to("cuda")
+        gds = ds.to(_gpu_device())
 
         r_cpu = pca(X, backend="cpu")
         r_gpu = pca(gds["X"], method="gram")
@@ -127,6 +150,6 @@ class TestGpuDatasourceIntegration:
         if not _gpu_available():
             pytest.skip("no GPU available")
         X = np.random.randn(100, 5)
-        gds = DataSource.from_arrays(X=X).to("cuda")
+        gds = DataSource.from_arrays(X=X).to(_gpu_device())
         with pytest.raises(ValidationError, match="torch.Tensor"):
             pca(gds["X"], backend="cpu")

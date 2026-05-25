@@ -44,6 +44,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
 from pystatistics.multivariate._common import PCAResult
 
 # Condition-number gate for the Gram-matrix path.
@@ -272,15 +273,15 @@ def _pca_gpu_gram(
     # X'X — the one big GEMM.
     G = X_gpu.T @ X_gpu                                         # (p, p)
     # Symmetric eigendecomp. eigh returns ascending eigenvalues.
+    # (CUDA only — the MPS device is rejected at the pca_gpu entry
+    # because linalg.eigh has no Metal kernel.)
     eigvals, eigvecs = torch.linalg.eigh(G)
 
     # Condition-number gate. Pull the two relevant scalars in ONE
     # D2H transfer so we don't pay two sync points (each sync can
     # cost ~40 ms on PCIe 4.0 even for a single scalar because it
     # blocks until prior kernels drain).
-    edge_pair = torch.stack(
-        [eigvals[0], eigvals[-1]]
-    ).to(torch.float64).cpu().numpy()
+    edge_pair = to_host_f64(torch.stack([eigvals[0], eigvals[-1]]))
     min_eig, max_eig = float(edge_pair[0]), float(edge_pair[1])
     if not force:
         ratio_threshold = _MIN_EIG_RATIO_FP64 if use_fp64 else _MIN_EIG_RATIO_FP32
@@ -368,10 +369,28 @@ def pca_gpu(
     """
     import torch
 
-    if device == "mps" and use_fp64:
+    # Validate inputs before any hardware dispatch so an invalid method
+    # raises the same ValidationError regardless of device.
+    if method not in ("svd", "gram", "auto"):
+        from pystatistics.core.exceptions import ValidationError
+        raise ValidationError(
+            f"method: must be 'svd', 'gram', or 'auto', got {method!r}"
+        )
+
+    if device == "mps":
+        # PCA is fundamentally an eigendecomposition / SVD problem, and
+        # neither ``torch.linalg.svd`` (the 'svd' path) nor the symmetric
+        # eigendecomposition of X'X (the 'gram' path) has a Metal kernel —
+        # both silently fall back to the CPU on MPS. There is therefore no
+        # genuine GPU PCA on Apple Silicon; offering one would advertise a
+        # capability we do not have. Fail fast (Coding Bible Rule 1) rather
+        # than quietly running on the CPU under a 'gpu' label.
         raise RuntimeError(
-            "GPU PCA: MPS does not support FP64. Use use_fp64=False or "
-            "backend='cpu'."
+            "GPU PCA is not supported on Apple Silicon (MPS): the SVD / "
+            "symmetric eigendecomposition that PCA requires has no Metal "
+            "kernel and would silently run on the CPU. Use backend='cpu' "
+            "(or backend='auto', which selects CPU on MPS). CUDA is "
+            "supported."
         )
 
     # NOTE on TF32: we deliberately do NOT enable
@@ -380,12 +399,6 @@ def pca_gpu(
     # ``scores = X_centered @ V`` matmul that dominates this kernel,
     # the per-element error exceeds the ``GPU_FP32`` tier (rtol=1e-4,
     # atol=1e-5) the project guarantees for GPU-vs-CPU agreement.
-
-    if method not in ("svd", "gram", "auto"):
-        from pystatistics.core.exceptions import ValidationError
-        raise ValidationError(
-            f"method: must be 'svd', 'gram', or 'auto', got {method!r}"
-        )
 
     n, p = X_arr.shape
 

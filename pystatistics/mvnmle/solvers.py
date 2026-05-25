@@ -300,6 +300,17 @@ def _get_em_device(
 
     elif backend_choice == 'gpu':
         device = select_device('gpu')  # raises RuntimeError if no GPU
+        if device.device_type == 'mps':
+            raise RuntimeError(
+                "backend='gpu' for the EM algorithm is not supported on "
+                "Apple Silicon (MPS). EM is an iterative fixed-point "
+                "method with small per-step work and per-pattern scatter "
+                "fills — a workload shape where Metal's kernel-launch "
+                "overhead makes it far slower than the CPU (see "
+                "docs/GPU_BACKEND_NOTES.md). Use backend='cpu' (or "
+                "backend='auto', which routes to CPU on MPS). CUDA is "
+                "supported."
+            )
         if not worth_gpu:
             warnings.warn(
                 f"backend='gpu': proceeding on GPU as requested, but "

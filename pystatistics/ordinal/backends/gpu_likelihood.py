@@ -30,6 +30,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
+
 
 class PolrGPULikelihood:
     """Stateful holder of GPU tensors for a cumulative link fit.
@@ -171,7 +173,7 @@ class PolrGPULikelihood:
         nll_t = self._nll_from_params(params_gpu)
         nll_t.backward()
         nll_val = float(nll_t.detach().cpu().item())
-        grad_val = params_gpu.grad.detach().to(torch.float64).cpu().numpy()
+        grad_val = to_host_f64(params_gpu.grad)
         return nll_val, grad_val
 
     def _ensure_cached(self, params_flat: NDArray[np.floating[Any]]) -> None:
@@ -230,7 +232,7 @@ class PolrGPULikelihood:
         except RuntimeError:
             vcov = torch.linalg.pinv(H)
 
-        return vcov.to(torch.float64).cpu().numpy()
+        return to_host_f64(vcov)
 
     def compute_log_lik(
         self, params_flat: NDArray[np.floating[Any]],

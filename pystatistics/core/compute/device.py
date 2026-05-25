@@ -118,12 +118,23 @@ def select_device(prefer: Literal['cpu', 'gpu', 'auto'] = 'auto') -> DeviceInfo:
             - 'cpu': Always use CPU
             - 'gpu': Require GPU (raises if unavailable)
             - 'auto': Use GPU if available, else CPU
-            
+
     Returns:
         DeviceInfo for selected device
-        
+
     Raises:
         RuntimeError: If 'gpu' requested but no GPU available
+
+    Note:
+        This is a hardware *detector*: with ``prefer='auto'`` it returns
+        the best available GPU, which includes Apple Silicon MPS. It does
+        NOT encode the project's dispatch policy. The fitting functions
+        deliberately do NOT auto-select MPS (it is FP32-only and not the
+        R-validated default); they treat ``'auto'`` as "GPU only if
+        ``device_type == 'cuda'``, else CPU", and run on MPS only when the
+        caller passes ``backend='gpu'`` explicitly. Keep that check in the
+        caller, not here, so ``select_device`` stays a pure capability
+        query.
     """
     if prefer == 'cpu':
         return get_cpu_info()

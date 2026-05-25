@@ -1,5 +1,40 @@
 # Changelog
 
+## 3.2.0
+
+Apple Silicon (MPS) GPU support for the FP32 backends, with honest,
+fail-fast boundaries where Metal can't deliver a real GPU path.
+
+- **GPU fitting now runs on Apple Silicon (MPS) for `multinom`, `polr`,
+  `gam`, and `arima` / `arima_batch` (Whittle).** Pass `backend='gpu'` on
+  a Mac with an Apple GPU to run these fits in FP32 on Metal. Every
+  operation on these paths is a native Metal kernel — there is no hidden
+  fallback to the CPU. Results match the CPU backend at the documented
+  GPU/FP32 tolerance tier. (MPS has no double precision, so `use_fp64=True`
+  is rejected on MPS; CUDA FP64 is unchanged.)
+- **`DataSource.to('mps')`** now transfers arrays to the Apple GPU,
+  downcasting float64 to float32 (MPS has no float64). This lets you pay
+  the host→device copy once and reuse a device-resident `DataSource`
+  across multiple GPU fits, as with CUDA.
+- **`backend='auto'` never selects MPS.** On Apple Silicon, `'auto'`
+  uses the CPU (double precision, the R-validated path); the Apple GPU is
+  opt-in only via an explicit `backend='gpu'`. CUDA continues to be
+  auto-selected. This matches how the regression and MVN MLE backends
+  already behaved.
+- **PCA and MVN MLE GPU remain CUDA-only.** `pca(backend='gpu')` and
+  `mlest(algorithm='em', backend='gpu')` now raise a clear error on Apple
+  Silicon instead of running silently on the CPU under a `gpu` label: PCA
+  needs an SVD / eigendecomposition that Metal does not implement, and the
+  EM algorithm's iterative, small-step pattern is far slower on Metal than
+  on the CPU. Use `backend='cpu'` (or `backend='auto'`, which selects the
+  CPU on MPS). CUDA is supported for both. MVN MLE *direct* (BFGS) GPU
+  fitting is unaffected and works on MPS.
+- **Whittle ARIMA GPU is more robust in FP32.** When the optimizer's line
+  search stalls at the FP32 noise floor on an already-converged fit, the
+  result is now accepted (it matches the CPU fit at the FP32 tier) instead
+  of raising a spurious convergence error. Non-stationary fits are still
+  rejected.
+
 ## 3.1.0
 
 Categorical predictors and interaction terms in regression.

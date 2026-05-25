@@ -316,7 +316,11 @@ def pca(
     if backend != "cpu":
         from pystatistics.core.compute.device import select_device
         dev = select_device("gpu" if backend == "gpu" else "auto")
-        if dev.is_gpu:
+        # backend='auto' must not select MPS: it is FP32-only and not the
+        # R-validated default. MPS runs only on explicit backend='gpu';
+        # 'auto' uses the GPU only for CUDA (matches the regression and
+        # mvnmle dispatch policy).
+        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
             from pystatistics.multivariate.backends.gpu_pca import pca_gpu
             return pca_gpu(
                 X_arr,

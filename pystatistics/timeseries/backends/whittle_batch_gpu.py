@@ -35,6 +35,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
+
 
 class BatchedWhittleGPU:
     """Fit K independent ARMA(p, q) models in parallel on GPU.
@@ -202,7 +204,7 @@ class BatchedWhittleGPU:
             zeros_K0 = np.zeros((self._K, 0), dtype=np.float64)
             return (
                 zeros_K0, zeros_K0,
-                sigma2.to(torch.float64).cpu().numpy(),
+                to_host_f64(sigma2),
                 0,
                 np.ones(self._K, dtype=bool),
             )
@@ -260,9 +262,9 @@ class BatchedWhittleGPU:
             sigma2 = (self._periodogram / g).mean(dim=1)
 
         return (
-            phi.to(torch.float64).cpu().numpy(),
-            theta.to(torch.float64).cpu().numpy(),
-            sigma2.to(torch.float64).cpu().numpy(),
+            to_host_f64(phi),
+            to_host_f64(theta),
+            to_host_f64(sigma2),
             n_iter,
             converged.cpu().numpy(),
         )

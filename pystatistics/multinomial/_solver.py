@@ -551,7 +551,11 @@ def multinom(
     else:
         from pystatistics.core.compute.device import select_device
         dev = select_device("gpu" if backend == "gpu" else "auto")
-        if dev.is_gpu:
+        # backend='auto' must not select MPS: it is FP32-only and not the
+        # R-validated default. MPS runs only on explicit backend='gpu';
+        # 'auto' uses the GPU only for CUDA (matches the regression and
+        # mvnmle dispatch policy).
+        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
             params_flat, vcov, n_iter, converged, gpu_like = _fit_multinom_gpu(
                 y_codes, X_arr, n_classes, effective_tol, max_iter,
                 device=dev.device_type,

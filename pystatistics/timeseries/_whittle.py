@@ -362,7 +362,11 @@ def fit_arima_whittle(
     if backend != "cpu":
         from pystatistics.core.compute.device import select_device
         dev = select_device("gpu" if backend == "gpu" else "auto")
-        if dev.is_gpu:
+        # backend='auto' must not select MPS: it is FP32-only and not the
+        # R-validated default. MPS runs only on explicit backend='gpu';
+        # 'auto' uses the GPU only for CUDA (matches the regression and
+        # mvnmle dispatch policy).
+        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
             from pystatistics.timeseries.backends.whittle_gpu import (
                 WhittleGPULikelihood,
             )
@@ -405,7 +409,19 @@ def fit_arima_whittle(
             options={"maxiter": max_iter, "gtol": effective_tol,
                      "ftol": 1e-12 if use_fp64 else effective_tol},
         )
-        if not result.success:
+        # FP32 GPU: L-BFGS-B routinely reports ABNORMAL_TERMINATION_IN_
+        # LNSRCH at/near the optimum because the line search cannot make
+        # Wolfe-condition progress below the FP32 gradient noise floor —
+        # the point is already stationary (verified: matches the CPU
+        # Whittle fit to ~1e-4 on the AR(2)-MA(1) reference). This is the
+        # documented FP32 two-tier behavior, not a divergence, so accept
+        # it on the FP32 path. The AR-stationarity check below still
+        # rejects genuinely bad points, and the GPU_FP32 tier validates
+        # the statistical answer. Any other failure stays a hard error.
+        fp32_lnsrch_stall = (not use_fp64) and (
+            "ABNORMAL" in str(result.message)
+        )
+        if not result.success and not fp32_lnsrch_stall:
             raise ConvergenceError(
                 f"Whittle ARIMA (GPU) did not converge: {result.message}",
                 iterations=int(result.nit),

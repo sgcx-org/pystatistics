@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.torch_interop import to_host_f64
 from pystatistics.gam.backends._gpu_family import (
     GPUFamilyOps,
     resolve_gpu_family,
@@ -173,8 +174,8 @@ class GAMGPUFitter:
         FP64 precision.
         """
         torch = self._torch
-        A_np = A.detach().to(torch.float64).cpu().numpy()
-        b_np = b.detach().to(torch.float64).cpu().numpy()
+        A_np = to_host_f64(A)
+        b_np = to_host_f64(b)
         try:
             L = np.linalg.cholesky(A_np)
             beta_np = np.linalg.solve(L.T, np.linalg.solve(L, b_np))
@@ -205,8 +206,8 @@ class GAMGPUFitter:
         ``X'WX``) stays on device; only the p×p solve goes via host.
         """
         torch = self._torch
-        A_np = A.detach().to(torch.float64).cpu().numpy()
-        XtWX_np = XtWX.detach().to(torch.float64).cpu().numpy()
+        A_np = to_host_f64(A)
+        XtWX_np = to_host_f64(XtWX)
         try:
             F_np = np.linalg.solve(A_np, XtWX_np)
         except np.linalg.LinAlgError:
@@ -330,10 +331,10 @@ class GAMGPUFitter:
         mu = self._fam.linkinv(eta)
 
         return (
-            beta.detach().to(torch.float64).cpu().numpy(),
-            mu.detach().to(torch.float64).cpu().numpy(),
-            eta.detach().to(torch.float64).cpu().numpy(),
-            w.detach().to(torch.float64).cpu().numpy(),
+            to_host_f64(beta),
+            to_host_f64(mu),
+            to_host_f64(eta),
+            to_host_f64(w),
             float(dev_t.detach().cpu().item()),
             n_iter,
             converged,
@@ -426,10 +427,10 @@ class GAMGPUFitter:
         return (
             np.asarray(edf_list, dtype=np.float64),
             total_edf,
-            beta.detach().to(torch.float64).cpu().numpy(),
-            mu.detach().to(torch.float64).cpu().numpy(),
-            eta.detach().to(torch.float64).cpu().numpy(),
-            w.detach().to(torch.float64).cpu().numpy(),
+            to_host_f64(beta),
+            to_host_f64(mu),
+            to_host_f64(eta),
+            to_host_f64(w),
             float(dev_t.detach().cpu().item()),
             n_iter,
             converged,

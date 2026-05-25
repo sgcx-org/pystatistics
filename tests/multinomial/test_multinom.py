@@ -625,9 +625,16 @@ class TestMultinomGPU:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
-        return torch.cuda.is_available()
+        # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
+        # (FP32 path). FP64-only tests skip themselves on MPS below.
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+
+    def _gpu_device(self) -> str:
+        """The available GPU device string for ``.to(...)`` calls."""
+        import torch
+        return "cuda" if torch.cuda.is_available() else "mps"
 
     def test_invalid_backend_raises(self, three_class_data):
         y, X, _ = three_class_data
@@ -701,7 +708,7 @@ class TestMultinomGPU:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         y, X, _ = three_class_data
-        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+        gds = DataSource.from_arrays(X=X, y=y).to(self._gpu_device())
 
         r_numpy = multinom(y, X, backend="gpu", use_fp64=False)
         r_tensor = multinom(gds["y"], gds["X"], use_fp64=False)  # backend inferred
@@ -717,7 +724,7 @@ class TestMultinomGPU:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         y, X, _ = three_class_data
-        gds = DataSource.from_arrays(X=X, y=y).to("cuda")
+        gds = DataSource.from_arrays(X=X, y=y).to(self._gpu_device())
         from pystatistics.core.exceptions import ValidationError
         with pytest.raises(ValidationError, match="torch.Tensor"):
             multinom(gds["y"], gds["X"], backend="cpu")

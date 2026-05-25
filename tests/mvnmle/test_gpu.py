@@ -26,9 +26,13 @@ from pystatistics.mvnmle import mlest, datasets, MVNDesign, MVNSolution
 def _gpu_available():
     """Check if a CUDA GPU is available for testing.
 
-    GPU tests require CUDA: MPS is FP32-only (no float64) and lacks several
-    linalg ops the EM backend needs (e.g. cholesky_solve). FP32 MPS support
-    is tracked as a separate effort.
+    GPU tests for MVN MLE require CUDA. The EM algorithm is iterative
+    with per-pattern scatter fills and a cholesky_solve inner step —
+    exactly the small/sequential + sparse-scatter workload shape that
+    Metal (MPS) handles far worse than CPU (see docs/GPU_BACKEND_NOTES.md:
+    "Sequential algorithms / small problems: CPU wins"). MVN MLE GPU
+    support is therefore CUDA-only by design; on Apple Silicon use
+    ``backend='cpu'`` (and ``backend='auto'`` routes there automatically).
     """
     try:
         import torch

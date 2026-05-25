@@ -496,9 +496,11 @@ class TestGAMGPU:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
-        return torch.cuda.is_available()
+        # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
+        # (FP32 path). FP64-only tests skip themselves on MPS below.
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
 
     def test_invalid_backend_raises(self, sine_data):
         x, y = sine_data

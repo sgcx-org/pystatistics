@@ -344,6 +344,25 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.2.0 — Apple Silicon (MPS) GPU support
+
+- `multinom`, `polr`, `gam`, and `arima` / `arima_batch` (Whittle) now run
+  on Apple Silicon GPUs with `backend='gpu'`, in FP32 and entirely on
+  native Metal kernels (no hidden CPU fallback). Results match the CPU
+  backend at the GPU/FP32 tolerance tier.
+- `DataSource.to('mps')` transfers data to the Apple GPU (float64 →
+  float32), so you can pay the host→device copy once and reuse it across
+  fits.
+- `backend='auto'` uses the CPU on Apple Silicon; the Apple GPU is opt-in
+  via an explicit `backend='gpu'`. CUDA is still auto-selected.
+- `pca` and MVN MLE `em` GPU paths remain CUDA-only and now raise a clear
+  error on Apple Silicon rather than silently running on the CPU — PCA's
+  SVD/eigendecomposition and the EM scatter/iteration pattern have no
+  efficient Metal equivalent. Use `backend='cpu'` or `'auto'` on a Mac.
+  (MVN MLE *direct* GPU fitting works on MPS.)
+- Whittle ARIMA GPU fits no longer raise a spurious convergence error when
+  the FP32 line search stalls at an already-converged optimum.
+
 ### 3.1.0 — Categorical predictors & interaction terms
 
 - Regression now supports categorical predictors and interactions via a

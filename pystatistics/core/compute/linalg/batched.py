@@ -145,9 +145,16 @@ def _batched_ols_gpu(X: NDArray, Y: NDArray, device: str) -> NDArray:
             L.T, Z, upper=True,
         )
     except torch._C._LinAlgError:
-        # Fallback: lstsq
-        result = torch.linalg.lstsq(X_t, Y_t)
-        B = result.solution
+        # Fallback for rank-deficient X: lstsq. MPS has no lstsq, and
+        # the normal-equations Cholesky we just tried is exactly what
+        # failed, so route the rank-revealing solve through CPU LAPACK
+        # (the matrices are small here and this path is rare).
+        if torch_device.type == 'mps':
+            result = torch.linalg.lstsq(X_t.cpu(), Y_t.cpu())
+            B = result.solution.to(torch_device)
+        else:
+            result = torch.linalg.lstsq(X_t, Y_t)
+            B = result.solution
 
     # Transfer back to CPU
     return B.cpu().numpy().astype(np.float64)

@@ -229,8 +229,10 @@ class TestPCAGPU:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
+        # PCA GPU is CUDA-only: the SVD / symmetric eigendecomposition
+        # PCA needs has no Metal kernel and silently falls back to CPU on
+        # MPS, so there is no genuine GPU PCA on Apple Silicon (the
+        # backend raises there — see test_pca_gpu_on_mps_raises).
         return torch.cuda.is_available()
 
     def test_gpu_unavailable_raises_explicitly(self, iris_like_data, monkeypatch):
@@ -248,6 +250,24 @@ class TestPCAGPU:
     def test_invalid_backend_raises(self, iris_like_data):
         with pytest.raises(ValidationError, match="backend"):
             pca(iris_like_data, backend="quantum")
+
+    def test_pca_gpu_on_mps_raises(self, iris_like_data):
+        """On Apple Silicon, explicit backend='gpu' must raise rather than
+        silently running the SVD/eigendecomposition on the CPU (Rule 1).
+        PCA GPU is CUDA-only by design."""
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("torch not installed")
+        mps_only = (
+            not torch.cuda.is_available()
+            and hasattr(torch.backends, "mps")
+            and torch.backends.mps.is_available()
+        )
+        if not mps_only:
+            pytest.skip("requires an MPS-only machine")
+        with pytest.raises(RuntimeError, match="MPS"):
+            pca(iris_like_data, backend="gpu")
 
     def test_gpu_fp64_matches_cpu(self, iris_like_data):
         """FP64 GPU path should match CPU to machine precision."""
@@ -617,8 +637,10 @@ class TestPCADeviceResident:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
+        # PCA GPU is CUDA-only: the SVD / symmetric eigendecomposition
+        # PCA needs has no Metal kernel and silently falls back to CPU on
+        # MPS, so there is no genuine GPU PCA on Apple Silicon (the
+        # backend raises there — see test_pca_gpu_on_mps_raises).
         return torch.cuda.is_available()
 
     def test_default_result_is_numpy_backed(self):

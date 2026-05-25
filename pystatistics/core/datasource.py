@@ -385,11 +385,19 @@ class DataSource:
             else:
                 # Coerce numpy→torch on device; move torch to device.
                 if isinstance(value, torch.Tensor):
-                    new_storage[key] = value.to(target)
+                    tensor = value
                 elif isinstance(value, np.ndarray):
-                    new_storage[key] = torch.as_tensor(value).to(target)
+                    tensor = torch.as_tensor(value)
                 else:
                     new_storage[key] = value
+                    continue
+                # MPS has no float64. Downcast double tensors to float32
+                # before transfer so the device-resident path works on
+                # Apple Silicon; CUDA keeps the source dtype (FP64 is the
+                # R-validated path there).
+                if target.type == "mps" and tensor.dtype == torch.float64:
+                    tensor = tensor.to(torch.float32)
+                new_storage[key] = tensor.to(target)
 
         capabilities = {CAPABILITY_MATERIALIZED, CAPABILITY_REPEATABLE}
         if target_is_gpu:

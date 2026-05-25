@@ -706,9 +706,11 @@ class TestArimaWhittleGPU:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
-        return torch.cuda.is_available()
+        # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
+        # (FP32 path). FP64-only tests skip themselves on MPS below.
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
 
     def test_invalid_backend_raises(self):
         y = _ar2_ma1_series(500)
@@ -880,8 +882,20 @@ class TestArimaBatchGPU:
             import torch
         except ImportError:
             return False
-        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
-        # several linalg ops. FP32 MPS support is tracked as a separate effort.
+        # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
+        # (FP32 path). FP64-only tests skip themselves on MPS below.
+        return torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+
+    def _gpu_device(self) -> str:
+        """The available GPU device string for ``.to(...)`` calls."""
+        import torch
+        return "cuda" if torch.cuda.is_available() else "mps"
+
+    def _gpu_use_fp64(self) -> bool:
+        """FP64 only on CUDA; MPS has no float64, so FP32 there."""
+        import torch
         return torch.cuda.is_available()
 
     def test_gpu_unavailable_raises_explicitly(self, monkeypatch):
@@ -913,7 +927,7 @@ class TestArimaBatchGPU:
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=30, n=3000, seed=1)
         r_gpu = arima_batch(Y, order=(1, 0, 0), method="Whittle",
-                            backend="gpu", use_fp64=True)
+                            backend="gpu", use_fp64=self._gpu_use_fp64())
         gpu_phi = []
         cpu_phi = []
         for k in range(30):
@@ -931,9 +945,19 @@ class TestArimaBatchGPU:
 
     def test_gpu_batch_converges_on_all_series(self):
         """All series should converge within max_iter at the default
-        learning rate on a well-posed synthetic problem."""
+        learning rate on a well-posed synthetic problem.
+
+        Gradient-norm convergence to the default tol (1e-5) is an FP64
+        property: in FP32 the per-series gradient noise floor sits above
+        1e-5, so many series never flag converged even though their
+        estimates are accurate (see ``test_gpu_matches_serial_whittle_
+        on_phi``, which validates the FP32 estimates on MPS). Restrict
+        the convergence-count assertion to the FP64 (CUDA) path."""
         if not self._gpu_available():
             pytest.skip("no GPU available")
+        import torch
+        if not torch.cuda.is_available():
+            pytest.skip("convergence-to-1e-5 count is an FP64/CUDA property")
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=50, n=2000, seed=2)
         r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
@@ -950,7 +974,7 @@ class TestArimaBatchGPU:
         import torch
         from pystatistics.timeseries import arima_batch
         Y_np, _ = _ar1_batch(K=10, n=1000, seed=3)
-        Y_t = torch.as_tensor(Y_np, device="cuda", dtype=torch.float32)
+        Y_t = torch.as_tensor(Y_np, device=self._gpu_device(), dtype=torch.float32)
         r = arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
                         use_fp64=False)
         assert "GPU" in r.method
@@ -963,7 +987,7 @@ class TestArimaBatchGPU:
         import torch
         from pystatistics.timeseries import arima_batch
         Y_np, _ = _ar1_batch(K=5, n=500)
-        Y_t = torch.as_tensor(Y_np, device="cuda", dtype=torch.float32)
+        Y_t = torch.as_tensor(Y_np, device=self._gpu_device(), dtype=torch.float32)
         with pytest.raises(ValidationError, match="torch.Tensor"):
             arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
                         backend="cpu")
