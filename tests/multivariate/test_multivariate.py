@@ -229,9 +229,9 @@ class TestPCAGPU:
             import torch
         except ImportError:
             return False
-        return torch.cuda.is_available() or (
-            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        )
+        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
+        # several linalg ops. FP32 MPS support is tracked as a separate effort.
+        return torch.cuda.is_available()
 
     def test_gpu_unavailable_raises_explicitly(self, iris_like_data, monkeypatch):
         """backend='gpu' must raise when no GPU is available, not silently
@@ -617,10 +617,9 @@ class TestPCADeviceResident:
             import torch
         except ImportError:
             return False
-        return torch.cuda.is_available() or (
-            hasattr(torch.backends, "mps")
-            and torch.backends.mps.is_available()
-        )
+        # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks
+        # several linalg ops. FP32 MPS support is tracked as a separate effort.
+        return torch.cuda.is_available()
 
     def test_default_result_is_numpy_backed(self):
         """Back-compat: default GPU path returns a numpy-backed result.

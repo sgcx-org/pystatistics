@@ -161,6 +161,7 @@ def coxph(
     event,
     X,
     *,
+    terms=None,
     names: list[str] | None = None,
     strata=None,
     ties: Literal["efron", "breslow"] = "efron",
@@ -177,8 +178,16 @@ def coxph(
         Time to event or censoring.
     event : array-like
         Event indicator (1=event, 0=censored).
-    X : array-like
+    X : array-like or DataSource
         Covariate matrix (n, p). No intercept — Cox model has no intercept.
+        When ``terms`` is given, ``X`` is instead the data source (a
+        DataSource or column mapping) from which the term spec pulls columns.
+    terms : sequence or None
+        Structured term spec for categorical predictors and interactions
+        (bare column names, C(name, ref=...), or tuples of those). When
+        given, the covariate matrix is built from ``X`` (the source) with no
+        intercept, and the expanded column labels are used automatically.
+        Mutually exclusive with ``names``.
     strata : array-like or None
         Strata labels for stratified Cox (not yet implemented).
     ties : str
@@ -192,6 +201,12 @@ def coxph(
     -------
     CoxSolution
     """
+    if terms is not None:
+        if names is not None:
+            raise ValueError("Pass either terms or names, not both")
+        from pystatistics.regression.terms import build_terms_design
+        X, names = build_terms_design(X, terms, intercept=False)
+
     design = SurvivalDesign.for_survival(time, event, X)
 
     if design.X is None:

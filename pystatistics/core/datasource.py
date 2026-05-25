@@ -197,11 +197,24 @@ class DataSource:
     
     @classmethod
     def from_dataframe(cls, df: 'pd.DataFrame', *, source_path: str | None = None) -> DataSource:
-        """Construct from pandas DataFrame."""
+        """Construct from pandas DataFrame.
+
+        Numeric columns are stored as float64. Non-numeric columns (strings,
+        objects, pandas categoricals) are preserved as-is rather than being
+        force-cast — they are the raw material for categorical predictors,
+        which the regression term builder encodes via C(...). Force-casting
+        them to float would either crash or silently corrupt the data.
+        """
+        import pandas as pd
+
         storage: dict[str, Any] = {}
-        
+
         for col in df.columns:
-            storage[col] = df[col].to_numpy(dtype=np.float64)
+            series = df[col]
+            if pd.api.types.is_numeric_dtype(series):
+                storage[col] = series.to_numpy(dtype=np.float64)
+            else:
+                storage[col] = series.to_numpy()
         
         metadata = {
             'n_observations': len(df),

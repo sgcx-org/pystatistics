@@ -1,5 +1,58 @@
 # Changelog
 
+## 3.1.0
+
+Categorical predictors and interaction terms in regression.
+
+- **Factor support in `fit()` and `coxph()`.** Regression models can now
+  include categorical predictors and interaction terms, alongside the
+  existing numeric-matrix path. Describe the model with a list of *terms*
+  passed to `Design.from_datasource(..., terms=...)`:
+
+  - a bare column name is a numeric main effect,
+  - `C(name, ref=...)` is a categorical predictor (treatment/dummy coded,
+    expanding a *k*-level factor into *k−1* indicator columns), with a
+    selectable reference (baseline) level — the first level in sorted order
+    by default,
+  - a tuple of those is an interaction (numeric×numeric, numeric×categorical,
+    and categorical×categorical are all supported).
+
+  This works for ordinary least squares, every GLM family, and Cox
+  proportional hazards (which remains intercept-free). Expanded columns are
+  labeled `sex[M]`, `treatment[B]:sex[M]`, and `coef`, `standard_errors`,
+  the test statistic, and `p_values` stay aligned to those labels. Interaction
+  columns follow R's `model.matrix` ordering (the first factor varies
+  fastest), and design matrices and fitted coefficients match R's
+  `lm`/`glm`/`survival::coxph` for factors and interactions.
+
+  ```python
+  from pystatistics import DataSource
+  from pystatistics.regression import Design, fit, C
+
+  ds = DataSource.from_dataframe(df)
+  design = Design.from_datasource(
+      ds, y="response",
+      terms=["age", C("sex", ref="F"), C("treatment", ref="A"),
+             (C("treatment", ref="A"), C("sex", ref="F"))],
+  )
+  result = fit(design)                       # family=… for GLMs
+  result.coef["treatment[B]:sex[M]"]
+  ```
+
+  New public symbol: `pystatistics.regression.C`.
+
+- **`DataSource.from_dataframe` preserves non-numeric columns.** Numeric
+  columns are still stored as float64; string/object/categorical columns are
+  now retained as-is instead of being force-cast (which previously raised on
+  string columns). These are the inputs encoded by `C(...)`.
+
+- **ETS now converges on (near-)perfectly-fit series.** The Gaussian
+  likelihood's variance floor is now relative to the data scale rather than a
+  fixed `1e-30`. On a noiseless or near-noiseless series the residual variance
+  no longer drives the objective toward an unbounded optimum, so the optimiser
+  reports convergence instead of an abnormal line-search termination. Fits on
+  ordinary (noisy) series are numerically unchanged.
+
 ## 3.0.1
 
 Metadata and documentation polish. No API changes.

@@ -161,6 +161,27 @@ y_binary = (X @ [1, -1, 0.5, 0, 0] + np.random.randn(1000) > 0).astype(float)
 result = fit(X, y_binary, family='binomial')
 print(result.summary())
 
+# --- Categorical predictors & interactions ---
+# Describe a model as a list of terms (no R-style formula strings):
+#   "name"          -> numeric main effect
+#   C(name, ref=…)  -> categorical, treatment-coded with a chosen baseline
+#   (a, b)          -> interaction (numeric and/or categorical)
+from pystatistics import DataSource
+from pystatistics.regression import Design, fit, C
+
+ds = DataSource.from_dataframe(df)   # df has age, sex, treatment, response
+design = Design.from_datasource(
+    ds, y='response',
+    terms=['age', C('sex', ref='F'), C('treatment', ref='A'),
+           (C('treatment', ref='A'), C('sex', ref='F'))],
+)
+result = fit(design)                       # also works with family=… for GLMs
+print(result.coef['treatment[B]:sex[M]'])  # interaction coefficient
+
+# Cox PH takes the same spec (no intercept):
+from pystatistics.survival import coxph
+cox = coxph(time, event, ds, terms=['age', C('sex', ref='F')])
+
 # GPU acceleration (any model)
 result = fit(X, y, backend='gpu')
 
@@ -322,6 +343,20 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 3.1.0 — Categorical predictors & interaction terms
+
+- Regression now supports categorical predictors and interactions via a
+  `terms=` spec on `Design.from_datasource`: bare names are numeric main
+  effects, `C(name, ref=...)` marks a categorical predictor with a selectable
+  baseline level, and tuples express interactions (numeric and/or
+  categorical). Works for OLS, all GLM families, and Cox PH (no intercept).
+- Expanded columns are labeled `sex[M]`, `treatment[B]:sex[M]`, with `coef`
+  and inference outputs aligned to those labels. Design matrices match R's
+  `model.matrix` for factors and interactions.
+- `DataSource.from_dataframe` now keeps non-numeric columns as-is (previously
+  force-cast to float), so categorical columns can feed `C(...)`.
+- New public symbol: `pystatistics.regression.C`.
 
 ### 3.0.1 — Metadata and documentation polish
 

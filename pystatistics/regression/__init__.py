@@ -22,6 +22,7 @@ Usage:
 
 from pystatistics.core.datasource import DataSource
 from pystatistics.regression.design import Design
+from pystatistics.regression.terms import C
 from pystatistics.regression.solution import (
     LinearSolution, LinearParams,
     GLMSolution, GLMParams,
@@ -34,6 +35,7 @@ from pystatistics.regression.families import (
 __all__ = [
     "fit",
     "Design",
+    "C",
     "DataSource",
     # LM types
     "LinearSolution",

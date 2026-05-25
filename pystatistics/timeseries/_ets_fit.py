@@ -260,6 +260,21 @@ def _init_season(y: NDArray, spec: ETSSpec, level: float) -> NDArray | None:
 # Negative log-likelihood
 # ---------------------------------------------------------------------------
 
+def _sigma2_floor(y: NDArray) -> float:
+    """Variance floor for the (concentrated) Gaussian likelihood.
+
+    A perfectly-fit (noiseless) series drives residual variance toward zero,
+    which sends the additive/multiplicative log-likelihood to -infinity and
+    leaves L-BFGS-B chasing an open boundary with an exploding gradient
+    (it terminates ABNORMAL in the line search). Flooring sigma^2 relative to
+    the data scale keeps the objective bounded and its gradient finite, so
+    degenerate inputs converge cleanly. The floor is ~1e-12 of the data
+    variance — far below any real noise level — so fits on genuine (noisy)
+    series are numerically unchanged.
+    """
+    return 1e-12 * (float(np.var(y)) + 1e-30)
+
+
 def _neg_loglik(
     theta: NDArray,
     y: NDArray,
@@ -308,16 +323,17 @@ def _neg_loglik(
 
     n = len(y)
 
+    floor = _sigma2_floor(y)
     if spec.error == "A":
         sigma2 = float(np.mean(residuals ** 2))
-        if sigma2 < 1e-30:
-            sigma2 = 1e-30
+        if sigma2 < floor:
+            sigma2 = floor
         nll = 0.5 * n * np.log(2.0 * np.pi) + 0.5 * n * np.log(sigma2) + 0.5 * n
     else:
         # Multiplicative error: residuals are relative errors (y/mu - 1)
         sigma2 = float(np.mean(residuals ** 2))
-        if sigma2 < 1e-30:
-            sigma2 = 1e-30
+        if sigma2 < floor:
+            sigma2 = floor
         # Jacobian term: sum of log|mu_t|
         log_abs_fitted = np.log(np.abs(fitted) + 1e-30)
         nll = (
@@ -532,15 +548,16 @@ def ets(
     a_opt, b_opt, g_opt, p_opt = unpack_params(params_opt, spec)
 
     # ---- information criteria ---------------------------------------------
+    floor = _sigma2_floor(y_arr)
     if spec.error == "A":
         sigma2 = float(np.mean(resid ** 2))
-        if sigma2 < 1e-30:
-            sigma2 = 1e-30
+        if sigma2 < floor:
+            sigma2 = floor
         ll = -0.5 * n * np.log(2.0 * np.pi) - 0.5 * n * np.log(sigma2) - 0.5 * n
     else:
         sigma2 = float(np.mean(resid ** 2))
-        if sigma2 < 1e-30:
-            sigma2 = 1e-30
+        if sigma2 < floor:
+            sigma2 = floor
         log_abs_fitted = np.log(np.abs(fitted_vals) + 1e-30)
         ll = (
             -0.5 * n * np.log(2.0 * np.pi)

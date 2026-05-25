@@ -92,8 +92,12 @@ def fit(
             raise ValueError("y required when passing arrays")
         design = Design.from_arrays(np.asarray(X_or_design), np.asarray(y))
 
-    # Resolve names: auto-prepend "(Intercept)" if needed
-    resolved_names = _resolve_names(names, design.p)
+    # Resolve names: a Design built from a term spec carries its own column
+    # labels; an explicit names= argument overrides them.
+    if names is None and design.names is not None:
+        resolved_names = design.names
+    else:
+        resolved_names = _resolve_names(names, design.p)
 
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:

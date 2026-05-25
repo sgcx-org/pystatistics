@@ -20,9 +20,9 @@ def _gpu_available() -> bool:
         import torch
     except ImportError:
         return False
-    return torch.cuda.is_available() or (
-        hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-    )
+    # GPU tests require CUDA: MPS is FP32-only (no float64) and lacks several
+    # linalg ops. FP32 MPS support is tracked as a separate effort.
+    return torch.cuda.is_available()
 
 
 class TestDataSourceDevice:

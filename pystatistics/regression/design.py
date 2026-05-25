@@ -11,7 +11,7 @@ for making chairs." The lumber yard just provides logs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 import numpy as np
 from numpy.typing import NDArray
 
@@ -39,7 +39,8 @@ class Design:
     _n: int
     _p: int
     _source: DataSource | None = None
-    
+    _names: tuple[str, ...] | None = None
+
     @classmethod
     def from_datasource(
         cls,
@@ -47,21 +48,35 @@ class Design:
         *,
         x: str | list[str] | None = None,
         y: str | None = None,
+        terms: 'Sequence[Any] | None' = None,
     ) -> Design:
         """
         Build Design from DataSource.
-        
+
         Args:
             source: The DataSource
             x: Predictor column(s). If None and source has 'X', uses that.
                If None and y is specified, uses all columns except y.
             y: Response column. If None, uses 'y' from source.
-        
+            terms: Structured term spec for categorical predictors and
+                interactions (mutually exclusive with x). A list whose
+                elements are bare column names (numeric main effects),
+                C(name, ref=...) markers (categorical main effects), or
+                tuples of those (interactions). When given, an intercept
+                column is added automatically and the expanded column labels
+                travel with the Design (see ``names``). Requires y.
+
         Returns:
             Design ready for regression
-        
+
         Assumes good faith: garbage in, garbage out.
         """
+        if terms is not None:
+            return cls._from_terms(source, terms=terms, y=y)
+
+        if x is not None and terms is not None:
+            raise ValueError("Pass either x or terms, not both")
+
         # Get y
         if y is not None:
             y_arr = source[y]
@@ -109,9 +124,40 @@ class Design:
         X = np.asarray(X, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         return cls._build(X, y, source=None)
-    
+
     @classmethod
-    def _build(cls, X: NDArray, y: NDArray, source: DataSource | None) -> Design:
+    def _from_terms(
+        cls,
+        source: DataSource,
+        *,
+        terms: Sequence[Any],
+        y: str | None,
+    ) -> Design:
+        """Build Design from a structured term spec (categorical/interactions)."""
+        from pystatistics.regression.terms import build_terms_design
+
+        if y is not None:
+            y_arr = source[y]
+        elif 'y' in source:
+            y_arr = source['y']
+        else:
+            raise ValueError("terms= requires y (or a 'y' array in the source)")
+
+        if hasattr(y_arr, 'cpu'):
+            y_arr = y_arr.cpu().numpy()
+        y_arr = np.asarray(y_arr, dtype=np.float64)
+
+        X_arr, names = build_terms_design(source, terms, intercept=True)
+        return cls._build(X_arr, y_arr, source=source, names=tuple(names))
+
+    @classmethod
+    def _build(
+        cls,
+        X: NDArray,
+        y: NDArray,
+        source: DataSource | None,
+        names: tuple[str, ...] | None = None,
+    ) -> Design:
         """Internal builder with validation."""
         # Ensure correct shapes
         if X.ndim == 1:
@@ -128,8 +174,13 @@ class Design:
         
         n, p = X.shape
         check_min_samples(X, p, 'X')
-        
-        return cls(_X=X, _y=y, _n=n, _p=p, _source=source)
+
+        if names is not None and len(names) != p:
+            raise ValueError(
+                f"names has {len(names)} entries but X has {p} columns"
+            )
+
+        return cls(_X=X, _y=y, _n=n, _p=p, _source=source, _names=names)
     
     # === Properties ===
     
@@ -157,6 +208,15 @@ class Design:
     def source(self) -> DataSource | None:
         """Original DataSource, if available."""
         return self._source
+
+    @property
+    def names(self) -> tuple[str, ...] | None:
+        """Column labels aligned with X, when built from a term spec.
+
+        None for designs built from plain arrays/columns (the caller supplies
+        names to fit() in that case).
+        """
+        return self._names
     
     def supports(self, capability: str) -> bool:
         """Check if underlying data supports a capability."""

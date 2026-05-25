@@ -24,23 +24,25 @@ from pystatistics.mvnmle import mlest, datasets, MVNDesign, MVNSolution
 
 
 def _gpu_available():
-    """Check if any GPU is available for testing."""
+    """Check if a CUDA GPU is available for testing.
+
+    GPU tests require CUDA: MPS is FP32-only (no float64) and lacks several
+    linalg ops the EM backend needs (e.g. cholesky_solve). FP32 MPS support
+    is tracked as a separate effort.
+    """
     try:
         import torch
-        return (torch.cuda.is_available() or
-                (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()))
+        return torch.cuda.is_available()
     except ImportError:
         return False
 
 
 def _gpu_device():
-    """Return the GPU device type string ('cuda' or 'mps')."""
+    """Return the GPU device type string ('cuda')."""
     try:
         import torch
         if torch.cuda.is_available():
             return 'cuda'
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return 'mps'
     except ImportError:
         pass
     return None
