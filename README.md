@@ -366,6 +366,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.4.1 — Faster CPU predictive mean matching
+
+- CPU PMM in `mice` now scales to large datasets: the donor search sorts the
+  observed predictions and scans a small window per missing value (as R's
+  `mice` does) instead of forming a full distance matrix, cutting time and
+  memory from quadratic to roughly `n log n`. Large problems that were
+  effectively unusable on the CPU now finish in seconds. Results are
+  statistically unchanged.
+
 ### 3.4.0 — GPU acceleration for MICE
 
 - `mice(..., backend='gpu')` runs the imputation chains on a CUDA GPU, batching

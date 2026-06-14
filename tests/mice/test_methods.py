@@ -130,6 +130,35 @@ class TestPMM:
         idx = _match_donors(yhat_mis, yhat_obs, donors=5, rng=rng)
         assert np.all((idx >= 0) & (idx < 2))
 
+    def test_windowed_matcher_returns_true_knn(self):
+        # The chosen donor must always be within the true global k-NN computed
+        # by brute force — the windowed search must not miss nearer donors.
+        rng = make_rng(0)
+        obs_rng = np.random.default_rng(1)
+        yhat_obs = obs_rng.normal(size=300)
+        yhat_mis = obs_rng.normal(size=120)
+        k = 5
+        # Brute-force k nearest observed indices for each missing value.
+        full = np.abs(yhat_mis[:, None] - yhat_obs[None, :])
+        true_knn = set(
+            (i, j)
+            for i in range(len(yhat_mis))
+            for j in np.argpartition(full[i], k - 1)[:k]
+        )
+        chosen = _match_donors(yhat_mis, yhat_obs, donors=k, rng=rng)
+        for i, j in enumerate(chosen):
+            assert (i, int(j)) in true_knn
+
+    def test_matcher_donor_values_are_observed(self):
+        # End-to-end: the matched index points at a real observed value.
+        rng = make_rng(0)
+        obs_rng = np.random.default_rng(2)
+        y_obs = obs_rng.normal(size=200)
+        yhat_obs = obs_rng.normal(size=200)
+        yhat_mis = obs_rng.normal(size=80)
+        idx = _match_donors(yhat_mis, yhat_obs, donors=5, rng=rng)
+        assert np.all((idx >= 0) & (idx < 200))
+
     def test_single_donor_picks_nearest(self):
         # With donors=1, each missing gets the single closest observed value.
         rng = make_rng(0)

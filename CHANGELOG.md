@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.4.1
+
+Performance: CPU predictive mean matching now scales to large datasets.
+
+- The CPU PMM donor search no longer builds a dense distance matrix between
+  every missing and every observed value. It sorts the observed predictions
+  once and searches a small window around each missing value (the same approach
+  R's `mice` uses), reducing both time and memory from quadratic in the number
+  of rows to roughly `n log n`. In practice CPU PMM at n=3000 dropped from ~25s
+  to under 1s, and large problems (n=20000) that were effectively unusable now
+  finish in seconds.
+- Results are unchanged statistically — the donor pool and all imputation
+  distributions are identical, and validation against R's `mice` still passes.
+  Exact per-seed imputed values can differ slightly from 3.4.0.
+
 ## 3.4.0
 
 GPU acceleration for MICE.

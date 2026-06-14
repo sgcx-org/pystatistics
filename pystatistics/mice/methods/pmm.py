@@ -63,24 +63,45 @@ def _match_donors(
     """For each missing fitted value, pick one of its ``k`` nearest observed
     fitted values at random; return the chosen observed-row indices.
 
-    Vectorized across all missing rows — this is the donor-search kernel a
-    Stage-2 GPU backend would replace with a batched nearest-neighbour search.
+    Scales like R's ``mice`` matcher: sort the observed fitted values once, then
+    for each missing value search a small window around its insertion point
+    instead of forming the full ``(n_mis, n_obs)`` distance matrix. Cost is
+    ``O(n_obs log n_obs + n_mis·k)`` time and ``O(n_mis·k)`` memory — the dense
+    version was ``O(n_mis·n_obs)`` in both, which blows up on large data.
+
+    The window is provably exact. In a sorted array the ``k`` nearest neighbours
+    of a query lie in the contiguous block ``[pos-k, pos+k-1]`` around the
+    insertion point ``pos``; a width-``2k`` window covers that block (shifted to
+    stay in range near the ends), so the windowed k-NN equals the global k-NN.
     """
     n_obs = yhat_obs.shape[0]
+    n_mis = yhat_mis.shape[0]
     k = min(donors, n_obs)
 
-    # |yhat_mis_i - yhat_obs_j| for every (i, j): (n_mis, n_obs).
-    dist = np.abs(yhat_mis[:, None] - yhat_obs[None, :])
+    # Sort donor predictions once; keep the map back to original obs rows.
+    order = np.argsort(yhat_obs, kind="stable")
+    sorted_obs = yhat_obs[order]
 
-    # Indices of the k smallest distances per row (unordered within the k).
-    if k < n_obs:
-        cand = np.argpartition(dist, k - 1, axis=1)[:, :k]
+    # Insertion point of each missing prediction into the sorted donors.
+    pos = np.searchsorted(sorted_obs, yhat_mis)
+
+    # Window of distinct candidate donors guaranteed to contain the k nearest.
+    w = min(2 * k, n_obs)
+    start = np.clip(pos - k, 0, n_obs - w)                  # (n_mis,)
+    win = start[:, None] + np.arange(w)[None, :]            # (n_mis, w) sorted-idx
+    dist = np.abs(sorted_obs[win] - yhat_mis[:, None])      # (n_mis, w)
+
+    # k smallest distances within the window (unordered within the k).
+    if k < w:
+        knn = np.argpartition(dist, k - 1, axis=1)[:, :k]   # (n_mis, k) window cols
     else:
-        cand = np.broadcast_to(np.arange(n_obs), (yhat_mis.shape[0], n_obs))
+        knn = np.broadcast_to(np.arange(w), (n_mis, w))
 
-    # One random donor per row among its k candidates.
-    pick = rng.integers(0, k, size=yhat_mis.shape[0])
-    return cand[np.arange(yhat_mis.shape[0]), pick]
+    rows = np.arange(n_mis)
+    pick = rng.integers(0, k, size=n_mis)                   # one donor per row
+    chosen_win_col = knn[rows, pick]                        # (n_mis,)
+    chosen_sorted = win[rows, chosen_win_col]               # idx into sorted_obs
+    return order[chosen_sorted]                             # back to original rows
 
 
 register(PMMMethod())
