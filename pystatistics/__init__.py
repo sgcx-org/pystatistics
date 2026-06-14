@@ -16,7 +16,7 @@ Usage:
     result = fit(design)
 """
 
-__version__ = "3.2.0"
+__version__ = "3.3.0"
 __author__ = "Hai-Shuo"
 __email__ = "contact@sgcx.org"
 
@@ -34,6 +34,7 @@ from pystatistics import ordinal
 from pystatistics import multivariate
 from pystatistics import timeseries
 from pystatistics import gam
+from pystatistics import mice
 
 __all__ = [
     "__version__",
@@ -51,4 +52,5 @@ __all__ = [
     "multivariate",
     "timeseries",
     "gam",
+    "mice",
 ]

@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.3.0
+
+Multiple imputation by chained equations (MICE) for multivariate missing data.
+
+- **New `mice` module.** `pystatistics.mice.mice(data, m=5, maxit=5,
+  method='pmm', seed=...)` imputes a numeric data matrix that contains missing
+  values (NaN) by iteratively modelling each incomplete column from the others,
+  and returns `m` completed datasets. Two methods are available: `'pmm'`
+  (predictive mean matching — the default, which imputes by copying observed
+  donor values) and `'norm'` (Bayesian linear regression). Defaults follow R's
+  `mice` package (`m=5`, `maxit=5`, 5 PMM donors, left-to-right visit order).
+- **Reproducible by construction.** A `seed` is required; given the same seed,
+  imputations are identical across runs and machines. Each of the `m` chains
+  draws from its own independent random stream.
+- **Rubin's-rules pooling.** `pystatistics.mice.pool(estimates, variances)`
+  combines an analysis fitted on each completed dataset into a single inference,
+  with Barnard–Rubin degrees of freedom, confidence intervals, and the usual
+  diagnostics (within/between/total variance, relative increase in variance,
+  fraction of missing information).
+- **Validated against R.** Imputed-value distributions and pooled regression
+  output are checked against R's `mice` on a shared dataset.
+- This release covers numeric columns on the CPU. Categorical-column methods
+  and GPU acceleration are planned for future releases.
+
 ## 3.2.0
 
 Apple Silicon (MPS) GPU support for the FP32 backends, with honest,

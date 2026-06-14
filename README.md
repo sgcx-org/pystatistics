@@ -39,6 +39,7 @@ PyStatistics maintains two parallel computational paths with distinct goals:
 | `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
 | `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
 | `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
+| `mice/` | Numeric (CPU) | Multiple imputation by chained equations: PMM and Bayesian linear regression, Rubin's-rules pooling, validated against R mice |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 
@@ -326,6 +327,27 @@ y = np.sin(x) + np.random.randn(200) * 0.3
 result = gam(y, smooths=[s('x1')], smooth_data={'x1': x})
 print(result.edf, result.gcv)
 print(result.summary())
+
+# --- Multiple imputation (MICE) ---
+from pystatistics.mice import mice, pool
+
+# data is an (n, p) array with np.nan marking missing values.
+# Predictive mean matching (R default) for numeric columns; seed is required
+# so the imputation is fully reproducible.
+imp = mice(data, m=5, maxit=5, method='pmm', seed=0)
+completed = imp.completed_datasets()        # list of 5 completed (n, p) arrays
+
+# Fit your analysis on each completed dataset, then combine with Rubin's rules:
+estimates, variances = [], []
+for d in completed:
+    X = np.column_stack([np.ones(len(d)), d[:, 1]])
+    beta, *_ = np.linalg.lstsq(X, d[:, 0], rcond=None)
+    resid = d[:, 0] - X @ beta
+    cov = (resid @ resid / (len(d) - 2)) * np.linalg.inv(X.T @ X)
+    estimates.append(beta[1]); variances.append(cov[1, 1])
+
+pooled = pool(estimates, variances, dfcom=len(data) - 2)
+print(pooled.estimate, pooled.se, pooled.ci_low, pooled.ci_high, pooled.fmi)
 ```
 
 ## Installation
@@ -343,6 +365,19 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 3.3.0 — Multiple imputation (MICE)
+
+- New `mice` module: multiple imputation by chained equations for numeric data
+  with missing values. `mice(data, m=5, method='pmm', seed=...)` returns `m`
+  completed datasets, using predictive mean matching (the R default) or
+  Bayesian linear regression (`method='norm'`). Defaults follow R's `mice`.
+- Imputation is fully reproducible — `seed` is required, and each chain uses an
+  independent random stream.
+- `pool(estimates, variances)` combines per-dataset analyses with Rubin's rules
+  (Barnard–Rubin degrees of freedom, confidence intervals, fraction of missing
+  information).
+- Numeric columns on the CPU in this release; validated against R's `mice`.
 
 ### 3.2.0 — Apple Silicon (MPS) GPU support
 
