@@ -25,6 +25,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from pystatistics.mice._encode import (
+    build_predictor_matrix,
+    codes_to_indices,
+    indices_to_codes,
+)
 from pystatistics.mice.design import MICEDesign
 from pystatistics.mice.methods import get_method
 
@@ -48,7 +53,6 @@ def run_chain(
     """Run one chained-equations chain. See module docstring."""
     data = design.data.copy()
     mask = design.missing_mask
-    p = design.p
     incomplete = design.incomplete_columns
 
     _initialise(data, mask, incomplete, rng)
@@ -62,14 +66,21 @@ def run_chain(
             mis_rows = mask[:, j]
             obs_rows = ~mis_rows
 
-            predictors = _predictor_columns(data, j, p)
+            predictors = build_predictor_matrix(data, j, design)
             X_obs = predictors[obs_rows]
             X_mis = predictors[mis_rows]
             y_obs = data[obs_rows, j]
 
             method = get_method(design.method_for(j))
-            imputed = method.impute(y_obs, X_obs, X_mis, rng)
-            data[mis_rows, j] = imputed
+            if design.is_categorical(j):
+                # Methods speak in consecutive 0..K-1 class indices; the chain
+                # translates to/from the column's stored category codes.
+                levels = design.levels_for(j)
+                y_idx = codes_to_indices(y_obs, levels)
+                imputed_idx = method.impute(y_idx, X_obs, X_mis, rng)
+                data[mis_rows, j] = indices_to_codes(imputed_idx, levels)
+            else:
+                data[mis_rows, j] = method.impute(y_obs, X_obs, X_mis, rng)
 
         # Trace: summarise this iteration's imputed cells per incomplete column.
         for j in incomplete:
@@ -99,15 +110,3 @@ def _initialise(
         observed = data[~mis_rows, j]
         n_missing = int(np.count_nonzero(mis_rows))
         data[mis_rows, j] = rng.choice(observed, size=n_missing, replace=True)
-
-
-def _predictor_columns(data: np.ndarray, j: int, p: int) -> np.ndarray:
-    """All columns except ``j`` (the current target), as a 2D predictor matrix.
-
-    Columns are fully populated at this point (initialised on entry, kept
-    complete by every visit), so the returned matrix is finite. Fancy-indexing
-    with a list always yields a 2D matrix, including the single-predictor
-    (p == 2) case.
-    """
-    cols = [c for c in range(p) if c != j]
-    return data[:, cols]

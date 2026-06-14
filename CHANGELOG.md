@@ -1,5 +1,29 @@
 # Changelog
 
+## 3.5.0
+
+Categorical imputation for MICE.
+
+- **`mice` now imputes categorical columns**, not just numeric ones. Declare a
+  column's kind with `column_kinds` — `'binary'`, `'categorical'` (unordered),
+  or `'ordered'` — and it is imputed with the matching method: logistic
+  regression for binary columns, multinomial logistic for unordered factors, and
+  proportional-odds (ordinal logistic) for ordered factors. These mirror R
+  `mice`'s `logreg`, `polyreg`, and `polr`. Categorical columns are given as
+  integer category codes.
+- **`method='auto'` is the new default** and picks the appropriate method for
+  each column's kind (predictive mean matching for numeric, logistic for binary,
+  multinomial for unordered, proportional odds for ordered). Passing an explicit
+  method name still applies it to every incomplete column.
+- Categorical columns are handled correctly as predictors too (dummy-encoded),
+  so mixed numeric/categorical datasets impute coherently. Validated against R
+  `mice`: imputed category proportions match closely for all three methods.
+- If a categorical model cannot be fit for a particular step during the
+  iterations, that step falls back to a draw from the observed category
+  distribution (with a warning) and the full model is retried next iteration.
+- GPU acceleration remains numeric-only; running `backend='gpu'` on data with
+  categorical columns raises a clear error (use the CPU backend).
+
 ## 3.4.1
 
 Performance: CPU predictive mean matching now scales to large datasets.

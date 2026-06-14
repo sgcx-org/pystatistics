@@ -39,7 +39,7 @@ PyStatistics maintains two parallel computational paths with distinct goals:
 | `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
 | `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
 | `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
-| `mice/` | Numeric | Multiple imputation by chained equations: PMM and Bayesian linear regression, Rubin's-rules pooling, validated against R mice; CUDA GPU backend |
+| `mice/` | Complete | Multiple imputation by chained equations: numeric (PMM, Bayesian regression) and categorical (logistic, multinomial, proportional-odds), Rubin's-rules pooling, validated against R mice; CUDA GPU backend for numeric |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 
@@ -365,6 +365,19 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 3.5.0 — Categorical imputation for MICE
+
+- `mice` now imputes categorical columns, not only numeric ones. Declare each
+  column's kind via `column_kinds` (`'binary'`, `'categorical'`, `'ordered'`)
+  and it is imputed with logistic, multinomial, or proportional-odds regression
+  respectively — mirroring R `mice`'s `logreg`/`polyreg`/`polr`. Categorical
+  columns are integer category codes.
+- `method='auto'` (the new default) selects the right method per column kind;
+  mixed numeric/categorical datasets impute coherently (categorical predictors
+  are dummy-encoded). Imputed category proportions are validated against R
+  `mice`.
+- GPU acceleration stays numeric-only; categorical imputation runs on the CPU.
 
 ### 3.4.1 — Faster CPU predictive mean matching
 

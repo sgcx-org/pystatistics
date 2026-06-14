@@ -28,10 +28,23 @@ from numpy.typing import NDArray
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.mice.methods import get_method, is_registered
 
-# Stage 1 supports numeric columns only. This single constant + the guard in
-# ``_resolve_kinds`` is the entire "numeric-only" restriction; Stage 3 widens it.
-_SUPPORTED_KINDS = ("numeric",)
-_DEFAULT_METHOD = "pmm"
+# Statistical kinds a column can have. Numeric columns are imputed with
+# regression methods (pmm/norm); the others are categorical.
+_SUPPORTED_KINDS = ("numeric", "binary", "categorical", "ordered")
+
+# Kinds whose values are category codes (integers) rather than measurements.
+_CATEGORICAL_KINDS = ("binary", "categorical", "ordered")
+
+# Default imputation method per kind, mirroring R mice's defaults: PMM for
+# numeric, logistic for binary, multinomial for unordered factors, proportional
+# odds for ordered factors. Used when ``method='auto'`` (the default).
+_DEFAULT_METHOD_BY_KIND = {
+    "numeric": "pmm",
+    "binary": "logreg",
+    "categorical": "polyreg",
+    "ordered": "polr",
+}
+_AUTO_METHOD = "auto"
 
 
 @dataclass(frozen=True)
@@ -43,6 +56,10 @@ class MICEDesign:
     _col_names: tuple[str, ...]
     _col_kinds: tuple[str, ...]
     _methods: tuple[str, ...]  # per column; '' for fully observed columns
+    # Per column: sorted unique category codes for categorical columns, or None
+    # for numeric columns. Drives dummy-encoding of categorical predictors and
+    # code<->index mapping for categorical targets.
+    _levels: tuple[NDArray[np.floating[Any]] | None, ...]
     _n: int
     _p: int
 
@@ -52,7 +69,7 @@ class MICEDesign:
         cls,
         data,
         *,
-        method: str = _DEFAULT_METHOD,
+        method: str = _AUTO_METHOD,
         methods: Mapping[Any, str] | Sequence[str] | None = None,
         column_names: Sequence[str] | None = None,
         column_kinds: Sequence[str] | None = None,
@@ -64,10 +81,13 @@ class MICEDesign:
         data : array-like
             2D matrix (observations x variables); NaN marks missing entries.
             Accepts numpy arrays and anything with a ``.values`` attribute
-            (e.g. pandas DataFrame).
+            (e.g. pandas DataFrame). Categorical columns must be encoded as
+            integer category codes (declare them via ``column_kinds``).
         method : str
-            Default imputation method for every incomplete column (R default
-            ``'pmm'``). Overridden per-column by ``methods``.
+            Default imputation method. ``'auto'`` (default) picks the R-default
+            method for each incomplete column's kind (pmm/logreg/polyreg/polr).
+            An explicit method name is applied to every incomplete column.
+            Overridden per-column by ``methods``.
         methods : mapping or sequence, optional
             Per-column method override. Either a mapping ``{name_or_index:
             method}`` or a length-``p`` sequence. Entries for fully observed
@@ -93,7 +113,7 @@ class MICEDesign:
         source,
         *,
         columns: Sequence[str] | None = None,
-        method: str = _DEFAULT_METHOD,
+        method: str = _AUTO_METHOD,
         methods: Mapping[Any, str] | Sequence[str] | None = None,
     ) -> "MICEDesign":
         """Build a MICEDesign from a DataSource (selected columns, in order)."""
@@ -177,6 +197,7 @@ class MICEDesign:
 
         names = _resolve_names(column_names, p)
         kinds = _resolve_kinds(column_kinds, p)
+        levels = _resolve_levels(data, missing_mask, kinds, names, p)
         per_col_methods = _resolve_methods(
             method, methods, names, kinds, has_missing_per_col, p
         )
@@ -187,6 +208,7 @@ class MICEDesign:
             _col_names=names,
             _col_kinds=kinds,
             _methods=per_col_methods,
+            _levels=levels,
             _n=n,
             _p=p,
         )
@@ -244,6 +266,23 @@ class MICEDesign:
         """Method name assigned to column ``col`` ('' if fully observed)."""
         return self._methods[col]
 
+    def kind_for(self, col: int) -> str:
+        """Statistical kind of column ``col``."""
+        return self._col_kinds[col]
+
+    def is_categorical(self, col: int) -> bool:
+        """Whether column ``col`` holds category codes (not measurements)."""
+        return self._col_kinds[col] in _CATEGORICAL_KINDS
+
+    def levels_for(self, col: int):
+        """Sorted unique category codes for column ``col`` (None if numeric)."""
+        return self._levels[col]
+
+    @property
+    def has_categorical(self) -> bool:
+        """Whether any column is categorical."""
+        return any(k in _CATEGORICAL_KINDS for k in self._col_kinds)
+
     def __repr__(self) -> str:
         return (
             f"MICEDesign(n={self._n}, p={self._p}, "
@@ -288,16 +327,46 @@ def _resolve_kinds(column_kinds, p: int) -> tuple[str, ...]:
             raise ValidationError(
                 f"column_kinds has length {len(kinds)}, expected {p}"
             )
-    # Stage-1 numeric-only guard — the single point where the restriction lives.
     bad = [(j, k) for j, k in enumerate(kinds) if k not in _SUPPORTED_KINDS]
     if bad:
         j, k = bad[0]
         raise ValidationError(
-            f"Column {j} has kind {k!r}, but this release supports only "
-            f"numeric columns {_SUPPORTED_KINDS}. Categorical methods "
-            f"(binary/categorical/ordered) are planned for a later release."
+            f"Column {j} has kind {k!r}. Supported kinds: {_SUPPORTED_KINDS}."
         )
     return tuple(kinds)
+
+
+def _resolve_levels(data, missing_mask, kinds, names, p):
+    """Compute and validate category codes for each categorical column.
+
+    For a categorical column the observed values must be integer category codes;
+    the level set is their sorted unique values. Numeric columns get ``None``.
+    Binary columns must have exactly two levels; categorical/ordered need >= 2.
+    """
+    levels: list = []
+    for j in range(p):
+        if kinds[j] not in _CATEGORICAL_KINDS:
+            levels.append(None)
+            continue
+        observed = data[~missing_mask[:, j], j]
+        if not np.all(observed == np.floor(observed)):
+            raise ValidationError(
+                f"Column {names[j]!r} is {kinds[j]!r} but has non-integer "
+                f"values; categorical columns must be integer category codes."
+            )
+        uniq = np.unique(observed)
+        if kinds[j] == "binary" and uniq.size != 2:
+            raise ValidationError(
+                f"Column {names[j]!r} is 'binary' but has {uniq.size} observed "
+                f"levels {uniq.tolist()}; binary columns need exactly 2."
+            )
+        if uniq.size < 2:
+            raise ValidationError(
+                f"Column {names[j]!r} is {kinds[j]!r} but has only "
+                f"{uniq.size} observed level; need at least 2 to impute."
+            )
+        levels.append(uniq.astype(np.float64))
+    return tuple(levels)
 
 
 def _resolve_methods(
@@ -308,9 +377,15 @@ def _resolve_methods(
     has_missing_per_col: NDArray[np.bool_],
     p: int,
 ) -> tuple[str, ...]:
-    """Assign a validated method name to each column (per-column override)."""
-    # Start with the default for every column.
-    resolved = [method] * p
+    """Assign a validated method name to each column (per-column override).
+
+    ``method='auto'`` resolves to the R-default method for each column's kind;
+    an explicit method name is applied to every column.
+    """
+    if method == _AUTO_METHOD:
+        resolved = [_DEFAULT_METHOD_BY_KIND[kinds[j]] for j in range(p)]
+    else:
+        resolved = [method] * p
 
     if methods is not None:
         if isinstance(methods, Mapping):

@@ -59,6 +59,18 @@ class GPUMiceBackend:
     ) -> Result[MICEParams]:
         import torch
 
+        # The GPU backend handles fully numeric problems only: categorical
+        # columns need dummy-encoding / categorical model fits that this batched
+        # path does not implement. Refuse rather than impute them wrong (a
+        # categorical column can be a *predictor* even when the target is
+        # numeric, so this checks every column, not just the targets).
+        if design.has_categorical:
+            raise ValidationError(
+                "backend='gpu' supports numeric columns only. This data has "
+                "categorical columns; use backend='cpu' (categorical imputation "
+                "is CPU-only)."
+            )
+
         # Validate that every incomplete column's method has a GPU kernel before
         # touching the device (fail loud at the boundary, Rule 2).
         for j in design.incomplete_columns:

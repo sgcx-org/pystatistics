@@ -78,6 +78,16 @@ class MultinomialSolution:
     # -- Standard errors and inference --
 
     @property
+    def vcov(self) -> NDArray[np.floating[Any]]:
+        """Variance-covariance matrix of the estimated coefficients.
+
+        Shape ``((J-1)*p, (J-1)*p)``, ordered to match
+        ``coefficient_matrix.ravel()`` (row-major over (class, predictor)). The
+        diagonal reshaped to ``(J-1, p)`` gives the squared standard errors.
+        """
+        return self._result.params.vcov
+
+    @property
     def standard_errors(self) -> NDArray[np.floating[Any]]:
         """Standard error matrix of shape (J-1, p).
 

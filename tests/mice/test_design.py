@@ -104,8 +104,16 @@ class TestValidationFailures:
         with pytest.raises(ValidationError, match="unknown method"):
             MICEDesign.from_array(datasets.EXAMPLE, method="bogus")
 
-    def test_non_numeric_kind_rejected(self):
-        with pytest.raises(ValidationError, match="numeric"):
+    def test_unsupported_kind_rejected(self):
+        with pytest.raises(ValidationError, match="Supported kinds"):
+            MICEDesign.from_array(
+                datasets.EXAMPLE, column_kinds=["numeric", "continuous", "numeric"]
+            )
+
+    def test_non_integer_categorical_rejected(self):
+        # EXAMPLE holds measurements (floats); declaring one categorical must
+        # fail because category codes have to be integers.
+        with pytest.raises(ValidationError, match="integer category codes"):
             MICEDesign.from_array(
                 datasets.EXAMPLE, column_kinds=["numeric", "categorical", "numeric"]
             )
