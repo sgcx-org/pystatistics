@@ -20,7 +20,6 @@ import warnings
 from typing import Literal, Mapping, Sequence
 
 from pystatistics.core.compute.device import select_device
-from pystatistics.mice._rng import spawn_streams
 from pystatistics.mice._visit import resolve_visit_sequence
 from pystatistics.mice.design import MICEDesign
 from pystatistics.mice.solution import MICESolution
@@ -38,6 +37,7 @@ def mice(
     methods: Mapping | Sequence[str] | None = None,
     visit_sequence: Sequence[int] | None = None,
     backend: BackendChoice | None = None,
+    use_fp64: bool = False,
     verbose: bool = False,
 ) -> MICESolution:
     """Multiple imputation by chained equations (numeric columns, CPU).
@@ -64,8 +64,14 @@ def mice(
         Column visit order within each iteration. Defaults to incomplete
         columns in ascending index order (R "roman" default).
     backend : {'cpu', 'gpu', 'auto'} or None
-        Compute backend. Default None -> 'cpu'. GPU is not implemented in this
-        release; requesting it raises.
+        Compute backend. Default None -> 'cpu' (the R-validated reference path).
+        'gpu' runs the chains batched on a CUDA GPU; 'auto' uses CUDA when
+        available, else CPU. GPU results match the CPU backend at the GPU/FP32
+        tolerance tier.
+    use_fp64 : bool
+        Only relevant on the GPU. Run the GPU chains in double precision (CUDA
+        only) for closer parity with the CPU reference. Default False (FP32,
+        the fast consumer-GPU path). Ignored on CPU (always double precision).
     verbose : bool
         Print progress information.
 
@@ -105,8 +111,7 @@ def mice(
         )
 
     visit = resolve_visit_sequence(design.incomplete_columns, visit_sequence)
-    backend_impl = _get_backend(backend)
-    streams = spawn_streams(seed, m)
+    backend_impl = _get_backend(backend, use_fp64)
 
     if verbose:
         print(
@@ -116,7 +121,7 @@ def mice(
         )
 
     result = backend_impl.run(
-        design, m=m, maxit=maxit, visit_sequence=visit, streams=streams
+        design, m=m, maxit=maxit, visit_sequence=visit, seed=seed
     )
 
     if verbose:
@@ -125,30 +130,41 @@ def mice(
     return MICESolution(_result=result, _design=design)
 
 
-def _get_backend(choice: BackendChoice | None):
-    """Resolve the compute backend. None -> CPU; GPU not yet implemented."""
+def _get_backend(choice: BackendChoice | None, use_fp64: bool):
+    """Resolve the compute backend.
+
+    None/'cpu' -> CPU. 'gpu' -> CUDA GPU (raises on MPS, which is not yet
+    validated for MICE). 'auto' -> CUDA when available, else CPU; like the
+    other pystatistics modules, 'auto' never selects MPS.
+    """
     if choice is None or choice == "cpu":
         from pystatistics.mice.backends.cpu import CPUMiceBackend
 
         return CPUMiceBackend()
 
     if choice == "auto":
-        # 'auto' currently means CPU: no GPU backend ships in this release.
-        # Kept as an accepted value so callers and the Stage-2 GPU path share
-        # one vocabulary.
+        device = select_device("auto")
+        if device.device_type == "cuda":
+            from pystatistics.mice.backends.gpu import GPUMiceBackend
+
+            return GPUMiceBackend(device="cuda", use_fp64=use_fp64)
+        # CPU, or MPS (never auto-selected): use the CPU reference path.
         from pystatistics.mice.backends.cpu import CPUMiceBackend
 
         return CPUMiceBackend()
 
     if choice == "gpu":
-        # Fail loud rather than silently downgrading (Rule 1). select_device
-        # gives a precise hardware error if no GPU exists; otherwise we still
-        # refuse because the GPU chain backend is Stage 2.
-        select_device("gpu")
-        raise NotImplementedError(
-            "backend='gpu' is not available in this release. MICE ships a "
-            "validated CPU implementation first; GPU acceleration is planned. "
-            "Use backend='cpu' (the default)."
-        )
+        device = select_device("gpu")  # raises RuntimeError if no GPU
+        if device.device_type == "mps":
+            raise NotImplementedError(
+                "backend='gpu' for MICE is validated on CUDA only in this "
+                "release. The chained-equations sweep has not been validated "
+                "on Apple Silicon (MPS), so it is refused rather than run "
+                "unverified. Use backend='cpu' (the default) on a Mac; CUDA "
+                "GPUs are supported."
+            )
+        from pystatistics.mice.backends.gpu import GPUMiceBackend
+
+        return GPUMiceBackend(device=device.device_type, use_fp64=use_fp64)
 
     raise ValueError(f"Unknown backend: {choice!r}")

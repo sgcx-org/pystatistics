@@ -134,9 +134,22 @@ class TestSolverValidation:
         with pytest.raises(ValueError, match="no missing"):
             mice(complete, m=2, maxit=2, seed=0)
 
-    def test_gpu_backend_not_implemented(self, small_missing):
-        with pytest.raises((NotImplementedError, RuntimeError)):
-            mice(small_missing, m=2, maxit=2, seed=0, backend="gpu")
+    def test_gpu_backend_dispatch_is_explicit(self, small_missing):
+        # backend='gpu' must either run on a real GPU or fail loud — never
+        # silently downgrade to CPU.
+        try:
+            import torch
+
+            cuda = torch.cuda.is_available()
+        except ImportError:
+            cuda = False
+
+        if cuda:
+            sol = mice(small_missing, m=2, maxit=2, seed=0, backend="gpu")
+            assert "gpu" in sol.backend_name
+        else:
+            with pytest.raises((RuntimeError, NotImplementedError)):
+                mice(small_missing, m=2, maxit=2, seed=0, backend="gpu")
 
     def test_accepts_prebuilt_design(self, small_missing):
         design = MICEDesign.from_array(small_missing, method="norm")

@@ -39,7 +39,7 @@ PyStatistics maintains two parallel computational paths with distinct goals:
 | `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
 | `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
 | `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
-| `mice/` | Numeric (CPU) | Multiple imputation by chained equations: PMM and Bayesian linear regression, Rubin's-rules pooling, validated against R mice |
+| `mice/` | Numeric | Multiple imputation by chained equations: PMM and Bayesian linear regression, Rubin's-rules pooling, validated against R mice; CUDA GPU backend |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 
@@ -365,6 +365,17 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 3.4.0 — GPU acceleration for MICE
+
+- `mice(..., backend='gpu')` runs the imputation chains on a CUDA GPU, batching
+  the per-variable solves and the predictive-mean-matching donor search across
+  chains. `backend='auto'` uses a CUDA GPU when available, else the CPU.
+- The speedup grows with sample size (the donor search dominates and batches
+  well): predictive mean matching ran ~39× faster at n=1000 and ~135× faster at
+  n=3000 than the CPU backend on an RTX 5070 Ti. GPU results match the CPU
+  backend at the GPU/FP32 tolerance; pass `use_fp64=True` for double precision.
+- Requires a CUDA GPU; Apple Silicon (MPS) is not yet supported for MICE.
 
 ### 3.3.0 — Multiple imputation (MICE)
 

@@ -17,6 +17,7 @@ import numpy as np
 from pystatistics.core.compute.timing import Timer
 from pystatistics.core.result import Result
 from pystatistics.mice._chain import run_chain
+from pystatistics.mice._rng import spawn_streams
 from pystatistics.mice.design import MICEDesign
 from pystatistics.mice.solution import MICEParams
 
@@ -35,7 +36,7 @@ class CPUMiceBackend:
         m: int,
         maxit: int,
         visit_sequence: tuple[int, ...],
-        streams: list[np.random.Generator],
+        seed: int,
     ) -> Result[MICEParams]:
         """Run ``m`` chains and package the imputations.
 
@@ -48,12 +49,14 @@ class CPUMiceBackend:
             Iterations per chain.
         visit_sequence : tuple of int
             Column visit order within each iteration.
-        streams : list of numpy.random.Generator
-            One independent RNG per chain; ``len(streams) == m`` (the solver
-            guarantees this).
+        seed : int
+            Master RNG seed. The backend spawns one independent, reproducible
+            stream per chain from it.
         """
         timer = Timer()
         timer.start()
+
+        streams = spawn_streams(seed, m)
 
         completed = np.empty((m, design.n, design.p), dtype=np.float64)
         chain_means = np.empty((m, maxit, len(design.incomplete_columns)))

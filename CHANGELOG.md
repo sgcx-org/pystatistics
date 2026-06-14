@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.4.0
+
+GPU acceleration for MICE.
+
+- **`mice(..., backend='gpu')` runs on CUDA GPUs.** The `m` imputation chains
+  run together on the GPU, with the per-variable linear solves and the
+  predictive-mean-matching donor search batched across chains. `backend='auto'`
+  uses a CUDA GPU when one is available and falls back to the CPU otherwise.
+- **Large speedups on bigger problems.** Because the donor search dominates and
+  parallelises well, the GPU advantage grows with sample size — for example,
+  predictive mean matching was roughly 39× faster at n=1000 and 135× faster at
+  n=3000 than the CPU backend on an RTX 5070 Ti (m=20, maxit=8). GPU results
+  match the CPU backend at the standard GPU/FP32 tolerance.
+- **`use_fp64=True`** runs the GPU path in double precision on CUDA for closer
+  agreement with the CPU reference (default is FP32, the fast path).
+- GPU acceleration requires a CUDA GPU; Apple Silicon (MPS) is not yet supported
+  for MICE and is refused with a clear message rather than run unverified.
+
 ## 3.3.0
 
 Multiple imputation by chained equations (MICE) for multivariate missing data.
