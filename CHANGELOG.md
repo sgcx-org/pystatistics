@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.5.1
+
+Performance: the GPU MICE backend now scales to large datasets.
+
+- The GPU predictive-mean-matching donor search no longer builds a dense
+  distance matrix between every missing and every observed row. It now uses the
+  same sorted-window approach as the CPU backend (introduced in 3.4.1), batched
+  across imputation chains, cutting GPU memory from quadratic in the number of
+  rows to roughly linear. This fixes out-of-memory failures on large problems
+  (e.g. n=20000 with m=50, which previously tried to allocate ~12 GB) and makes
+  the GPU backend substantially faster at scale — on an RTX 5070 Ti, GPU PMM is
+  now roughly 30-50x faster than the CPU backend at n=20000 and runs n=100000 in
+  under a second.
+- Correction: the GPU speedup figures cited for 3.4.0 were measured against the
+  slower pre-3.4.1 CPU and overstated the advantage over the current CPU. The
+  numbers above are the current, like-for-like comparison.
+
 ## 3.5.0
 
 Categorical imputation for MICE.

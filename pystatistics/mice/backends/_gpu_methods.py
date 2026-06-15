@@ -54,23 +54,46 @@ def gpu_pmm_impute(y_obs, X_obs, X_mis, gen, *, donors=5):
     yhat_obs = (Xa_obs @ draw.beta_hat.unsqueeze(-1)).squeeze(-1)   # (m, n_obs)
     yhat_mis = (Xa_mis @ draw.beta_draw.unsqueeze(-1)).squeeze(-1)  # (m, n_mis)
 
-    m, n_obs = yhat_obs.shape
-    n_mis = yhat_mis.shape[1]
-    k = min(donors, n_obs)
-
-    # |yhat_mis - yhat_obs| for every (chain, missing row, observed row).
-    dist = (yhat_mis[:, :, None] - yhat_obs[:, None, :]).abs()  # (m, n_mis, n_obs)
-    # k nearest observed fitted values (indices into n_obs).
-    _, cand = torch.topk(dist, k, dim=2, largest=False)         # (m, n_mis, k)
-
-    # One random donor per (chain, missing row) among its k candidates.
-    pick = torch.randint(
-        0, k, (m, n_mis), generator=gen, device=yhat_obs.device
-    )                                                          # (m, n_mis)
-    donor_idx = torch.gather(cand, 2, pick.unsqueeze(-1)).squeeze(-1)  # (m, n_mis)
-
+    donor_idx = _match_donors_windowed(yhat_mis, yhat_obs, donors, gen)
     # Copy the observed donor values (gather along the observed-row axis).
     return torch.gather(y_obs, 1, donor_idx)                   # (m, n_mis)
+
+
+def _match_donors_windowed(yhat_mis, yhat_obs, donors, gen):
+    """Batched sorted-window k-NN donor search — the GPU port of the CPU matcher.
+
+    Sorts each chain's observed predictions once, then for every missing value
+    searches a width-``2k`` window around its insertion point instead of forming
+    the dense ``(m, n_mis, n_obs)`` distance tensor. Memory drops from
+    ``O(m·n_mis·n_obs)`` to ``O(m·n_mis·k)``; the window is provably exact (the
+    global k nearest lie in ``[pos-k, pos+k-1]`` of the sorted array). Returns
+    the chosen *original* observed-row index per (chain, missing row).
+    """
+    import torch
+
+    m, n_obs = yhat_obs.shape
+    n_mis = yhat_mis.shape[1]
+    device = yhat_obs.device
+    k = min(donors, n_obs)
+    w = min(2 * k, n_obs)
+
+    # Sort donor predictions per chain; ``order`` maps back to original rows.
+    sorted_obs, order = torch.sort(yhat_obs, dim=1)               # (m, n_obs)
+    pos = torch.searchsorted(sorted_obs, yhat_mis)               # (m, n_mis)
+    start = torch.clamp(pos - k, min=0, max=n_obs - w)           # (m, n_mis)
+    win = start.unsqueeze(-1) + torch.arange(w, device=device)   # (m, n_mis, w)
+
+    # Gather only the window's values (no dense materialisation).
+    b = torch.arange(m, device=device)[:, None, None]
+    cand_vals = sorted_obs[b, win]                               # (m, n_mis, w)
+    dist = (cand_vals - yhat_mis.unsqueeze(-1)).abs()           # (m, n_mis, w)
+    knn = torch.topk(dist, k, dim=2, largest=False).indices      # (m, n_mis, k)
+
+    # One random donor per (chain, missing row) among its k candidates.
+    pick = torch.randint(0, k, (m, n_mis), generator=gen, device=device)
+    chosen_col = torch.gather(knn, 2, pick.unsqueeze(-1)).squeeze(-1)        # (m, n_mis)
+    chosen_sorted = torch.gather(win, 2, chosen_col.unsqueeze(-1)).squeeze(-1)
+    return torch.gather(order, 1, chosen_sorted)                 # original obs idx
 
 
 # Method-name -> batched implementation. The backend translates the design's

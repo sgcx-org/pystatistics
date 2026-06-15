@@ -131,6 +131,35 @@ class TestGpuMatchesCpu:
         )
 
 
+class TestGpuScales:
+    def test_large_n_donor_search_is_memory_frugal(self):
+        # The windowed donor matcher must not rebuild a dense (m, n_mis, n_obs)
+        # distance tensor. At this size the dense version needed ~1+ GB (and
+        # OOM'd at larger n); the windowed path should stay well under that.
+        import torch
+
+        complete = datasets.make_gaussian_complete(12000, seed=0)
+        miss = datasets.make_mcar(complete, 0.2, seed=1)
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        sol = mice(miss, m=20, maxit=5, method="pmm", seed=0, backend="gpu")
+        peak_gb = torch.cuda.max_memory_allocated() / 1e9
+
+        assert not np.isnan(sol.completed(0)).any()
+        assert peak_gb < 1.0, (
+            f"peak GPU memory {peak_gb:.2f} GB suggests a dense donor matrix"
+        )
+
+    def test_large_n_matches_cpu_distribution(self):
+        # Correctness preserved at scale: windowed GPU donors agree with CPU.
+        complete = datasets.make_gaussian_complete(8000, seed=2)
+        miss = datasets.make_mcar(complete, 0.2, seed=3)
+        cpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="cpu")
+        gpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="gpu")
+        for j in gpu.incomplete_columns:
+            assert abs(gpu.imputations(j).mean() - cpu.imputations(j).mean()) < 0.1
+
+
 class TestGpuFp64:
     def test_fp64_runs(self, miss):
         sol = mice(miss, m=3, maxit=4, seed=0, backend="gpu", use_fp64=True)

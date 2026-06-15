@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.5.1 — GPU MICE scales to large datasets
+
+- The GPU predictive-mean-matching donor search now uses the same memory-light
+  windowed approach as the CPU backend, batched across imputation chains. This
+  removes out-of-memory failures on large problems and makes the GPU backend
+  much faster at scale — on an RTX 5070 Ti, GPU PMM is roughly 30–50× faster
+  than the CPU backend at n=20000, and imputes n=100000 in under a second.
+
 ### 3.5.0 — Categorical imputation for MICE
 
 - `mice` now imputes categorical columns, not only numeric ones. Declare each
@@ -393,9 +401,8 @@ pip install pystatistics[dev]
 - `mice(..., backend='gpu')` runs the imputation chains on a CUDA GPU, batching
   the per-variable solves and the predictive-mean-matching donor search across
   chains. `backend='auto'` uses a CUDA GPU when available, else the CPU.
-- The speedup grows with sample size (the donor search dominates and batches
-  well): predictive mean matching ran ~39× faster at n=1000 and ~135× faster at
-  n=3000 than the CPU backend on an RTX 5070 Ti. GPU results match the CPU
+- The GPU advantage grows with sample size (the donor search batches well across
+  chains); see 3.5.1 for current benchmark figures. GPU results match the CPU
   backend at the GPU/FP32 tolerance; pass `use_fp64=True` for double precision.
 - Requires a CUDA GPU; Apple Silicon (MPS) is not yet supported for MICE.
 
