@@ -221,14 +221,15 @@ def _tri_inv_blocked(torch, L):
                       torch.cat([BL, Ci], dim=-1)], dim=-2)
 
 
-def _trace_sigma_inv_m(torch, L, M):
+def _trace_sigma_inv_m(torch, L, M, method: str = "auto"):
     """tr(Sigma_k^{-1} M_k) for the whole batch, Sigma_k = L_k L_k^T.
 
-    On MPS, form Sigma^{-1} via the matmul-only blocked inverse (Metal's
-    triangular solve is pathologically slow). Elsewhere (CUDA/CPU) use two
-    triangular solves, which are well optimised there.
+    When ``_use_blocked`` (MPS by default), form Sigma^{-1} via the matmul-only
+    blocked inverse (Metal's triangular solve is pathologically slow); otherwise
+    use two triangular solves (well optimised on CUDA/CPU). ``method`` forces the
+    choice for ablation.
     """
-    if L.device.type == "mps":
+    if _use_blocked(L, method):
         W = _tri_inv_blocked(torch, L)                  # L^{-1}
         sigma_inv = W.transpose(-1, -2) @ W             # Sigma^{-1} = L^-T L^-1
         return (sigma_inv * M).sum((-2, -1))
@@ -237,20 +238,36 @@ def _trace_sigma_inv_m(torch, L, M):
     return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
 
 
-def _sigma_inv(torch, L):
+def _use_blocked(L, method: str) -> bool:
+    """Resolve the trace/inverse method. ``'auto'`` (default) uses the blocked
+    inverse on MPS and triangular solves elsewhere; ``'blocked'``/``'solve'``
+    force the choice (used for benchmarking/ablation)."""
+    if method == "blocked":
+        return True
+    if method == "solve":
+        return False
+    return L.device.type == "mps"
+
+
+def _sigma_inv(torch, L, method: str = "auto"):
     """Explicit per-pattern inverse covariance from its Cholesky factor.
 
-    On MPS uses the matmul-only blocked inverse (Metal's solve/inverse are slow);
-    elsewhere uses ``cholesky_inverse`` (fast on CUDA/CPU).
+    Uses the matmul-only blocked inverse when ``_use_blocked`` (Metal's
+    triangular-solve / inverse family is slow); otherwise inverts the triangular
+    factor with ``solve_triangular`` against the identity and forms
+    Sigma^{-1} = L^{-T} L^{-1}. (``cholesky_inverse`` is not implemented on MPS,
+    so this portable solve-family form is used on the non-blocked path.)
     """
-    if L.device.type == "mps":
+    if _use_blocked(L, method):
         W = _tri_inv_blocked(torch, L)
         return W.transpose(-1, -2) @ W
-    return torch.cholesky_inverse(L)
+    eye = torch.eye(L.shape[-1], device=L.device, dtype=L.dtype).expand_as(L).contiguous()
+    Linv = torch.linalg.solve_triangular(L, eye, upper=False)
+    return Linv.transpose(-1, -2) @ Linv
 
 
 def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
-                      chunk_size=None):
+                      chunk_size=None, method: str = "auto"):
     """Gradient of ``-2 log L`` w.r.t. ``theta`` via the closed-form matrix
     gradient, avoiding automatic differentiation through ``cholesky``.
 
@@ -292,7 +309,7 @@ def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
             nb = n_k.view(-1, 1, 1)
             M = (c + nb * (delta[:, :, None] * delta[:, None, :])) * mo
             L = _batched_cholesky_with_ridge(torch, sig_full, eps)
-            Sinv = _sigma_inv(torch, L)
+            Sinv = _sigma_inv(torch, L, method)
             g_sig = (nb * Sinv - (Sinv @ M) @ Sinv) * mo            # dF/d(gathered sig)
             g_mu = (-2.0 * n_k.view(-1, 1)
                     * (Sinv @ delta[:, :, None]).squeeze(-1)) * maskf  # dF/d(gathered mu_k)
@@ -303,7 +320,8 @@ def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
     return total
 
 
-def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
+def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float,
+                        method: str = "auto"):
     """Return the scalar ``-2 log L`` summed over all patterns (differentiable).
 
     Parameters
@@ -339,7 +357,7 @@ def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
 
     L = _batched_cholesky_with_ridge(torch, sig, eps)
     logdet = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(-1)  # (P,)
-    trace = _trace_sigma_inv_m(torch, L, M)                 # (P,)
+    trace = _trace_sigma_inv_m(torch, L, M, method)         # (P,)
 
     return (n_k * logdet + trace).sum()
 
@@ -383,7 +401,8 @@ def auto_chunk_size(n_vars: int, dtype_bytes: int, budget_bytes: int = 1 << 31):
     return max(1, int(budget_bytes // per_pattern))
 
 
-def objective_value(torch, mu, sigma, consts: dict, eps: float, chunk_size=None):
+def objective_value(torch, mu, sigma, consts: dict, eps: float, chunk_size=None,
+                    method: str = "auto"):
     """Sum ``-2 log L`` over all patterns, evaluated in pattern chunks.
 
     Intended for the forward (value) path under ``torch.no_grad()``; peak memory
@@ -392,13 +411,14 @@ def objective_value(torch, mu, sigma, consts: dict, eps: float, chunk_size=None)
     P = consts["obs_idx"].shape[0]
     total = None
     for s, e in chunk_bounds(P, chunk_size):
-        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e), eps)
+        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e),
+                                   eps, method)
         total = part if total is None else total + part
     return total
 
 
 def accumulate_gradient(torch, theta_gpu, unpack, consts: dict, eps: float,
-                        chunk_size=None):
+                        chunk_size=None, method: str = "auto"):
     """Gradient of ``-2 log L`` w.r.t. ``theta_gpu`` via per-chunk backprop.
 
     Each chunk re-unpacks ``theta_gpu`` to ``(mu, sigma)``, computes its own
@@ -412,7 +432,8 @@ def accumulate_gradient(torch, theta_gpu, unpack, consts: dict, eps: float,
     obj = 0.0
     for s, e in chunk_bounds(P, chunk_size):
         mu, sigma = unpack(theta_gpu)
-        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e), eps)
+        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e),
+                                   eps, method)
         part.backward()
         obj += float(part.detach())
     return theta_gpu.grad, obj

@@ -366,6 +366,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.11.0 — Portable inverse path and selectable inverse algorithm in the GPU objective
+
+- The GPU objective's triangular-solve inverse path now runs on every device
+  (it previously relied on `cholesky_inverse`, unavailable on Apple Metal).
+- The batched GPU kernel functions accept a `method` argument (`"auto"`,
+  `"solve"`, `"blocked"`) to select the per-pattern inverse algorithm; `"auto"`
+  keeps the existing device-aware default. Results are identical regardless of
+  `method`.
+
 ### 3.10.0 — Closed-form GPU gradient: fast, practical wide-data fits on Apple Silicon
 
 - `mlest(backend='gpu')` now uses a closed-form gradient instead of automatic

@@ -191,6 +191,38 @@ def test_analytic_gradient_matches_autodiff():
         np.testing.assert_allclose(g_ana, g_auto, rtol=1e-8, atol=1e-9)
 
 
+@pytest.mark.parametrize("method", ["auto", "solve", "blocked"])
+def test_method_toggle_is_result_invariant(method):
+    """The trace/inverse ``method`` toggle ('auto'|'solve'|'blocked') selects a
+    computational path only — it must not change the result. Each forced method
+    yields the same objective value and the same gradient as the default path
+    and as reverse-mode autodiff. Exercised on CPU, where both the blocked
+    inverse and the triangular-solve path are valid (the solve path uses
+    ``solve_triangular`` against the identity, since ``cholesky_inverse`` is
+    unavailable on MPS)."""
+    X = _make_data(seed=8, n=240, p=7)
+    obj = GPUObjectiveFP64(X, device="cpu")
+    theta = obj.get_initial_parameters()
+
+    # Objective value is identical across methods.
+    th = torch.tensor(theta, dtype=torch.float64)
+    mu, sigma = obj._unpack_gpu(th)
+    val_default = float(batched_neg2_loglik(torch, mu, sigma, obj._consts, obj.eps))
+    val_method = float(batched_neg2_loglik(torch, mu, sigma, obj._consts,
+                                           obj.eps, method))
+    assert np.isclose(val_default, val_method, rtol=1e-10), (method, val_default,
+                                                             val_method)
+
+    # Analytic gradient under the forced method equals reverse-mode autodiff.
+    t1 = torch.tensor(theta, dtype=torch.float64, requires_grad=True)
+    g_auto = accumulate_gradient(torch, t1, obj._unpack_gpu, obj._consts,
+                                 obj.eps, obj.chunk_size)[0].detach().numpy()
+    t2 = torch.tensor(theta, dtype=torch.float64, requires_grad=True)
+    g_ana = analytic_gradient(torch, t2, obj._unpack_gpu, obj._consts,
+                              obj.eps, obj.chunk_size, method=method).detach().numpy()
+    np.testing.assert_allclose(g_ana, g_auto, rtol=1e-8, atol=1e-9)
+
+
 _MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
 
 

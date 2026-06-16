@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.11.0
+
+A more portable matrix-inverse path in the GPU objective, plus advanced control
+over which inverse algorithm is used.
+
+- **The triangular-solve inverse path now runs on every device.** It previously
+  relied on `cholesky_inverse`, which is not implemented on Apple Metal; it now
+  inverts the Cholesky factor with `solve_triangular` and works on Apple Silicon
+  as well as NVIDIA and CPU. Default fits are unaffected --- results are
+  unchanged.
+- **The batched GPU kernel functions accept a `method` argument** (`"auto"`,
+  `"solve"`, or `"blocked"`) selecting how each per-pattern inverse covariance
+  and trace term is computed. The default `"auto"` is unchanged: the matmul-only
+  blocked inverse on Apple Metal (where the triangular solve is slow), and
+  triangular solves on NVIDIA and CPU. `"solve"` and `"blocked"` force the choice
+  on any device, which is useful for benchmarking the two paths directly. The
+  objective value and gradient are identical regardless of `method`.
+
 ## 3.10.0
 
 GPU maximum-likelihood estimation for missing data is dramatically faster on
