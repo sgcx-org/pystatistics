@@ -366,6 +366,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.8.0 — Survival results expose warnings
+
+- All survival results (`kaplan_meier`, `survdiff`, `coxph`, `discrete_time`)
+  now expose a `.warnings` attribute, consistent with every other analysis type.
+  Non-fatal issues found during fitting — such as a non-converged Cox model — are
+  now reachable instead of silently dropped.
+- The log-rank test (`survdiff`) now warns when its chi-square approximation may
+  be unreliable: when any group's expected event count is below 5, or when a
+  group has no observed events.
+
 ### 3.7.1 — Correct covariance from the double-precision GPU estimator
 
 - Fixed an incorrect covariance matrix returned by `mlest(backend='gpu')` in

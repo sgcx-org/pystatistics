@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.8.0
+
+Survival analysis results now expose warnings, consistent with every other
+analysis type.
+
+- **All survival results (`kaplan_meier`, `survdiff`, `coxph`, `discrete_time`)
+  now expose a `.warnings` attribute**, matching the rest of the library.
+  Non-fatal issues detected during fitting — such as a Cox model that did not
+  converge — are now reachable through this attribute instead of being silently
+  dropped.
+- **The log-rank test (`survdiff`) now reports when its chi-square approximation
+  may be unreliable.** It adds a warning when any group's expected number of
+  events is below 5, or when a group has no observed events. These appear in the
+  returned result's `.warnings`.
+
 ## 3.7.1
 
 Bug fix: correct covariance reconstruction in the double-precision GPU estimator.
