@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.8.1
+
+Bug fix: maximum-likelihood estimation for missing data with more than 62
+variables.
+
+- **`mlest` now groups missingness patterns correctly on datasets with more
+  than 62 variables.** The internal pattern code used `2**i` integer weights,
+  which overflow a 64-bit integer past 62 variables — collapsing distinct
+  missingness patterns onto the same code, mixing rows with different patterns,
+  and producing NaN estimates (CPU and GPU alike). Pattern codes now use
+  arbitrary-precision integers above 62 variables; results are unchanged for
+  datasets with 62 variables or fewer. This fixes NaN fits on wide data such as
+  survey instruments with 100+ items.
+
 ## 3.8.0
 
 Survival analysis results now expose warnings, consistent with every other

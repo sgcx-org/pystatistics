@@ -366,6 +366,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.8.1 — Correct MLE for missing data with >62 variables
+
+- `mlest` now groups missingness patterns correctly when a dataset has more
+  than 62 variables. An integer-overflow bug in the pattern code previously
+  merged distinct patterns and produced NaN estimates on wide data (e.g.
+  survey instruments with 100+ items). Results are unchanged at ≤62 variables.
+
 ### 3.8.0 — Survival results expose warnings
 
 - All survival results (`kaplan_meier`, `survdiff`, `coxph`, `discrete_time`)

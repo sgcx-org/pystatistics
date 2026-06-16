@@ -106,9 +106,23 @@ class MLEObjectiveBase:
         # Create presence/absence matrix (1 = observed, 0 = missing)
         self.presence_absence = (~np.isnan(self.original_data)).astype(int)
 
-        # Create pattern codes using powers of 2 (R's approach)
-        powers = 2 ** np.arange(self.n_vars - 1, -1, -1)
-        pattern_codes = self.presence_absence @ powers
+        # Create pattern codes using powers of 2 (R's approach). Each distinct
+        # missingness pattern must map to a distinct code, or rows with
+        # different patterns get grouped together and a group's observed mask is
+        # applied to rows it does not match — pulling NaNs into the "observed"
+        # data. For n_vars > 62, 2**i overflows int64 and causes exactly that
+        # collision, so use arbitrary-precision Python integers in that regime.
+        # The ordering is identical to the int64 codes for small n_vars, so
+        # R-compatible behaviour is preserved where R applies (n_vars <= 50).
+        if self.n_vars <= 62:
+            powers = (2 ** np.arange(self.n_vars - 1, -1, -1)).astype(np.int64)
+            pattern_codes = self.presence_absence @ powers
+        else:
+            powers = np.array(
+                [1 << (self.n_vars - 1 - i) for i in range(self.n_vars)],
+                dtype=object,
+            )
+            pattern_codes = self.presence_absence.astype(object) @ powers
 
         # Sort data by pattern codes
         sort_indices = np.argsort(pattern_codes)
