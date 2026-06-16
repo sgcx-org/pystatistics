@@ -9,12 +9,4 @@
 
 ## Changes
 
-- Survival Solution classes now expose a `.warnings` property. `KMSolution`,
-  `LogRankSolution`, `CoxSolution`, and `DiscreteTimeSolution` previously had no
-  way to surface non-fatal warnings, so warnings computed by the solvers (e.g.
-  the Cox Newton-Raphson non-convergence note) were unreachable. The property
-  delegates to the underlying result, matching every other domain.
-- `survdiff` (log-rank test) now emits non-fatal warnings when the chi-square
-  approximation is questionable: when any group's expected event count is below
-  5, or when a group has zero observed events. These surface via
-  `LogRankSolution.warnings`.
+*(empty — no unreleased changes yet)*
