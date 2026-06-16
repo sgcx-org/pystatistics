@@ -27,6 +27,8 @@ def mlest(
     tol: float | None = None,
     max_iter: int | None = None,
     regularize: bool = True,
+    force: bool = False,
+    collinearity_tol: float | None = None,
     verbose: bool = False,
 ) -> MVNSolution:
     """
@@ -65,6 +67,16 @@ def mlest(
     max_iter : int or None
         Maximum iterations. If None, uses algorithm-appropriate default:
         direct = 100, em = 1000.
+    force : bool
+        When False (default), a rank-deficient fit — caused by
+        (near-)collinear variables, for which no interior maximum-likelihood
+        estimate exists — raises ``SingularMatrixError`` instead of
+        returning a meaningless result. When True, the degenerate result is
+        returned anyway with ``converged=False`` and a warning attached.
+    collinearity_tol : float or None
+        Full-rank detection threshold on the fitted correlation matrix's
+        minimum eigenvalue. If None, uses the calibrated default (1e-5).
+        Smaller values make the collinearity check more permissive.
     verbose : bool
         Print progress information.
 
@@ -107,12 +119,50 @@ def mlest(
             f"Use 'direct', 'em', or 'monotone'."
         )
 
+    # Rank-deficiency guard (Rule 1: fail loud rather than report a
+    # meaningless fit). Centralised here so every algorithm and backend
+    # is covered by a single check. On (near-)collinear input the fitted
+    # covariance is singular and the optimizer's convergence flag is not
+    # trustworthy, so the fitted covariance is inspected directly.
+    result = _guard_degeneracy(result, force=force, tol=collinearity_tol)
+
     if verbose:
         print(f"Converged: {result.params.converged} "
               f"(iterations: {result.params.n_iter}, "
               f"loglik: {result.params.loglik:.6f})")
 
     return MVNSolution(_result=result, _design=design)
+
+
+def _guard_degeneracy(result, *, force, tol):
+    """Reject (or flag) a rank-deficient fit.
+
+    Inspects the fitted covariance in ``result``. Returns ``result``
+    unchanged when full-rank. When degenerate and ``force`` is True, returns
+    a copy with ``converged=False`` and a warning appended. When degenerate
+    and ``force`` is False, raises ``SingularMatrixError`` (via
+    ``check_fitted_covariance``).
+    """
+    from dataclasses import replace
+
+    from pystatistics.mvnmle._degeneracy import (
+        DEFAULT_COLLINEARITY_TOL,
+        check_fitted_covariance,
+    )
+
+    effective_tol = tol if tol is not None else DEFAULT_COLLINEARITY_TOL
+    warning_msg = check_fitted_covariance(
+        result.params.sigmahat, tol=effective_tol, force=force
+    )
+    if warning_msg is None:
+        return result
+
+    # force=True: keep the numbers but report the truth about them.
+    return replace(
+        result,
+        params=replace(result.params, converged=False),
+        warnings=result.warnings + (warning_msg,),
+    )
 
 
 def _solve_monotone(design, verbose):
