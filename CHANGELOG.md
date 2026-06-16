@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.12.0
+
+Multivariate-normal MLE now rejects rank-deficient input instead of returning a
+meaningless fit.
+
+- **`mlest` now fails loudly on (near-)collinear input.** When two or more
+  variables are collinear, the covariance has no interior maximum-likelihood
+  estimate, yet `mlest` could previously return a result reporting success with a
+  near-singular covariance. It now inspects the fitted covariance and raises
+  `SingularMatrixError` when it is rank-deficient. Two new parameters control
+  this: `force=False` — set to `True` to return the degenerate result anyway,
+  with `converged=False` and a warning attached — and `collinearity_tol=None` to
+  override the detection threshold. Detection only: collinear columns are never
+  dropped automatically, so removing them remains the caller's choice. This
+  applies to every algorithm (`direct`, `em`, `monotone`) and both backends.
+
+  Note: this is a behaviour change. Code that previously received a (meaningless)
+  result from collinear input will now raise unless it passes `force=True`.
+  Well-conditioned, full-rank problems are unaffected.
+
 ## 3.11.0
 
 A more portable matrix-inverse path in the GPU objective, plus advanced control

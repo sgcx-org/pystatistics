@@ -366,6 +366,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.12.0 — MVN MLE rejects rank-deficient input
+
+- `mlest` now raises `SingularMatrixError` on (near-)collinear input instead of
+  returning a meaningless "converged" fit with a near-singular covariance — such
+  input has no interior maximum-likelihood estimate. Pass `force=True` to return
+  the degenerate result anyway (with `converged=False` and a warning), or
+  `collinearity_tol` to tune the detection threshold. Collinear columns are never
+  dropped automatically. Full-rank problems are unaffected. This is a behaviour
+  change: collinear input that previously returned a result now raises by default.
+
 ### 3.11.0 — Portable inverse path and selectable inverse algorithm in the GPU objective
 
 - The GPU objective's triangular-solve inverse path now runs on every device
