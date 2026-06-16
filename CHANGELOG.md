@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.6.0
+
+Faster GPU maximum-likelihood estimation for multivariate normal data with
+missing values.
+
+- **`mlest(backend='gpu')` (direct / BFGS) is dramatically faster on data with
+  many distinct missingness patterns.** The per-pattern log-likelihood is now
+  evaluated with a single batched Cholesky across all patterns at once, instead
+  of a Python loop that launched a separate small GPU kernel per pattern. The
+  improvement grows with the number of distinct missingness patterns — large for
+  survey-scale data, where thousands of patterns are common. Results are
+  unchanged: the batched objective is validated against the previous per-pattern
+  computation for both value and gradient, in FP32 and FP64.
+- **More stable FP32 covariance computation on the GPU path.** Per-pattern
+  second moments are now formed in a cancellation-free way, so FP32 GPU fits
+  track the FP64 / CPU result more closely.
+
 ## 3.5.1
 
 Performance: the GPU MICE backend now scales to large datasets.

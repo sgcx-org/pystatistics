@@ -7,13 +7,18 @@ Uses PyTorch autodiff for analytical gradients.
 
 import numpy as np
 import warnings
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Any
 from pystatistics.core.exceptions import NumericalError
 
 from .base import MLEObjectiveBase
 from .parameterizations import (
     CholeskyParameterization,
     BoundedCholeskyParameterization
+)
+from ._batched_cholesky import (
+    build_batched_constants,
+    to_torch,
+    batched_neg2_loglik,
 )
 
 
@@ -108,26 +113,14 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             return torch.device('cpu')
 
     def _prepare_gpu_data(self) -> None:
-        """Transfer pattern data to GPU."""
-        torch = self.torch
+        """Precompute padded per-pattern sufficient statistics on the GPU.
 
-        self.gpu_patterns = []
-        for pattern in self.patterns:
-            gpu_pattern = {
-                'n_obs': pattern.n_obs,
-                'n_observed': len(pattern.observed_indices),
-                'observed_indices': torch.tensor(
-                    pattern.observed_indices,
-                    device=self.device,
-                    dtype=torch.long
-                ),
-                'data': torch.tensor(
-                    pattern.data,
-                    device=self.device,
-                    dtype=self.dtype
-                )
-            }
-            self.gpu_patterns.append(gpu_pattern)
+        Built once (patterns are fixed across optimiser iterations); every
+        objective/gradient evaluation then reuses them in a single batched
+        Cholesky instead of looping over patterns.
+        """
+        consts = build_batched_constants(self.patterns, self.n_vars)
+        self._consts = to_torch(consts, self.torch, self.device, self.dtype)
 
     def get_initial_parameters(self) -> np.ndarray:
         """Get initial parameters — raises on ill-conditioned covariance."""
@@ -181,78 +174,17 @@ class GPUObjectiveFP32(MLEObjectiveBase):
 
     def _torch_objective(self, theta_gpu: Any) -> Any:
         """
-        PyTorch implementation of objective function.
+        PyTorch implementation of the objective function.
 
-        Returns scalar objective value (-2 * log-likelihood for R compatibility).
+        Returns the scalar objective (-2 * log-likelihood, for R compatibility),
+        evaluated over all missingness patterns in a single batched Cholesky.
+
+        CRITICAL: matches the CPU objective — no n*p*log(2pi) constant; each
+        pattern contributes n_k * log|Sigma_k| + tr(Sigma_k^-1 * M_k).
         """
-        torch = self.torch
-
-        # Unpack parameters on GPU
         mu_gpu, sigma_gpu = self._unpack_gpu(theta_gpu)
-
-        # Initialize objective
-        obj_value = torch.zeros(1, device=self.device, dtype=self.dtype)
-
-        # Process each pattern
-        for gpu_pattern in self.gpu_patterns:
-            if gpu_pattern['n_observed'] == 0:
-                continue
-
-            # Extract observed submatrices
-            obs_idx = gpu_pattern['observed_indices']
-            mu_k = torch.index_select(mu_gpu, 0, obs_idx)
-            sigma_k_rows = torch.index_select(sigma_gpu, 0, obs_idx)
-            sigma_k = torch.index_select(sigma_k_rows, 1, obs_idx)
-
-            # Add small diagonal for FP32 stability
-            sigma_k = sigma_k + self.eps * torch.eye(
-                gpu_pattern['n_observed'],
-                device=self.device,
-                dtype=self.dtype
-            )
-
-            # Compute pattern contribution
-            contrib = self._compute_pattern_contribution_gpu(
-                gpu_pattern, mu_k, sigma_k
-            )
-
-            obj_value = obj_value + contrib
-
-        return obj_value.squeeze()
-
-    def _compute_pattern_contribution_gpu(self, pattern: Dict,
-                                         mu_k: Any,
-                                         sigma_k: Any) -> Any:
-        """
-        Compute pattern contribution on GPU.
-
-        CRITICAL: The CPU objective does NOT include the constant term n*p*log(2pi).
-        It only computes: n_k * [log|Sigma_k| + tr(Sigma_k^-1 * S_k)]
-        """
-        torch = self.torch
-
-        n_obs = pattern['n_obs']
-        data = pattern['data']
-
-        # Log determinant term: log|Sigma_k|
-        L_k = torch.linalg.cholesky(sigma_k)
-        log_det_term = 2.0 * torch.sum(torch.log(torch.diag(L_k)))
-
-        # Compute sample covariance to match CPU formulation
-        data_centered = data - mu_k.unsqueeze(0)
-        S_k = (data_centered.T @ data_centered) / n_obs
-
-        # Trace term: tr(Sigma_k^-1 * S_k)
-        # Use Cholesky solve for MPS compatibility
-        Y = torch.linalg.solve_triangular(L_k, S_k, upper=False)
-        sigma_inv_S = torch.linalg.solve_triangular(L_k.T, Y, upper=True)
-        trace_term = torch.trace(sigma_inv_S)
-
-        # Total contribution: n_obs * [log|Sigma| + tr(Sigma^-1 S)]
-        # NO CONSTANT TERM to match CPU
-        total_contribution = n_obs * (log_det_term + trace_term)
-
-        return total_contribution
+        return batched_neg2_loglik(self.torch, mu_gpu, sigma_gpu,
+                                   self._consts, self.eps)
 
     def _unpack_gpu(self, theta_gpu: Any) -> Tuple[Any, Any]:
         """

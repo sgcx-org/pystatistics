@@ -366,6 +366,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.6.0 — Faster GPU MLE for missing-data multivariate normal
+
+- `mlest(backend='gpu')` (direct / BFGS) now evaluates the per-pattern
+  log-likelihood with a single batched Cholesky across all missingness
+  patterns instead of looping over them one at a time. On data with many
+  distinct patterns — common at survey scale — this is substantially
+  faster. Results are unchanged.
+- More numerically stable FP32 covariance computation on the GPU path.
+
 ### 3.5.1 — GPU MICE scales to large datasets
 
 - The GPU predictive-mean-matching donor search now uses the same memory-light

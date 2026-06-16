@@ -8,9 +8,14 @@ CUDA only - MPS does not support FP64.
 
 import numpy as np
 import warnings
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Any
 from .base import MLEObjectiveBase, PatternData
 from .parameterizations import CholeskyParameterization
+from ._batched_cholesky import (
+    build_batched_constants,
+    to_torch,
+    batched_neg2_loglik,
+)
 
 
 class GPUObjectiveFP64(MLEObjectiveBase):
@@ -100,26 +105,12 @@ class GPUObjectiveFP64(MLEObjectiveBase):
             return torch.device('cpu')
 
     def _prepare_gpu_data(self) -> None:
-        """Transfer pattern data to GPU with FP64 precision."""
-        torch = self.torch
+        """Precompute padded per-pattern sufficient statistics on the GPU (FP64).
 
-        self.gpu_patterns = []
-        for pattern in self.patterns:
-            gpu_pattern = {
-                'n_obs': pattern.n_obs,
-                'n_observed': len(pattern.observed_indices),
-                'observed_indices': torch.tensor(
-                    pattern.observed_indices,
-                    device=self.device,
-                    dtype=torch.long
-                ),
-                'data': torch.tensor(
-                    pattern.data,
-                    device=self.device,
-                    dtype=self.dtype
-                )
-            }
-            self.gpu_patterns.append(gpu_pattern)
+        Built once; reused by every batched objective/gradient evaluation.
+        """
+        consts = build_batched_constants(self.patterns, self.n_vars)
+        self._consts = to_torch(consts, self.torch, self.device, self.dtype)
 
     def get_initial_parameters(self) -> np.ndarray:
         """Get initial parameters using standard Cholesky."""
@@ -150,58 +141,14 @@ class GPUObjectiveFP64(MLEObjectiveBase):
         return obj_value.item()
 
     def _torch_objective(self, theta_gpu: Any) -> Any:
-        """PyTorch implementation of objective function."""
-        torch = self.torch
+        """PyTorch implementation of the objective (batched over patterns).
 
+        CRITICAL: no n*p*log(2pi) constant, to match CPU; each pattern
+        contributes n_k * [log|Sigma_k| + tr(Sigma_k^-1 * M_k)].
+        """
         mu_gpu, sigma_gpu = self._unpack_gpu(theta_gpu)
-
-        obj_value = torch.zeros(1, device=self.device, dtype=self.dtype)
-
-        for gpu_pattern in self.gpu_patterns:
-            if gpu_pattern['n_observed'] == 0:
-                continue
-
-            obs_idx = gpu_pattern['observed_indices']
-            mu_k = mu_gpu[obs_idx]
-            sigma_k = sigma_gpu[obs_idx][:, obs_idx]
-
-            contrib = self._compute_pattern_contribution_gpu(
-                gpu_pattern, mu_k, sigma_k
-            )
-
-            obj_value = obj_value + contrib
-
-        return obj_value.squeeze()
-
-    def _compute_pattern_contribution_gpu(self, pattern: Dict,
-                                         mu_k: Any,
-                                         sigma_k: Any) -> Any:
-        """
-        Compute pattern contribution with FP64 precision.
-
-        CRITICAL: No constant term n*p*log(2pi) to match CPU.
-        Computes: n_k * [log|Sigma_k| + tr(Sigma_k^-1 * S_k)]
-        """
-        torch = self.torch
-
-        n_obs = pattern['n_obs']
-
-        # Log determinant term
-        L_k = torch.linalg.cholesky(sigma_k)
-        log_det_term = 2.0 * torch.sum(torch.log(torch.diag(L_k)))
-
-        # Compute sample covariance
-        data_centered = pattern['data'] - mu_k
-        S_k = (data_centered.T @ data_centered) / n_obs
-
-        # Trace term
-        X = torch.linalg.solve(sigma_k, S_k)
-        trace_term = torch.trace(X)
-
-        # Total contribution: n_obs * [log|Sigma| + tr(Sigma^-1 S)]
-        total_contribution = n_obs * (log_det_term + trace_term)
-
-        return total_contribution
+        return batched_neg2_loglik(self.torch, mu_gpu, sigma_gpu,
+                                   self._consts, self.eps)
 
     def _unpack_gpu(self, theta_gpu: Any) -> Tuple[Any, Any]:
         """Unpack parameters on GPU with FP64."""
