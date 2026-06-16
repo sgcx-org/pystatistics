@@ -28,6 +28,7 @@ from pystatistics.mvnmle._objectives._batched_cholesky import (
     build_batched_constants,
     to_torch,
     batched_neg2_loglik,
+    _tri_inv_blocked,
 )
 
 EPS = 1e-6
@@ -98,6 +99,50 @@ def test_kernel_value_all_observed():
     got = batched_neg2_loglik(torch, torch.tensor(mu), torch.tensor(sigma),
                               ct, EPS).item()
     assert np.isclose(got, _numpy_loop(obj.patterns, mu, sigma), rtol=1e-9)
+
+
+@pytest.mark.parametrize("v", [1, 2, 3, 7, 16, 50])
+@pytest.mark.parametrize("rho", [0.0, 0.9, 0.99])
+def test_blocked_triangular_inverse_exact(v, rho):
+    """The matmul-only blocked inverse equals the true inverse, including for
+    highly-correlated (ill-conditioned) Cholesky factors where a Neumann series
+    would diverge."""
+    idx = torch.arange(v)
+    corr = rho ** (idx[:, None] - idx[None, :]).abs().to(torch.float64)
+    Sig = corr.expand(64, v, v) + 1e-2 * torch.eye(v, dtype=torch.float64)
+    L = torch.linalg.cholesky(Sig)
+    W = _tri_inv_blocked(torch, L)
+    eye = torch.eye(v, dtype=torch.float64).expand(64, v, v)
+    # W must be the true inverse: W @ L = I
+    assert torch.allclose(W @ L, eye, atol=1e-8), (W @ L - eye).abs().max().item()
+
+
+def test_blocked_inverse_autodiff_matches_solve():
+    """tr(Sigma^-1 M) via the blocked inverse has the same gradient as via
+    triangular solve (both on CPU; the blocked path is forced here)."""
+    P, v = 1500, 12
+    rng = np.random.default_rng(5)
+    A = rng.standard_normal((P, v, v))
+    Sig = torch.tensor(A @ A.transpose(0, 2, 1) + v * np.eye(v))
+    M = torch.tensor((lambda b: b @ b.transpose(0, 2, 1))(rng.standard_normal((P, v, v))))
+    L0 = torch.linalg.cholesky(Sig)
+
+    def via_solve(L):
+        Y = torch.linalg.solve_triangular(L, M, upper=False)
+        X = torch.linalg.solve_triangular(L.transpose(-1, -2), Y, upper=True)
+        return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
+
+    def via_blocked(L):
+        W = _tri_inv_blocked(torch, L)
+        return ((W.transpose(-1, -2) @ W) * M).sum((-2, -1))
+
+    g = {}
+    for nm, fn in [("solve", via_solve), ("blocked", via_blocked)]:
+        L = L0.clone().requires_grad_(True)
+        fn(L).sum().backward()
+        g[nm] = L.grad
+    rel = (g["blocked"] - g["solve"]).abs().max() / g["solve"].abs().max()
+    assert rel < 1e-6, rel.item()
 
 
 _MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()

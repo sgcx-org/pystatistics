@@ -130,6 +130,58 @@ def _batched_cholesky_with_ridge(torch, sigma_b, eps: float, max_tries: int = 5)
         f"after ridge escalation to {ridge:.2e}")
 
 
+def _tri_inv_blocked(torch, L):
+    """Inverse of a batched lower-triangular matrix using matmul only.
+
+    Divide and conquer: inv([[A,0],[B,C]]) = [[A^-1, 0], [-C^-1 B A^-1, C^-1]],
+    recursing to a closed-form 2x2 (and 1x1) base. This touches no triangular
+    solve / inverse kernel — only matmul, slicing and elementwise ops — which is
+    the operation set Apple Metal (MPS) executes fast (its triangular-solve and
+    inverse kernels are ~300x slower than its batched matmul/Cholesky). It is
+    numerically stable (back-substitution-equivalent; no growing matrix powers)
+    and exact to floating precision, validated across condition numbers up to
+    correlation 0.99. ``L`` is (..., v, v) lower-triangular with positive
+    diagonal.
+    """
+    v = L.shape[-1]
+    if v == 1:
+        return 1.0 / L
+    if v == 2:
+        inv_a = 1.0 / L[..., 0, 0]
+        inv_c = 1.0 / L[..., 1, 1]
+        off = -L[..., 1, 0] * inv_a * inv_c
+        zero = torch.zeros_like(inv_a)
+        row0 = torch.stack([inv_a, zero], dim=-1)
+        row1 = torch.stack([off, inv_c], dim=-1)
+        return torch.stack([row0, row1], dim=-2)
+    h = v // 2
+    A = L[..., :h, :h].contiguous()
+    C = L[..., h:, h:].contiguous()
+    B = L[..., h:, :h].contiguous()
+    Ai = _tri_inv_blocked(torch, A)
+    Ci = _tri_inv_blocked(torch, C)
+    BL = -Ci @ (B @ Ai)
+    z = torch.zeros(L.shape[:-2] + (h, v - h), device=L.device, dtype=L.dtype)
+    return torch.cat([torch.cat([Ai, z], dim=-1),
+                      torch.cat([BL, Ci], dim=-1)], dim=-2)
+
+
+def _trace_sigma_inv_m(torch, L, M):
+    """tr(Sigma_k^{-1} M_k) for the whole batch, Sigma_k = L_k L_k^T.
+
+    On MPS, form Sigma^{-1} via the matmul-only blocked inverse (Metal's
+    triangular solve is pathologically slow). Elsewhere (CUDA/CPU) use two
+    triangular solves, which are well optimised there.
+    """
+    if L.device.type == "mps":
+        W = _tri_inv_blocked(torch, L)                  # L^{-1}
+        sigma_inv = W.transpose(-1, -2) @ W             # Sigma^{-1} = L^-T L^-1
+        return (sigma_inv * M).sum((-2, -1))
+    Y = torch.linalg.solve_triangular(L, M, upper=False)
+    X = torch.linalg.solve_triangular(L.transpose(-1, -2), Y, upper=True)
+    return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
+
+
 def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
     """Return the scalar ``-2 log L`` summed over all patterns (differentiable).
 
@@ -166,11 +218,6 @@ def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
 
     L = _batched_cholesky_with_ridge(torch, sig, eps)
     logdet = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(-1)  # (P,)
-    # X = Sigma_k^{-1} M_k via two batched triangular solves (L L^T X = M).
-    # NB: triangular solves work on MPS; torch.cholesky_solve does NOT — keep
-    # this path Metal-compatible (the looped objective used the same reason).
-    Y = torch.linalg.solve_triangular(L, M, upper=False)
-    X = torch.linalg.solve_triangular(L.transpose(-1, -2), Y, upper=True)
-    trace = torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)     # (P,)
+    trace = _trace_sigma_inv_m(torch, L, M)                 # (P,)
 
     return (n_k * logdet + trace).sum()

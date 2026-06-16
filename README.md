@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.7.0 — Much faster GPU MLE on Apple Silicon
+
+- `mlest(backend='gpu')` (direct / BFGS) on Apple Silicon (MPS) now computes
+  the per-pattern trace term with a matmul-only blocked matrix inversion,
+  sidestepping Metal's slow triangular-solve kernels. For data with many
+  distinct missingness patterns (survey scale), this makes Apple-GPU fits
+  dramatically faster, with results identical to before. CUDA is unchanged.
+
 ### 3.6.0 — Faster GPU MLE for missing-data multivariate normal
 
 - `mlest(backend='gpu')` (direct / BFGS) now evaluates the per-pattern

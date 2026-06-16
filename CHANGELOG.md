@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.7.0
+
+Much faster GPU maximum-likelihood estimation on Apple Silicon for
+multivariate normal data with missing values.
+
+- **`mlest(backend='gpu')` (direct / BFGS) is dramatically faster on Apple
+  Silicon (MPS)** for data with many distinct missingness patterns. The
+  per-pattern trace term is now computed with a matmul-only blocked matrix
+  inversion, which sidesteps Metal's triangular-solve kernels — far slower on
+  Apple GPUs than matrix multiply. Results are numerically identical to before
+  (machine precision) and stable across the full range of conditioning. A
+  50-variable survey problem with ~20,000 distinct missingness patterns, which
+  was previously impractical on an Apple GPU, now fits in minutes. NVIDIA (CUDA)
+  behaviour is unchanged.
+
 ## 3.6.0
 
 Faster GPU maximum-likelihood estimation for multivariate normal data with
