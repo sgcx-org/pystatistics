@@ -20,6 +20,9 @@ from ._batched_cholesky import (
     to_torch,
     batched_neg2_loglik,
     unpack_cholesky,
+    objective_value,
+    accumulate_gradient,
+    auto_chunk_size,
 )
 
 
@@ -34,7 +37,8 @@ class GPUObjectiveFP32(MLEObjectiveBase):
 
     def __init__(self, data: np.ndarray,
                  device: Optional[str] = None,
-                 use_bounded: bool = False):
+                 use_bounded: bool = False,
+                 chunk_size: Optional[int] = None):
         """
         Initialize GPU FP32 objective.
 
@@ -46,6 +50,10 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             Device to use ('cuda', 'mps', or None for auto)
         use_bounded : bool
             Whether to use bounded parameterization for stability
+        chunk_size : int or None
+            Number of missingness patterns to process per chunk in the objective
+            and gradient. ``None`` auto-sizes to a memory budget so wide data with
+            many patterns does not exhaust GPU memory. Pass an int to override.
         """
         super().__init__(data, skip_validation=False)
 
@@ -78,6 +86,10 @@ class GPUObjectiveFP32(MLEObjectiveBase):
         # FP32 settings
         self.dtype = torch.float32
         self.eps = 1e-6  # Looser epsilon for FP32
+
+        # Patterns processed per chunk (auto-sized to a memory budget unless set).
+        self.chunk_size = (chunk_size if chunk_size
+                           else auto_chunk_size(self.n_vars, 4))
 
         # Transfer pattern data to GPU
         self._prepare_gpu_data()
@@ -169,7 +181,9 @@ class GPUObjectiveFP32(MLEObjectiveBase):
 
         with torch.no_grad():
             theta_gpu = torch.tensor(theta, device=self.device, dtype=self.dtype)
-            obj_value = self._torch_objective(theta_gpu)
+            mu_gpu, sigma_gpu = self._unpack_gpu(theta_gpu)
+            obj_value = objective_value(torch, mu_gpu, sigma_gpu,
+                                        self._consts, self.eps, self.chunk_size)
 
         return obj_value.item()
 
@@ -229,7 +243,8 @@ class GPUObjectiveFP32(MLEObjectiveBase):
         return mu, sigma
 
     def compute_gradient(self, theta: np.ndarray) -> np.ndarray:
-        """Compute gradient using automatic differentiation."""
+        """Compute gradient using automatic differentiation (chunked over
+        patterns to bound peak memory)."""
         torch = self.torch
 
         theta_gpu = torch.tensor(
@@ -239,14 +254,9 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             requires_grad=True
         )
 
-        obj_value = self._torch_objective(theta_gpu)
-
-        grad_tensor = torch.autograd.grad(
-            outputs=obj_value,
-            inputs=theta_gpu,
-            create_graph=False,
-            retain_graph=False
-        )[0]
+        grad_tensor, _ = accumulate_gradient(
+            torch, theta_gpu, self._unpack_gpu,
+            self._consts, self.eps, self.chunk_size)
 
         return grad_tensor.cpu().numpy()
 

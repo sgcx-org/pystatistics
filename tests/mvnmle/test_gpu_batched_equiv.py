@@ -29,6 +29,8 @@ from pystatistics.mvnmle._objectives._batched_cholesky import (
     to_torch,
     batched_neg2_loglik,
     _tri_inv_blocked,
+    chunk_bounds,
+    auto_chunk_size,
 )
 
 EPS = 1e-6
@@ -143,6 +145,31 @@ def test_blocked_inverse_autodiff_matches_solve():
         g[nm] = L.grad
     rel = (g["blocked"] - g["solve"]).abs().max() / g["solve"].abs().max()
     assert rel < 1e-6, rel.item()
+
+
+def test_chunk_bounds_and_auto_size():
+    assert chunk_bounds(10, None) == [(0, 10)]
+    assert chunk_bounds(10, 0) == [(0, 10)]
+    assert chunk_bounds(10, 100) == [(0, 10)]
+    assert chunk_bounds(10, 4) == [(0, 4), (4, 8), (8, 10)]
+    # auto size shrinks with v and is always positive
+    assert auto_chunk_size(100, 4) >= 1
+    assert auto_chunk_size(25, 4) > auto_chunk_size(200, 4)
+
+
+def test_chunked_matches_unchunked_value_and_gradient():
+    """Pattern-chunking must not change the objective or its gradient."""
+    X = _make_data(seed=4, n=220, p=8)
+    big = GPUObjectiveFP64(X, device="cpu", chunk_size=10 ** 9)   # one chunk
+    small = GPUObjectiveFP64(X, device="cpu", chunk_size=2)       # many chunks
+    assert small.chunk_size == 2 and big.chunk_size >= big.n_patterns
+    for scale in (1.0, 0.9):
+        theta = big.get_initial_parameters() * scale
+        assert np.isclose(big.compute_objective(theta),
+                          small.compute_objective(theta), rtol=1e-10), scale
+        np.testing.assert_allclose(big.compute_gradient(theta),
+                                   small.compute_gradient(theta),
+                                   rtol=1e-8, atol=1e-10)
 
 
 _MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()

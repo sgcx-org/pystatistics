@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.9.0
+
+GPU maximum-likelihood estimation for missing data now scales to wide datasets
+within bounded GPU memory.
+
+- **`mlest(backend='gpu')` processes missingness patterns in chunks**, so the
+  objective and gradient run in bounded GPU memory no matter how many distinct
+  patterns the data has. Previously, wide data with many patterns (e.g. 100+
+  variables and tens of thousands of patterns) could exhaust GPU memory and fail
+  with a CUDA out-of-memory error. The chunk size is auto-tuned to a memory
+  budget; pass `chunk_size` to the GPU objective to override. Results are
+  unchanged — the chunked objective and gradient are identical to the unchunked
+  computation.
+
 ## 3.8.1
 
 Bug fix: maximum-likelihood estimation for missing data with more than 62

@@ -276,3 +276,77 @@ def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
     trace = _trace_sigma_inv_m(torch, L, M)                 # (P,)
 
     return (n_k * logdet + trace).sum()
+
+
+# --- Pattern chunking -------------------------------------------------------
+#
+# The objective is a sum over patterns, and its per-pattern memory is O(P*v^2)
+# because the batched tensors (sig, M, L, ...) span all P patterns at once. For
+# wide data with many distinct patterns (e.g. p=100 survey data with tens of
+# thousands of patterns) that can exceed GPU memory. Since the sum decomposes
+# over patterns, we evaluate it in chunks of patterns, bounding peak memory to
+# one chunk's tensors. For the gradient we accumulate per chunk
+# (grad of a sum = sum of grads), freeing each chunk's autograd graph before the
+# next, so the gradient is memory-bounded too.
+
+def chunk_bounds(n_patterns: int, chunk_size):
+    """Return [(start, end), ...] partitioning patterns into chunks.
+
+    ``chunk_size`` falsy/non-positive/>= n_patterns means a single chunk
+    (no chunking).
+    """
+    if not chunk_size or chunk_size <= 0 or chunk_size >= n_patterns:
+        return [(0, n_patterns)]
+    return [(s, min(s + chunk_size, n_patterns))
+            for s in range(0, n_patterns, chunk_size)]
+
+
+def _slice_consts(consts: dict, s: int, e: int) -> dict:
+    return {k: v[s:e] for k, v in consts.items()}
+
+
+def auto_chunk_size(n_vars: int, dtype_bytes: int, budget_bytes: int = 1 << 31):
+    """Patterns per chunk so a chunk's batched (chunk, v, v) tensors — and their
+    autograd-saved copies — fit within ``budget_bytes`` (default 2 GiB).
+
+    Conservative: assumes ~12 simultaneous (chunk, v, v) buffers. Returns a
+    positive int; for small ``v`` it is large enough that typical pattern counts
+    fall in a single chunk (no looping overhead).
+    """
+    per_pattern = max(1, n_vars * n_vars * dtype_bytes * 12)
+    return max(1, int(budget_bytes // per_pattern))
+
+
+def objective_value(torch, mu, sigma, consts: dict, eps: float, chunk_size=None):
+    """Sum ``-2 log L`` over all patterns, evaluated in pattern chunks.
+
+    Intended for the forward (value) path under ``torch.no_grad()``; peak memory
+    is one chunk's tensors.
+    """
+    P = consts["obs_idx"].shape[0]
+    total = None
+    for s, e in chunk_bounds(P, chunk_size):
+        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e), eps)
+        total = part if total is None else total + part
+    return total
+
+
+def accumulate_gradient(torch, theta_gpu, unpack, consts: dict, eps: float,
+                        chunk_size=None):
+    """Gradient of ``-2 log L`` w.r.t. ``theta_gpu`` via per-chunk backprop.
+
+    Each chunk re-unpacks ``theta_gpu`` to ``(mu, sigma)``, computes its own
+    contribution, and backpropagates it — accumulating into ``theta_gpu.grad``
+    and freeing that chunk's graph before the next. Peak memory is one chunk's
+    batched tensors rather than the whole pattern set. ``unpack`` is a callable
+    ``theta -> (mu, sigma)``. Returns ``(grad_tensor, objective_value_float)``.
+    """
+    P = consts["obs_idx"].shape[0]
+    theta_gpu.grad = None
+    obj = 0.0
+    for s, e in chunk_bounds(P, chunk_size):
+        mu, sigma = unpack(theta_gpu)
+        part = batched_neg2_loglik(torch, mu, sigma, _slice_consts(consts, s, e), eps)
+        part.backward()
+        obj += float(part.detach())
+    return theta_gpu.grad, obj

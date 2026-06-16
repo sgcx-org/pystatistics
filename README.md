@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.9.0 — GPU MLE scales to wide data within bounded memory
+
+- GPU `mlest` now evaluates the missing-data objective and gradient in chunks
+  of missingness patterns, so GPU memory stays bounded no matter how many
+  distinct patterns the data has. Wide data (100+ variables, tens of thousands
+  of patterns) that previously hit CUDA out-of-memory now fits. The chunk size
+  is auto-tuned (override via `chunk_size`); results are unchanged.
+
 ### 3.8.1 — Correct MLE for missing data with >62 variables
 
 - `mlest` now groups missingness patterns correctly when a dataset has more
