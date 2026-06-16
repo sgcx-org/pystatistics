@@ -17,7 +17,7 @@ from ._batched_cholesky import (
     batched_neg2_loglik,
     unpack_cholesky,
     objective_value,
-    accumulate_gradient,
+    analytic_gradient,
     auto_chunk_size,
 )
 
@@ -175,8 +175,9 @@ class GPUObjectiveFP64(MLEObjectiveBase):
         return unpack_cholesky(self.torch, theta_gpu, self.n_vars)
 
     def compute_gradient(self, theta: np.ndarray) -> np.ndarray:
-        """Compute gradient using automatic differentiation (chunked over
-        patterns to bound peak memory)."""
+        """Compute the gradient via the closed-form matrix gradient (chunked
+        over patterns); identical to autodiff but does not differentiate through
+        ``cholesky``."""
         torch = self.torch
 
         theta_gpu = torch.tensor(
@@ -186,7 +187,7 @@ class GPUObjectiveFP64(MLEObjectiveBase):
             requires_grad=True
         )
 
-        grad_tensor, _ = accumulate_gradient(
+        grad_tensor = analytic_gradient(
             torch, theta_gpu, self._unpack_gpu,
             self._consts, self.eps, self.chunk_size)
 

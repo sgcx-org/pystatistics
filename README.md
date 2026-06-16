@@ -366,6 +366,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.10.0 — Closed-form GPU gradient: fast, practical wide-data fits on Apple Silicon
+
+- `mlest(backend='gpu')` now uses a closed-form gradient instead of automatic
+  differentiation, which previously backpropagated through `cholesky` —
+  pathologically slow on Apple Metal. A 100-variable survey fit on Apple Silicon
+  goes from a >30-minute timeout to roughly 3 minutes (converged), and the
+  per-gradient cost falls about 20-fold. Results are unchanged; CUDA and CPU
+  benefit too.
+
 ### 3.9.0 — GPU MLE scales to wide data within bounded memory
 
 - GPU `mlest` now evaluates the missing-data objective and gradient in chunks

@@ -21,7 +21,7 @@ from ._batched_cholesky import (
     batched_neg2_loglik,
     unpack_cholesky,
     objective_value,
-    accumulate_gradient,
+    analytic_gradient,
     auto_chunk_size,
 )
 
@@ -243,8 +243,9 @@ class GPUObjectiveFP32(MLEObjectiveBase):
         return mu, sigma
 
     def compute_gradient(self, theta: np.ndarray) -> np.ndarray:
-        """Compute gradient using automatic differentiation (chunked over
-        patterns to bound peak memory)."""
+        """Compute the gradient via the closed-form matrix gradient (chunked
+        over patterns). Avoids autodiff through ``cholesky``, whose backward is
+        pathologically slow on Metal; identical to reverse-mode autodiff."""
         torch = self.torch
 
         theta_gpu = torch.tensor(
@@ -254,7 +255,7 @@ class GPUObjectiveFP32(MLEObjectiveBase):
             requires_grad=True
         )
 
-        grad_tensor, _ = accumulate_gradient(
+        grad_tensor = analytic_gradient(
             torch, theta_gpu, self._unpack_gpu,
             self._consts, self.eps, self.chunk_size)
 

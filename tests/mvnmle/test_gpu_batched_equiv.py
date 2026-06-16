@@ -31,6 +31,8 @@ from pystatistics.mvnmle._objectives._batched_cholesky import (
     _tri_inv_blocked,
     chunk_bounds,
     auto_chunk_size,
+    accumulate_gradient,
+    analytic_gradient,
 )
 
 EPS = 1e-6
@@ -170,6 +172,23 @@ def test_chunked_matches_unchunked_value_and_gradient():
         np.testing.assert_allclose(big.compute_gradient(theta),
                                    small.compute_gradient(theta),
                                    rtol=1e-8, atol=1e-10)
+
+
+def test_analytic_gradient_matches_autodiff():
+    """The closed-form matrix gradient equals reverse-mode autodiff (which it
+    replaces to avoid Metal's slow Cholesky backward)."""
+    X = _make_data(seed=6, n=240, p=7)
+    obj = GPUObjectiveFP64(X, device="cpu")
+    theta = obj.get_initial_parameters()
+    for scale in (1.0, 0.9, 1.15):
+        th = theta * scale
+        t1 = torch.tensor(th, dtype=torch.float64, requires_grad=True)
+        g_auto = accumulate_gradient(torch, t1, obj._unpack_gpu, obj._consts,
+                                     obj.eps, obj.chunk_size)[0].detach().numpy()
+        t2 = torch.tensor(th, dtype=torch.float64, requires_grad=True)
+        g_ana = analytic_gradient(torch, t2, obj._unpack_gpu, obj._consts,
+                                  obj.eps, obj.chunk_size).detach().numpy()
+        np.testing.assert_allclose(g_ana, g_auto, rtol=1e-8, atol=1e-9)
 
 
 _MPS = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()

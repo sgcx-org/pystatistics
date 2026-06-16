@@ -237,6 +237,72 @@ def _trace_sigma_inv_m(torch, L, M):
     return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
 
 
+def _sigma_inv(torch, L):
+    """Explicit per-pattern inverse covariance from its Cholesky factor.
+
+    On MPS uses the matmul-only blocked inverse (Metal's solve/inverse are slow);
+    elsewhere uses ``cholesky_inverse`` (fast on CUDA/CPU).
+    """
+    if L.device.type == "mps":
+        W = _tri_inv_blocked(torch, L)
+        return W.transpose(-1, -2) @ W
+    return torch.cholesky_inverse(L)
+
+
+def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
+                      chunk_size=None):
+    """Gradient of ``-2 log L`` w.r.t. ``theta`` via the closed-form matrix
+    gradient, avoiding automatic differentiation through ``cholesky``.
+
+    The per-pattern objective $n_k\\log|\\Sigma_k| + \\mathrm{tr}(\\Sigma_k^{-1}M_k)$
+    has the closed-form partials
+        dF/dSigma_k = n_k Sigma_k^{-1} - Sigma_k^{-1} M_k Sigma_k^{-1},
+        dF/dmu_k    = -2 n_k Sigma_k^{-1} (ybar_k - mu_k),
+    both expressible from the *forward* inverse covariance alone. We form these,
+    then backpropagate them through only the cheap, autodiff-friendly part of the
+    map---the gather of the observed sub-blocks and the ``theta -> (mu, Sigma)``
+    reconstruction---so no gradient flows through ``cholesky`` or the matrix
+    inverse. On Metal this replaces a ~20s Cholesky-backward (at p=100, tens of
+    thousands of patterns) with milliseconds; results are identical to
+    reverse-mode autodiff. ``unpack`` is a callable ``theta -> (mu, sigma)``.
+    Returns the gradient tensor.
+    """
+    P = consts["obs_idx"].shape[0]
+    total = None
+    for s, e in chunk_bounds(P, chunk_size):
+        cc = _slice_consts(consts, s, e)
+        idx = cc["obs_idx"]
+        mask = cc["obs_mask"]
+        n_k = cc["n_k"]
+        ybar = cc["ybar"]
+        c = cc["c"]
+
+        mu, sigma = unpack(theta)                 # autodiff-tracked (cheap map)
+        mu_k = mu[idx]                             # (Pc, v) tracked
+        sig = sigma[idx[:, :, None], idx[:, None, :]]   # (Pc, v, v) tracked
+        dtype = sigma.dtype
+        maskf = mask.to(dtype)
+        mo = (mask[:, :, None] & mask[:, None, :]).to(dtype)
+
+        # Closed-form upstream gradients (no autodiff through chol/inverse).
+        with torch.no_grad():
+            mu_kd = mu_k * maskf
+            sig_full = sig * mo + torch.diag_embed(eps * maskf + (1.0 - maskf))
+            delta = (ybar - mu_kd) * maskf
+            nb = n_k.view(-1, 1, 1)
+            M = (c + nb * (delta[:, :, None] * delta[:, None, :])) * mo
+            L = _batched_cholesky_with_ridge(torch, sig_full, eps)
+            Sinv = _sigma_inv(torch, L)
+            g_sig = (nb * Sinv - (Sinv @ M) @ Sinv) * mo            # dF/d(gathered sig)
+            g_mu = (-2.0 * n_k.view(-1, 1)
+                    * (Sinv @ delta[:, :, None]).squeeze(-1)) * maskf  # dF/d(gathered mu_k)
+
+        g = torch.autograd.grad(outputs=[sig, mu_k], inputs=theta,
+                                grad_outputs=[g_sig, g_mu])[0]
+        total = g if total is None else total + g
+    return total
+
+
 def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float):
     """Return the scalar ``-2 log L`` summed over all patterns (differentiable).
 

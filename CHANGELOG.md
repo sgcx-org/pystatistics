@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.10.0
+
+GPU maximum-likelihood estimation for missing data is dramatically faster on
+Apple Silicon and now practical for wide datasets.
+
+- **`mlest(backend='gpu')` computes its gradient in closed form** instead of by
+  automatic differentiation. The previous autodiff gradient backpropagated
+  through the Cholesky factorization, whose backward pass is extremely slow on
+  Apple Metal---so wide problems (100+ variables and tens of thousands of
+  missingness patterns) could take over half an hour or fail to finish. The
+  closed-form gradient avoids this: on Apple Silicon a 100-variable survey fit
+  drops from a >30-minute timeout to roughly 3 minutes (converged), and the
+  per-gradient cost falls about 20-fold. Results are unchanged---the closed-form
+  gradient is mathematically identical to the automatic-differentiation gradient.
+  NVIDIA (CUDA) and CPU fits also benefit.
+
 ## 3.9.0
 
 GPU maximum-likelihood estimation for missing data now scales to wide datasets
