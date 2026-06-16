@@ -15,6 +15,7 @@ from ._batched_cholesky import (
     build_batched_constants,
     to_torch,
     batched_neg2_loglik,
+    unpack_cholesky,
 )
 
 
@@ -151,32 +152,13 @@ class GPUObjectiveFP64(MLEObjectiveBase):
                                    self._consts, self.eps)
 
     def _unpack_gpu(self, theta_gpu: Any) -> Tuple[Any, Any]:
-        """Unpack parameters on GPU with FP64."""
-        torch = self.torch
-        n = self.n_vars
+        """Unpack standard-Cholesky parameters into ``(mu, Sigma)`` on the GPU.
 
-        mu = theta_gpu[:n]
-
-        # Reconstruct L matrix (lower triangular)
-        L = torch.zeros((n, n), device=self.device, dtype=self.dtype)
-
-        # Diagonal elements (exponentiated)
-        L.diagonal().copy_(torch.exp(theta_gpu[n:2*n]))
-
-        # Off-diagonal elements
-        idx = 2 * n
-        for j in range(n):
-            for i in range(j + 1, n):
-                L[i, j] = theta_gpu[idx]
-                idx += 1
-
-        # Compute Sigma = LL'
-        sigma = L @ L.T
-
-        # Ensure symmetry
-        sigma = 0.5 * (sigma + sigma.T)
-
-        return mu, sigma
+        Delegates to the shared :func:`unpack_cholesky` so the FP64 and FP32
+        paths reconstruct Sigma identically (and identically to the canonical
+        ``CholeskyParameterization.unpack``).
+        """
+        return unpack_cholesky(self.torch, theta_gpu, self.n_vars)
 
     def compute_gradient(self, theta: np.ndarray) -> np.ndarray:
         """Compute gradient using automatic differentiation."""

@@ -19,6 +19,7 @@ from ._batched_cholesky import (
     build_batched_constants,
     to_torch,
     batched_neg2_loglik,
+    unpack_cholesky,
 )
 
 
@@ -189,51 +190,40 @@ class GPUObjectiveFP32(MLEObjectiveBase):
     def _unpack_gpu(self, theta_gpu: Any) -> Tuple[Any, Any]:
         """
         Unpack parameters on GPU maintaining gradient flow.
+
+        The standard-Cholesky case delegates to the shared
+        :func:`unpack_cholesky` so the FP32 and FP64 paths reconstruct Sigma
+        identically (and identically to ``CholeskyParameterization.unpack``).
+        The bounded parameterization keeps its own sigmoid/tanh reconstruction,
+        but reuses the same row-major off-diagonal ordering.
         """
         torch = self.torch
         n = self.n_vars
 
-        # Extract mean directly
+        if not isinstance(self.parameterization, BoundedCholeskyParameterization):
+            return unpack_cholesky(torch, theta_gpu, n)
+
+        # Bounded Cholesky: diagonal via sigmoid, off-diagonal via tanh.
         mu = theta_gpu[:n]
+        L = torch.zeros((n, n), device=self.device, dtype=self.dtype)
 
-        # Build L matrix based on parameterization type
-        if isinstance(self.parameterization, BoundedCholeskyParameterization):
-            L = torch.zeros((n, n), device=self.device, dtype=self.dtype)
+        diag_unbounded = theta_gpu[n:2*n]
+        var_min = self.parameterization.var_min
+        var_max = self.parameterization.var_max
+        diag_vars = var_min + (var_max - var_min) * torch.sigmoid(diag_unbounded)
+        L.diagonal().copy_(torch.sqrt(diag_vars))
 
-            # Diagonal: sigmoid transformation
-            diag_unbounded = theta_gpu[n:2*n]
-            var_min = self.parameterization.var_min
-            var_max = self.parameterization.var_max
-            diag_vars = var_min + (var_max - var_min) * torch.sigmoid(diag_unbounded)
-            L.diagonal().copy_(torch.sqrt(diag_vars))
+        idx = 2 * n
+        tril_indices = torch.tril_indices(n, n, offset=-1, device=self.device)
+        if len(tril_indices[0]) > 0:
+            tril_unbounded = theta_gpu[idx:]
+            corr_max = self.parameterization.corr_max
+            corr_vals = corr_max * torch.tanh(tril_unbounded)
 
-            # Off-diagonal: tanh transformation
-            idx = 2 * n
-            tril_indices = torch.tril_indices(n, n, offset=-1, device=self.device)
-            if len(tril_indices[0]) > 0:
-                tril_unbounded = theta_gpu[idx:]
-                corr_max = self.parameterization.corr_max
-                corr_vals = corr_max * torch.tanh(tril_unbounded)
+            i, j = tril_indices
+            L[tril_indices[0], tril_indices[1]] = corr_vals * torch.sqrt(L[i, i] * L[j, j])
 
-                i, j = tril_indices
-                L[tril_indices[0], tril_indices[1]] = corr_vals * torch.sqrt(L[i, i] * L[j, j])
-        else:
-            # Standard Cholesky
-            L = torch.zeros((n, n), device=self.device, dtype=self.dtype)
-
-            # Diagonal elements
-            L.diagonal().copy_(torch.exp(theta_gpu[n:2*n]))
-
-            # Off-diagonal elements
-            idx = 2 * n
-            tril_indices = torch.tril_indices(n, n, offset=-1, device=self.device)
-            if len(tril_indices[0]) > 0:
-                L[tril_indices[0], tril_indices[1]] = theta_gpu[idx:]
-
-        # Compute Sigma = LL'
         sigma = torch.matmul(L, L.T)
-
-        # Ensure symmetry
         sigma = 0.5 * (sigma + sigma.T)
 
         return mu, sigma

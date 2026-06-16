@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.7.1
+
+Bug fix: correct covariance reconstruction in the double-precision GPU estimator.
+
+- **Fixed an incorrect covariance matrix returned by `mlest(backend='gpu')` in
+  double precision (FP64, NVIDIA/CUDA) when fitting 3 or more variables.** The
+  FP64 GPU path assembled the Cholesky factor's off-diagonal entries in a
+  different order than the rest of the library, so the optimiser and the reported
+  result referred to mismatched covariances and the returned Σ could be wrong.
+  The FP64 and FP32 GPU paths now share a single, validated reconstruction that
+  matches the CPU result to floating-point precision. Single-precision (FP32) GPU
+  fits and all CPU fits were unaffected.
+
 ## 3.7.0
 
 Much faster GPU maximum-likelihood estimation on Apple Silicon for

@@ -108,6 +108,61 @@ def to_torch(consts: BatchedConstants, torch, device, dtype) -> dict:
     }
 
 
+def unpack_cholesky(torch, theta, n_vars: int):
+    """Reconstruct ``(mu, Sigma)`` from a standard-Cholesky parameter vector.
+
+    The single torch implementation of the standard-Cholesky reconstruction,
+    shared by the FP32 and FP64 GPU objectives so the two cannot drift apart.
+    It reproduces ``CholeskyParameterization.unpack`` (the canonical NumPy
+    reference) up to floating-point rounding, in whatever dtype/device ``theta``
+    carries, while preserving the autograd graph.
+
+    Parameter layout (matching the canonical parameterization)::
+
+        theta = [ mu (n) | log(diag L) (n) | offdiag(L) ]
+
+    The off-diagonal block is laid out **row-major** — the ordering produced by
+    ``numpy.tril_indices(n, k=-1)`` and, identically, by
+    ``torch.tril_indices(n, n, offset=-1)``. The reconstruction uses the torch
+    form so the placement is the same as the reference; a hand-rolled
+    column-major loop here is what previously made the FP64 path disagree with
+    the canonical Sigma for ``n_vars >= 3``.
+
+    L is built functionally (``diag_embed`` for the diagonal, out-of-place
+    ``index_put`` for the off-diagonals) rather than via ``.diagonal().copy_()``
+    plus in-place assignment, so there is no reliance on view/in-place aliasing
+    and the result is safe to differentiate through.
+
+    Parameters
+    ----------
+    torch : module
+        The imported ``torch`` module (injected; no hidden import).
+    theta : torch.Tensor, shape (n_params,)
+        Standard-Cholesky parameter vector on the active device/dtype.
+    n_vars : int
+        Number of variables (dimension of Sigma).
+
+    Returns
+    -------
+    (mu, sigma) : tuple of torch.Tensor
+        ``mu`` shape ``(n_vars,)``; ``sigma`` shape ``(n_vars, n_vars)``,
+        symmetric.
+    """
+    n = n_vars
+    mu = theta[:n]
+
+    # Diagonal of L (exponentiated for an unconstrained, positive parameter).
+    L = torch.diag_embed(torch.exp(theta[n:2 * n]))
+
+    # Off-diagonals: row-major placement matching the canonical reference.
+    if n > 1:
+        tril = torch.tril_indices(n, n, offset=-1, device=theta.device)
+        L = L.index_put((tril[0], tril[1]), theta[2 * n:])
+
+    sigma = L @ L.T
+    return mu, 0.5 * (sigma + sigma.T)
+
+
 def _batched_cholesky_with_ridge(torch, sigma_b, eps: float, max_tries: int = 5):
     """Batched Cholesky, escalating a ridge on any non-PD matrix in the batch.
 

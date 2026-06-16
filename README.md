@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.7.1 — Correct covariance from the double-precision GPU estimator
+
+- Fixed an incorrect covariance matrix returned by `mlest(backend='gpu')` in
+  double precision (FP64, NVIDIA/CUDA) when fitting 3 or more variables: the
+  optimiser and the reported result referred to mismatched covariances. The FP64
+  and FP32 GPU paths now share one validated reconstruction that matches the CPU
+  result to floating-point precision. FP32 GPU and CPU fits were unaffected.
+
 ### 3.7.0 — Much faster GPU MLE on Apple Silicon
 
 - `mlest(backend='gpu')` (direct / BFGS) on Apple Silicon (MPS) now computes
