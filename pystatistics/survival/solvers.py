@@ -145,12 +145,33 @@ def survdiff(
 
     timer.stop()
 
+    # Non-fatal transparency warnings: the log-rank chi-square is an
+    # asymptotic approximation that degrades when any group's expected
+    # event count is small, and a group contributing no events makes its
+    # comparison degenerate.
+    warnings_list = []
+    for i in range(params.n_groups):
+        raw_label = params.group_labels[i]
+        # Render numpy scalars (np.int64(2)) as plain Python values (2).
+        label = raw_label.item() if hasattr(raw_label, "item") else raw_label
+        if params.expected[i] < 5:
+            warnings_list.append(
+                f"Group {label!r} has a small expected event count "
+                f"({params.expected[i]:.2f} < 5); the chi-square "
+                f"approximation may be unreliable"
+            )
+        if params.observed[i] == 0:
+            warnings_list.append(
+                f"Group {label!r} has zero observed events; its "
+                f"contribution to the test is degenerate"
+            )
+
     result = Result(
         params=params,
         info={"method": "Log-rank test", "rho": rho},
         timing=timer.result(),
         backend_name="cpu_logrank",
-        warnings=(),
+        warnings=tuple(warnings_list),
     )
 
     return LogRankSolution(_result=result)

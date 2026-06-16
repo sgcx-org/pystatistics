@@ -103,6 +103,10 @@ class KMSolution:
     def timing(self):
         return self._result.timing
 
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
+
     def summary(self) -> str:
         """R-style summary of Kaplan-Meier fit."""
         lines = []
@@ -204,6 +208,10 @@ class LogRankSolution:
     @property
     def timing(self):
         return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     def summary(self) -> str:
         """R-style summary of log-rank test."""
@@ -317,6 +325,10 @@ class CoxSolution:
     @property
     def timing(self):
         return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     def summary(self) -> str:
         """R-style summary of Cox PH fit."""
@@ -471,6 +483,10 @@ class DiscreteTimeSolution:
     @property
     def timing(self):
         return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     def summary(self) -> str:
         """Summary of discrete-time survival model."""
