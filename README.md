@@ -39,7 +39,7 @@ PyStatistics maintains two parallel computational paths with distinct goals:
 | `multivariate/` | Complete | PCA and maximum likelihood factor analysis with varimax/promax rotation |
 | `timeseries/` | Complete | ACF, PACF, ADF, KPSS, ETS, ARIMA, SARIMA, auto_arima, decompose, STL |
 | `gam/` | Complete | Generalized additive models with penalized regression splines matching R mgcv::gam |
-| `mice/` | Complete | Multiple imputation by chained equations: numeric (PMM, Bayesian regression) and categorical (logistic, multinomial, proportional-odds), Rubin's-rules pooling, validated against R mice; CUDA GPU backend for numeric |
+| `mice/` | Complete | Multiple imputation by chained equations: numeric (PMM, Bayesian regression) and categorical (logistic, multinomial, proportional-odds), Rubin's-rules pooling, validated against R mice; CUDA and Apple Silicon (MPS) GPU backend for numeric |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed scope, GPU applicability, and implementation priority for each module.
 
@@ -365,6 +365,16 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 3.13.0 — MICE GPU acceleration on Apple Silicon, faster on every GPU
+
+- `mice(..., backend='gpu')` now runs on Apple Silicon (MPS), not only CUDA. The
+  batched imputation sweep runs on the Mac GPU in FP32 — about 12x faster than
+  the CPU backend on a large problem (n=20000, p=20, m=100: 3.3 s vs 42 s) —
+  validated against the CPU reference for both `pmm` and `norm`. `backend='auto'`
+  stays on CPU on a Mac; request the GPU explicitly with `backend='gpu'`.
+  `use_fp64=True` is rejected on MPS (no double precision there). The GPU
+  posterior draw and donor search were also reworked to run faster on CUDA too.
 
 ### 3.12.0 — MVN MLE rejects rank-deficient input
 

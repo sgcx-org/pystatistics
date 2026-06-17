@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.13.0
+
+MICE GPU acceleration now runs on Apple Silicon (MPS), and the GPU posterior
+draw and donor search are faster on every GPU.
+
+- **`mice(..., backend='gpu')` now runs on Apple Silicon (MPS).** It previously
+  raised on a Mac and supported only CUDA GPUs. The batched chained-equations
+  sweep now runs on the MPS GPU in FP32, validated against the CPU reference at
+  the GPU/FP32 tolerance tier — imputed-value distributions, Rubin's-rules pooled
+  estimates, predictive-mean-matching donors, and run-to-run reproducibility —
+  for both `pmm` and `norm`. At n=20000, p=20, m=100 it runs about 12x faster
+  than the CPU backend (3.3 s vs 42 s). `backend='auto'` still selects CPU on a
+  Mac for consistency across the library; request the Mac GPU explicitly with
+  `backend='gpu'`. `use_fp64=True` is rejected on MPS, which has no double
+  precision — use FP32 there, or a CUDA GPU for FP64.
+
+- **Faster GPU posterior draw on both CUDA and MPS.** The Bayesian regression
+  draw now factors the predictor Gram matrix once with a Cholesky and solves by
+  triangular substitution, instead of computing a separate linear solve and a
+  full matrix inverse. This is faster on CUDA as well as MPS and is better
+  conditioned. Near-collinear (degenerate) predictors for an imputation target
+  now raise instead of silently returning a clipped result.
+
+- **Faster GPU predictive-mean-matching donor search.** Donor selection now uses
+  a contiguous sorted-window block instead of a top-k, which is faster on both
+  CUDA and MPS. Imputation results are unchanged.
+
 ## 3.12.0
 
 Multivariate-normal MLE now rejects rank-deficient input instead of returning a
