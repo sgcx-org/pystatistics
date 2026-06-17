@@ -9,6 +9,13 @@
 
 ## Changes
 
+- MICE GPU backend now supports **categorical predictors** for numeric-target
+  imputation. Previously `backend='gpu'` refused any data containing a
+  categorical column; it now treatment-dummy-encodes categorical predictor
+  columns (matching the CPU path) and only refuses categorical *targets*
+  (incomplete categorical columns), with a clear message. Numeric-only problems
+  are unchanged. Categorical-target imputation on GPU is still pending.
+
 - Internal (no user-facing change): unified the GPU batched triangular-factor
   inverse onto one primitive. The MVNMLE GPU objective now uses the same
   matmul-series inverse as the MICE GPU draw

@@ -14,6 +14,8 @@ import numpy as np
 import pytest
 
 from pystatistics.mice import datasets, mice, pool
+from pystatistics.mice.design import MICEDesign
+from pystatistics.core.exceptions import ValidationError
 
 
 def _mps_available() -> bool:
@@ -147,6 +149,59 @@ class TestMpsDegenerate:
             return  # acceptable: failed loud rather than returning garbage
         for d in sol.completed_datasets():
             assert np.isfinite(d).all()
+
+
+class TestMpsCategoricalPredictors:
+    """Numeric targets imputed from categorical predictors (dummy-encoded on
+    GPU). Categorical *targets* are not yet supported and must be refused."""
+
+    @staticmethod
+    def _mixed_design():
+        rng = np.random.default_rng(0)
+        n = 600
+        cat = rng.integers(0, 3, n).astype(float)          # categorical predictor
+        mu = np.array([0.0, 2.5, -1.5])[cat.astype(int)]    # targets depend on it
+        X = np.column_stack([
+            cat,
+            mu + rng.normal(0, 1, n),
+            0.5 * mu + rng.normal(0, 1, n),
+        ])
+        mask = rng.random(X.shape) < 0.2
+        mask[:, 0] = False                                  # categorical stays complete
+        X[mask] = np.nan
+        return MICEDesign.from_array(
+            X, method="pmm", column_kinds=["categorical", "numeric", "numeric"]
+        )
+
+    def test_categorical_predictor_matches_cpu(self):
+        d = self._mixed_design()
+        assert d.has_categorical
+        cpu = mice(d, m=30, maxit=10, seed=1, backend="cpu")
+        gpu = mice(d, m=30, maxit=10, seed=1, backend="gpu")
+        assert gpu.info["device"] == "mps"
+        # Matching CPU (which dummy-encodes the categorical) confirms the GPU
+        # uses the categorical predictor correctly rather than ignoring it.
+        for j in gpu.incomplete_columns:
+            c = cpu.imputations(j).ravel()
+            g = gpu.imputations(j).ravel()
+            assert abs(g.mean() - c.mean()) < 0.15, f"col {j} mean drift"
+            assert abs(g.std() - c.std()) < 0.15, f"col {j} sd drift"
+        for dset in gpu.completed_datasets():
+            assert not np.isnan(dset).any()
+
+    def test_categorical_target_refused(self):
+        # An incomplete categorical column is a categorical target — not yet
+        # supported on GPU; must fail loud (not silently impute it wrong).
+        rng = np.random.default_rng(1)
+        n = 200
+        X = np.column_stack([
+            rng.integers(0, 3, n).astype(float),
+            rng.normal(0, 1, n),
+        ])
+        X[rng.random(n) < 0.2, 0] = np.nan                  # only the categorical is incomplete
+        d = MICEDesign.from_array(X, column_kinds=["categorical", "numeric"])
+        with pytest.raises(ValidationError, match="categorical"):
+            mice(d, m=4, maxit=3, seed=0, backend="gpu")
 
 
 class TestMpsScales:

@@ -33,6 +33,7 @@ from pystatistics.core.compute.timing import Timer
 from pystatistics.core.compute.torch_interop import to_host_f64
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.result import Result
+from pystatistics.mice.backends._gpu_encode import build_predictor_tensor
 from pystatistics.mice.backends._gpu_methods import GPU_METHODS
 from pystatistics.mice.design import MICEDesign
 from pystatistics.mice.solution import MICEParams
@@ -64,20 +65,20 @@ class GPUMiceBackend:
     ) -> Result[MICEParams]:
         import torch
 
-        # The GPU backend handles fully numeric problems only: categorical
-        # columns need dummy-encoding / categorical model fits that this batched
-        # path does not implement. Refuse rather than impute them wrong (a
-        # categorical column can be a *predictor* even when the target is
-        # numeric, so this checks every column, not just the targets).
-        if design.has_categorical:
-            raise ValidationError(
-                "backend='gpu' supports numeric columns only. This data has "
-                "categorical columns; use backend='cpu' (categorical imputation "
-                "is CPU-only)."
-            )
+        # Categorical *predictors* are supported (dummy-encoded in the sweep);
+        # categorical *targets* are not yet — they need a categorical model fit.
+        # A categorical target is an incomplete categorical column; refuse those
+        # with a clear message (fail loud at the boundary, Rule 2).
+        for j in design.incomplete_columns:
+            if design.is_categorical(j):
+                raise ValidationError(
+                    f"Column {j} is categorical and incomplete. GPU imputation "
+                    f"of categorical targets is not yet implemented; use "
+                    f"backend='cpu'. (Numeric targets with categorical "
+                    f"predictors are supported on GPU.)"
+                )
 
-        # Validate that every incomplete column's method has a GPU kernel before
-        # touching the device (fail loud at the boundary, Rule 2).
+        # Every incomplete (numeric) column's method must have a GPU kernel.
         for j in design.incomplete_columns:
             meth = design.method_for(j)
             if meth not in GPU_METHODS:
@@ -104,6 +105,14 @@ class GPUMiceBackend:
             # m independent copies of the data (chains diverge after init).
             data = base.unsqueeze(0).repeat(m, 1, 1)                       # (m, n, p)
 
+        # Sorted level codes per categorical column (predictors only; targets are
+        # numeric here). Empty ⇒ numeric-only fast path in the predictor build.
+        cat_levels = {
+            c: torch.as_tensor(design.levels_for(c), device=dev, dtype=dtype)
+            for c in range(p)
+            if design.is_categorical(c)
+        }
+
         # Precompute per-incomplete-column index tensors (shared by all chains).
         obs_idx, mis_idx, pred_idx = {}, {}, {}
         for j in incomplete:
@@ -124,7 +133,10 @@ class GPUMiceBackend:
             for it in range(maxit):
                 for j in visit_sequence:
                     method_fn = GPU_METHODS[design.method_for(j)]
-                    X = data[:, :, pred_idx[j]]            # (m, n, q)
+                    # Dummy-encode categorical predictors; numeric-only stays a
+                    # plain slice (fast path inside build_predictor_tensor).
+                    X = (build_predictor_tensor(data, j, p, cat_levels)
+                         if cat_levels else data[:, :, pred_idx[j]])
                     X_obs = X[:, obs_idx[j], :]            # (m, n_obs, q)
                     X_mis = X[:, mis_idx[j], :]            # (m, n_mis, q)
                     y_obs = data[:, obs_idx[j], j]         # (m, n_obs)
