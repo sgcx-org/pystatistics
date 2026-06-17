@@ -22,10 +22,12 @@ Still pending:
   3. Multinomial `polyreg` (ragged K — efficiency risk lives here).
   4. Ordinal `polr` (ordered thresholds under FP32).
 
-- [ ] **(deferred, own task)** Migrate the MVNMLE GPU objective off the block
-  inverse (`batched_tri_inv`) to `batched_tri_inv_series` (faster, equal accuracy)
-  — requires re-validating MVNMLE on MPS + CUDA. Would let `batched_tri_inv` be
-  retired (one inverse primitive in core).
+- [x] **(done)** Migrated the MVNMLE GPU objective to `batched_tri_inv_series`
+  and retired the block inverse `batched_tri_inv` — one inverse primitive in core.
+  The series is now autograd-safe (detached-Newton wrapper → exact inverse VJP,
+  matches solve oracle to ~5e-16), a full drop-in. MVNMLE 158 + MICE 171 green;
+  MVNMLE MPS end-to-end matches CPU (max|Δmu|~6e-5, max|ΔSigma|~5e-4). Internal,
+  no user-facing change; sitting in UNRELEASED for the next release.
 
 - [ ] **(deferred, low priority)** Only remaining lever against the small-n
   dispatch floor: cut op-count per sweep step (fuse the per-step predictor
