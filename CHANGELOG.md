@@ -1,6 +1,20 @@
 # Changelog
 
-## 3.13.0
+## 3.14.0
+
+MICE GPU imputation is substantially faster on Apple Silicon (MPS) — about
+1.7–2x over 3.13.0 — with no change to results.
+
+- **Faster MICE GPU backend on Apple Silicon (MPS).** Two bottlenecks in the
+  per-iteration imputation step were removed: a GPU-to-CPU synchronization that
+  was happening on every step, and a reliance on `solve_triangular`, whose MPS
+  kernel is far slower than matrix multiplication. The step now runs without
+  per-step synchronization (degenerate, near-collinear predictors are still
+  caught — now by a single check at the end of each sweep), and for larger
+  problems it inverts the regression's Cholesky factor with a short sequence of
+  matrix multiplications instead. Measured ~1.8x faster at n=2000, ~2.0x at
+  n=8000, and ~1.7x at n=20000 (20 variables, 100 imputations). Imputations are
+  unchanged within the GPU/FP32 tolerance, and the CUDA path is unaffected.
 
 MICE GPU acceleration now runs on Apple Silicon (MPS), and the GPU posterior
 draw and donor search are faster on every GPU.

@@ -366,6 +366,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.14.0 — Faster MICE GPU imputation on Apple Silicon
+
+- MICE GPU imputation runs about 1.7–2x faster on Apple Silicon (MPS), with no
+  change to results. The per-iteration step no longer synchronizes the GPU with
+  the CPU on every step, and for larger problems it replaces `solve_triangular`
+  (slow on MPS) with a short sequence of matrix multiplications. Measured ~1.8x
+  at n=2000, ~2.0x at n=8000, ~1.7x at n=20000 (20 variables, 100 imputations).
+  Imputations are unchanged within the GPU/FP32 tolerance; the CUDA path is
+  unaffected.
+
 ### 3.13.0 — MICE GPU acceleration on Apple Silicon, faster on every GPU
 
 - `mice(..., backend='gpu')` now runs on Apple Silicon (MPS), not only CUDA. The
