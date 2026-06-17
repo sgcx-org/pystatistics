@@ -2,8 +2,10 @@
 GPU backend for MICE.
 
 Implements the same ``run`` entrypoint as the CPU backend, but runs all ``m``
-imputation chains concurrently on a CUDA GPU with the chain index as the leading
-tensor batch dimension. Each sweep step — visit column ``j``, fit its method on
+imputation chains concurrently on a GPU (CUDA or Apple Silicon/MPS) with the
+chain index as the leading tensor batch dimension. The batched ops are shared by
+both devices, with a single device bridge in the PMM donor search (see
+``_gpu_methods._insertion_rank``). Each sweep step — visit column ``j``, fit its method on
 the observed rows, overwrite its missing cells — becomes a handful of batched
 kernels across the ``m`` chains (batched linear solves + Cholesky, and for PMM a
 batched nearest-neighbour donor search).
@@ -15,7 +17,8 @@ columns imputed before it), which is inherent to chained equations.
 
 Validation tier: GPU results match the CPU reference distributionally at the
 ``GPU_FP32`` tolerance, not bit-for-bit (FP32 + a different RNG). FP64 is
-available on CUDA (``use_fp64=True``) for closer parity.
+available on CUDA (``use_fp64=True``) for closer parity; MPS is FP32-only
+(no float64) so ``use_fp64`` is rejected there at the dispatch boundary.
 
 Determinism: a single seeded ``torch.Generator`` on the device is the only
 randomness source. Given the same seed and device, a run reproduces its own

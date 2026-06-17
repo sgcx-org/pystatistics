@@ -6,17 +6,20 @@ but vectorized over the ``m`` imputation chains as the leading batch dimension.
 At a given sweep step every chain is fitting the *same* target column on the
 *same* observed rows, but with different predictor values (each chain imputed
 the other columns differently), so we solve ``m`` independent linear systems at
-once with batched cuBLAS/cuSOLVER kernels.
+once with batched kernels. This path is shared by the CUDA and MPS devices.
 
-Posterior draw (identical model to the CPU path):
+Posterior draw (identical model to the CPU path), via a single Cholesky of the
+ridged Gram ``G = X'X + ridge`` — no matrix inverse, no ``eigh``:
 
-    beta_hat = (X'X + ridge)^{-1} X'y                 batched solve
+    G = L L'                                          batched Cholesky
+    beta_hat = G^{-1} X'y = L^{-T} L^{-1} X'y         forward + back substitution
     df       = max(n_obs - n_params, 1)               integer, shared by chains
     sigma*   = sqrt( RSS / chi2(df) )                 chi2 = sum of df squared N(0,1)
-    beta*    = beta_hat + sigma* * L z                L L' = (X'X + ridge)^{-1}
+    beta*    = beta_hat + sigma* * (L^{-T} z)         A = L^{-T}, A A' = G^{-1}
 
-The chi-square is built from standard normals (``df`` is a non-negative integer)
-so the only randomness source is the seeded ``torch.Generator`` — no reliance on
+The two back-substitutions share ``L'`` and are stacked into one solve. The
+chi-square is built from standard normals (``df`` is a non-negative integer) so
+the only randomness source is the seeded ``torch.Generator`` — no reliance on
 ``torch.distributions``, which ignores explicit generators.
 
 All randomness flows through the passed generator (CLAUDE.md Rule 6). Results
@@ -27,6 +30,8 @@ bit-for-bit (different RNG, single precision).
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from pystatistics.core.exceptions import ValidationError
 
 # Matches the CPU ridge (methods/_linreg.py) — a tiny relative penalty keeping
 # the batched Gram matrices invertible under FP32.
@@ -82,57 +87,79 @@ def batched_bayes_linreg_draw(
     diag = torch.diagonal(XtX, dim1=1, dim2=2)       # (m, q+1)
     diag_mean = diag.mean(dim=1).clamp_min(torch.finfo(dtype).tiny)  # (m,)
     eye = torch.eye(n_params, dtype=dtype, device=device)
-    XtX_ridge = XtX + ridge * diag_mean[:, None, None] * eye
+    G = XtX + ridge * diag_mean[:, None, None] * eye  # ridged Gram, SPD (ridge>0)
+
+    # Forward-Cholesky parameterization: factor G = L L' once and drive every
+    # downstream solve through L. We never form the Gram inverse and never call
+    # solve/inv/eigh — inv/eigh are slow or unimplemented on MPS, and computing
+    # both a solve and an inverse (as the inverse path did) is wasteful on CUDA
+    # too. cholesky_ex + triangular solves is faster on both devices.
+    L = _safe_cholesky_spd(G)                        # (m, q+1, q+1) lower
+    Lt = L.transpose(1, 2)
+
+    # Draw both normal vectors up front, preserving the chi-then-beta RNG order.
+    df = max(n_obs - n_params, 1)
+    z_chi = torch.randn((m, df), generator=gen, dtype=dtype, device=device)
+    z_beta = torch.randn((m, n_params), generator=gen, dtype=dtype, device=device)
 
     Xty = Xt @ y_obs.unsqueeze(-1)                   # (m, q+1, 1)
-    beta_hat = torch.linalg.solve(XtX_ridge, Xty).squeeze(-1)  # (m, q+1)
+    fwd = torch.linalg.solve_triangular(L, Xty, upper=False)  # forward subst
+    # The two upper solves share L', so stack them into one wide-RHS back-subst:
+    #   beta_hat = L^{-T} fwd        (= G^{-1} X'y, the normal-equation solution)
+    #   A z      = L^{-T} z_beta     (posterior factor A = L^{-T}, A A' = G^{-1})
+    upper = torch.linalg.solve_triangular(
+        Lt, torch.cat([fwd, z_beta.unsqueeze(-1)], dim=2), upper=True
+    )                                                # (m, q+1, 2)
+    beta_hat = upper[..., 0]                          # (m, q+1)
+    Az = upper[..., 1]                               # (m, q+1)
 
     resid = y_obs - (Xa @ beta_hat.unsqueeze(-1)).squeeze(-1)  # (m, n_obs)
     rss = (resid * resid).sum(dim=1)                 # (m,)
-    df = max(n_obs - n_params, 1)
-
     # chi2(df) = sum of df squared standard normals (df is an integer).
-    z_chi = torch.randn((m, df), generator=gen, dtype=dtype, device=device)
     chi = (z_chi * z_chi).sum(dim=1).clamp_min(torch.finfo(dtype).tiny)  # (m,)
     sigma_draw = torch.where(
         rss > 0, torch.sqrt(rss / chi), torch.zeros_like(rss)
     )                                                # (m,)
 
-    V = torch.linalg.inv(XtX_ridge)                  # (m, q+1, q+1)
-    L = _batched_safe_cholesky(V)                    # (m, q+1, q+1), L L' = V
-    z_beta = torch.randn((m, n_params), generator=gen, dtype=dtype, device=device)
-    beta_draw = beta_hat + sigma_draw[:, None] * (L @ z_beta.unsqueeze(-1)).squeeze(-1)
-
+    beta_draw = beta_hat + sigma_draw[:, None] * Az
     return BatchedLinRegDraw(
         beta_hat=beta_hat, beta_draw=beta_draw, sigma_draw=sigma_draw
     )
 
 
-def _batched_safe_cholesky(V):
-    """Lower Cholesky of each (symmetric PSD) matrix in a batch, with jitter.
+def _safe_cholesky_spd(G):
+    """Lower Cholesky of each SPD matrix in a batch, with escalating jitter.
 
-    ``V`` is a batch of inverse-Gram matrices — positive definite in exact
-    arithmetic, but FP32 rounding can leave one marginally indefinite. We
-    symmetrize and add escalating jitter to the *whole batch* (cheap, keeps the
-    op batched) until ``cholesky_ex`` reports success for every matrix.
+    ``G`` is a ridged Gram (``X'X + ridge·mean·I``, ridge > 0): positive
+    definite in exact arithmetic. FP32 rounding can still leave one marginally
+    indefinite, so we symmetrize and add escalating jitter to the *whole batch*
+    (cheap, keeps the op batched) until ``cholesky_ex`` succeeds for every
+    matrix.
+
+    Factoring ``G`` directly is well conditioned — unlike factoring the Gram
+    *inverse*, which the previous path did and which needed an eigenvalue-clip
+    last resort. That last resort is gone: if jitter cannot rescue a matrix here
+    the predictors are genuinely degenerate, so we fail loud (Rule 1) rather
+    than return a silently clipped factor. Avoiding ``eigh`` also keeps this
+    path valid on MPS, where ``eigh`` is unimplemented.
     """
     import torch
 
-    Vs = 0.5 * (V + V.transpose(1, 2))
-    eye = torch.eye(Vs.shape[1], dtype=Vs.dtype, device=Vs.device)
-    diag = torch.diagonal(Vs, dim1=1, dim2=2)
+    Gs = 0.5 * (G + G.transpose(1, 2))
+    eye = torch.eye(Gs.shape[1], dtype=Gs.dtype, device=Gs.device)
+    diag = torch.diagonal(Gs, dim1=1, dim2=2)
     scale = diag.mean().clamp_min(1.0).item()
 
     jitter = 0.0
     for _ in range(8):
-        M = Vs if jitter == 0.0 else Vs + jitter * eye
+        M = Gs if jitter == 0.0 else Gs + jitter * eye
         L, info = torch.linalg.cholesky_ex(M)
         if not torch.any(info):
             return L
         jitter = scale * (1e-8 if jitter == 0.0 else 10.0 * jitter)
 
-    # Documented last resort (Rule 1): eigenvalue-clipped PSD factor. Reached
-    # only if a matrix is badly degenerate despite ridge + jitter.
-    w, Q = torch.linalg.eigh(Vs)
-    w = w.clamp_min(0.0)
-    return Q @ torch.diag_embed(torch.sqrt(w))
+    raise ValidationError(
+        "Batched Cholesky of the predictor Gram failed after ridge + escalating "
+        "jitter: the predictors for an imputation target are near-collinear "
+        "(degenerate design). Inspect the data for redundant/constant columns."
+    )

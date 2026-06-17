@@ -65,13 +65,15 @@ def mice(
         columns in ascending index order (R "roman" default).
     backend : {'cpu', 'gpu', 'auto'} or None
         Compute backend. Default None -> 'cpu' (the R-validated reference path).
-        'gpu' runs the chains batched on a CUDA GPU; 'auto' uses CUDA when
-        available, else CPU. GPU results match the CPU backend at the GPU/FP32
-        tolerance tier.
+        'gpu' runs the chains batched on a CUDA or Apple Silicon (MPS) GPU,
+        whichever is present; 'auto' uses CUDA when available, else CPU (never
+        MPS — opt into MPS explicitly with 'gpu'). GPU results match the CPU
+        backend at the GPU/FP32 tolerance tier.
     use_fp64 : bool
-        Only relevant on the GPU. Run the GPU chains in double precision (CUDA
-        only) for closer parity with the CPU reference. Default False (FP32,
-        the fast consumer-GPU path). Ignored on CPU (always double precision).
+        Only relevant on the GPU. Run the GPU chains in double precision for
+        closer parity with the CPU reference. CUDA only — rejected on MPS, which
+        has no float64. Default False (FP32, the fast consumer-GPU path).
+        Ignored on CPU (always double precision).
     verbose : bool
         Print progress information.
 
@@ -133,9 +135,10 @@ def mice(
 def _get_backend(choice: BackendChoice | None, use_fp64: bool):
     """Resolve the compute backend.
 
-    None/'cpu' -> CPU. 'gpu' -> CUDA GPU (raises on MPS, which is not yet
-    validated for MICE). 'auto' -> CUDA when available, else CPU; like the
-    other pystatistics modules, 'auto' never selects MPS.
+    None/'cpu' -> CPU. 'gpu' -> CUDA or Apple Silicon (MPS) GPU, whichever is
+    present (MPS runs FP32 only; use_fp64=True is rejected there). 'auto' ->
+    CUDA when available, else CPU; like the other pystatistics modules, 'auto'
+    never selects MPS — MPS is opt-in via backend='gpu'.
     """
     if choice is None or choice == "cpu":
         from pystatistics.mice.backends.cpu import CPUMiceBackend
@@ -155,13 +158,11 @@ def _get_backend(choice: BackendChoice | None, use_fp64: bool):
 
     if choice == "gpu":
         device = select_device("gpu")  # raises RuntimeError if no GPU
-        if device.device_type == "mps":
-            raise NotImplementedError(
-                "backend='gpu' for MICE is validated on CUDA only in this "
-                "release. The chained-equations sweep has not been validated "
-                "on Apple Silicon (MPS), so it is refused rather than run "
-                "unverified. Use backend='cpu' (the default) on a Mac; CUDA "
-                "GPUs are supported."
+        if device.device_type == "mps" and use_fp64:
+            raise ValueError(
+                "use_fp64=True is not supported on Apple Silicon (MPS): the MPS "
+                "backend has no float64. Use the default FP32 (use_fp64=False) "
+                "on a Mac, or a CUDA GPU for double precision."
             )
         from pystatistics.mice.backends.gpu import GPUMiceBackend
 

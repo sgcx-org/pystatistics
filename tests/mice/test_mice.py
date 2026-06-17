@@ -135,16 +135,16 @@ class TestSolverValidation:
             mice(complete, m=2, maxit=2, seed=0)
 
     def test_gpu_backend_dispatch_is_explicit(self, small_missing):
-        # backend='gpu' must either run on a real GPU or fail loud — never
-        # silently downgrade to CPU.
+        # backend='gpu' must either run on a real GPU (CUDA or Apple Silicon
+        # MPS) or fail loud — never silently downgrade to CPU.
         try:
             import torch
 
-            cuda = torch.cuda.is_available()
+            has_gpu = torch.cuda.is_available() or torch.backends.mps.is_available()
         except ImportError:
-            cuda = False
+            has_gpu = False
 
-        if cuda:
+        if has_gpu:
             sol = mice(small_missing, m=2, maxit=2, seed=0, backend="gpu")
             assert "gpu" in sol.backend_name
         else:
