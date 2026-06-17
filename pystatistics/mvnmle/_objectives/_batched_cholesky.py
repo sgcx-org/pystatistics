@@ -42,6 +42,8 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.compute.linalg import batched_tri_inv, use_blocked_inverse
+
 
 @dataclass(frozen=True)
 class BatchedConstants:
@@ -185,52 +187,16 @@ def _batched_cholesky_with_ridge(torch, sigma_b, eps: float, max_tries: int = 5)
         f"after ridge escalation to {ridge:.2e}")
 
 
-def _tri_inv_blocked(torch, L):
-    """Inverse of a batched lower-triangular matrix using matmul only.
-
-    Divide and conquer: inv([[A,0],[B,C]]) = [[A^-1, 0], [-C^-1 B A^-1, C^-1]],
-    recursing to a closed-form 2x2 (and 1x1) base. This touches no triangular
-    solve / inverse kernel — only matmul, slicing and elementwise ops — which is
-    the operation set Apple Metal (MPS) executes fast (its triangular-solve and
-    inverse kernels are ~300x slower than its batched matmul/Cholesky). It is
-    numerically stable (back-substitution-equivalent; no growing matrix powers)
-    and exact to floating precision, validated across condition numbers up to
-    correlation 0.99. ``L`` is (..., v, v) lower-triangular with positive
-    diagonal.
-    """
-    v = L.shape[-1]
-    if v == 1:
-        return 1.0 / L
-    if v == 2:
-        inv_a = 1.0 / L[..., 0, 0]
-        inv_c = 1.0 / L[..., 1, 1]
-        off = -L[..., 1, 0] * inv_a * inv_c
-        zero = torch.zeros_like(inv_a)
-        row0 = torch.stack([inv_a, zero], dim=-1)
-        row1 = torch.stack([off, inv_c], dim=-1)
-        return torch.stack([row0, row1], dim=-2)
-    h = v // 2
-    A = L[..., :h, :h].contiguous()
-    C = L[..., h:, h:].contiguous()
-    B = L[..., h:, :h].contiguous()
-    Ai = _tri_inv_blocked(torch, A)
-    Ci = _tri_inv_blocked(torch, C)
-    BL = -Ci @ (B @ Ai)
-    z = torch.zeros(L.shape[:-2] + (h, v - h), device=L.device, dtype=L.dtype)
-    return torch.cat([torch.cat([Ai, z], dim=-1),
-                      torch.cat([BL, Ci], dim=-1)], dim=-2)
-
-
 def _trace_sigma_inv_m(torch, L, M, method: str = "auto"):
     """tr(Sigma_k^{-1} M_k) for the whole batch, Sigma_k = L_k L_k^T.
 
-    When ``_use_blocked`` (MPS by default), form Sigma^{-1} via the matmul-only
+    When ``use_blocked_inverse`` (MPS by default), form Sigma^{-1} via the matmul-only
     blocked inverse (Metal's triangular solve is pathologically slow); otherwise
     use two triangular solves (well optimised on CUDA/CPU). ``method`` forces the
     choice for ablation.
     """
-    if _use_blocked(L, method):
-        W = _tri_inv_blocked(torch, L)                  # L^{-1}
+    if use_blocked_inverse(L, method):
+        W = batched_tri_inv(L)                           # L^{-1}
         sigma_inv = W.transpose(-1, -2) @ W             # Sigma^{-1} = L^-T L^-1
         return (sigma_inv * M).sum((-2, -1))
     Y = torch.linalg.solve_triangular(L, M, upper=False)
@@ -238,28 +204,17 @@ def _trace_sigma_inv_m(torch, L, M, method: str = "auto"):
     return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
 
 
-def _use_blocked(L, method: str) -> bool:
-    """Resolve the trace/inverse method. ``'auto'`` (default) uses the blocked
-    inverse on MPS and triangular solves elsewhere; ``'blocked'``/``'solve'``
-    force the choice (used for benchmarking/ablation)."""
-    if method == "blocked":
-        return True
-    if method == "solve":
-        return False
-    return L.device.type == "mps"
-
-
 def _sigma_inv(torch, L, method: str = "auto"):
     """Explicit per-pattern inverse covariance from its Cholesky factor.
 
-    Uses the matmul-only blocked inverse when ``_use_blocked`` (Metal's
+    Uses the matmul-only blocked inverse when ``use_blocked_inverse`` (Metal's
     triangular-solve / inverse family is slow); otherwise inverts the triangular
     factor with ``solve_triangular`` against the identity and forms
     Sigma^{-1} = L^{-T} L^{-1}. (``cholesky_inverse`` is not implemented on MPS,
     so this portable solve-family form is used on the non-blocked path.)
     """
-    if _use_blocked(L, method):
-        W = _tri_inv_blocked(torch, L)
+    if use_blocked_inverse(L, method):
+        W = batched_tri_inv(L)
         return W.transpose(-1, -2) @ W
     eye = torch.eye(L.shape[-1], device=L.device, dtype=L.dtype).expand_as(L).contiguous()
     Linv = torch.linalg.solve_triangular(L, eye, upper=False)

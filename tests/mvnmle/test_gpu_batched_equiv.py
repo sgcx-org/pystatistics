@@ -24,11 +24,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from pystatistics.mvnmle._objectives.gpu_fp64 import GPUObjectiveFP64
+from pystatistics.core.compute.linalg import batched_tri_inv
 from pystatistics.mvnmle._objectives._batched_cholesky import (
     build_batched_constants,
     to_torch,
     batched_neg2_loglik,
-    _tri_inv_blocked,
     chunk_bounds,
     auto_chunk_size,
     accumulate_gradient,
@@ -115,7 +115,7 @@ def test_blocked_triangular_inverse_exact(v, rho):
     corr = rho ** (idx[:, None] - idx[None, :]).abs().to(torch.float64)
     Sig = corr.expand(64, v, v) + 1e-2 * torch.eye(v, dtype=torch.float64)
     L = torch.linalg.cholesky(Sig)
-    W = _tri_inv_blocked(torch, L)
+    W = batched_tri_inv(L)
     eye = torch.eye(v, dtype=torch.float64).expand(64, v, v)
     # W must be the true inverse: W @ L = I
     assert torch.allclose(W @ L, eye, atol=1e-8), (W @ L - eye).abs().max().item()
@@ -137,7 +137,7 @@ def test_blocked_inverse_autodiff_matches_solve():
         return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
 
     def via_blocked(L):
-        W = _tri_inv_blocked(torch, L)
+        W = batched_tri_inv(L)
         return ((W.transpose(-1, -2) @ W) * M).sum((-2, -1))
 
     g = {}

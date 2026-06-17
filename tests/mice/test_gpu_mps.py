@@ -122,6 +122,33 @@ class TestMpsMatchesCpu:
         )
 
 
+class TestMpsDegenerate:
+    def test_collinear_predictors_never_silent_nan(self):
+        # The batched draw runs sync-free and defers fail-loud to the backend's
+        # end-of-sweep non-finite guard. With heavily collinear predictors the
+        # ridge keeps the Gram solvable; either way the result must be finite or
+        # the run must fail loud — never a silently-returned NaN.
+        from pystatistics.core.exceptions import ValidationError
+
+        rng = np.random.default_rng(0)
+        n = 300
+        x = rng.standard_normal((n, 1))
+        X = np.column_stack([
+            x,                                    # fully observed anchor
+            x + 1e-9 * rng.standard_normal((n, 1)),  # near-duplicate of col 0
+            rng.standard_normal((n, 3)),
+        ])
+        mask = rng.random(X.shape) < 0.2
+        mask[:, 0] = False
+        X[mask] = np.nan
+        try:
+            sol = mice(X, m=4, maxit=5, method="pmm", seed=0, backend="gpu")
+        except ValidationError:
+            return  # acceptable: failed loud rather than returning garbage
+        for d in sol.completed_datasets():
+            assert np.isfinite(d).all()
+
+
 class TestMpsScales:
     def test_large_n_matches_cpu_distribution(self):
         complete = datasets.make_gaussian_complete(8000, seed=2)

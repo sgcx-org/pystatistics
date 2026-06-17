@@ -27,6 +27,8 @@ output to within FP32 kernel non-determinism.
 
 from __future__ import annotations
 
+import numpy as _np
+
 from pystatistics.core.compute.timing import Timer
 from pystatistics.core.compute.torch_interop import to_host_f64
 from pystatistics.core.exceptions import ValidationError
@@ -142,6 +144,20 @@ class GPUMiceBackend:
             completed = to_host_f64(data)
             chain_mean_host = to_host_f64(chain_mean)
             chain_var_host = to_host_f64(chain_var)
+
+        # Fail loud, once, at the end of the sweep (Rule 1). The batched draw runs
+        # sync-free — it does not check each per-step Cholesky on the device, which
+        # would force a GPU<->CPU round-trip every step. Instead, degenerate
+        # (near-collinear) predictors produce a non-finite Cholesky factor that
+        # propagates into the imputations; we catch it here with a single check
+        # rather than silently returning NaNs.
+        if not _np.isfinite(completed).all():
+            raise ValidationError(
+                "GPU MICE produced non-finite imputations. The predictors for an "
+                "imputation target are degenerate (near-collinear / redundant or "
+                "constant columns), so the regression has no stable solution. "
+                "Remove the redundant columns or use backend='cpu'."
+            )
 
         timer.stop()
 

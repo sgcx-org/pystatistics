@@ -17,7 +17,11 @@ ridged Gram ``G = X'X + ridge`` — no matrix inverse, no ``eigh``:
     sigma*   = sqrt( RSS / chi2(df) )                 chi2 = sum of df squared N(0,1)
     beta*    = beta_hat + sigma* * (L^{-T} z)         A = L^{-T}, A A' = G^{-1}
 
-The two back-substitutions share ``L'`` and are stacked into one solve. The
+Applying ``L^{-1}`` is device-split via the shared dispatch in
+``core.compute.linalg``: on MPS (whose triangular-solve kernels are ~100-300x
+slower than matmul) ``L`` is inverted with the matmul-only blocked inverse and
+applied by matmul; on CUDA/CPU the two back-substitutions (which share ``L'``)
+are stacked into one fast triangular solve. The
 chi-square is built from standard normals (``df`` is a non-negative integer) so
 the only randomness source is the seeded ``torch.Generator`` — no reliance on
 ``torch.distributions``, which ignores explicit generators.
@@ -31,11 +35,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.compute.linalg import (
+    batched_tri_inv_series,
+    use_blocked_inverse,
+)
 
 # Matches the CPU ridge (methods/_linreg.py) — a tiny relative penalty keeping
 # the batched Gram matrices invertible under FP32.
 _DEFAULT_RIDGE = 1e-5
+
+# MPS dispatch threshold for the matmul-series inverse vs solve_triangular.
+# torch's MPS solve_triangular is a single but ~250x-slower-than-CUDA kernel;
+# the series inverse is ~log2(p) fast matmuls but more launches. In a per-step
+# sweep the small-n regime is dispatch-bound, so for small n_obs the single
+# solve_triangular kernel still edges out the multi-op series; above ~n_obs 3000
+# the series wins (and keeps winning at scale). Empirically tuned (m=100,
+# q+1~20); a speed heuristic, not a correctness boundary, so a fixed threshold
+# is fine and may want per-device tuning. CUDA/CPU always use solve_triangular
+# (fast there) — see use_blocked_inverse, which is MPS-only.
+_SERIES_INV_MIN_NOBS = 3000
 
 
 @dataclass
@@ -89,12 +107,11 @@ def batched_bayes_linreg_draw(
     eye = torch.eye(n_params, dtype=dtype, device=device)
     G = XtX + ridge * diag_mean[:, None, None] * eye  # ridged Gram, SPD (ridge>0)
 
-    # Forward-Cholesky parameterization: factor G = L L' once and drive every
-    # downstream solve through L. We never form the Gram inverse and never call
-    # solve/inv/eigh — inv/eigh are slow or unimplemented on MPS, and computing
-    # both a solve and an inverse (as the inverse path did) is wasteful on CUDA
-    # too. cholesky_ex + triangular solves is faster on both devices.
-    L = _safe_cholesky_spd(G)                        # (m, q+1, q+1) lower
+    # Factor the ridged Gram once: G = L L'. We need beta_hat = G^-1 X'y and the
+    # posterior factor A = L^-T (A A' = G^-1) — never the dense inverse, never
+    # solve/inv/eigh. The Cholesky is sync-free; degenerate (collinear) input is
+    # caught by the backend's end-of-sweep non-finite guard, not a per-step check.
+    L = _cholesky_ridged(G)                          # (m, q+1, q+1) lower
     Lt = L.transpose(1, 2)
 
     # Draw both normal vectors up front, preserving the chi-then-beta RNG order.
@@ -102,16 +119,27 @@ def batched_bayes_linreg_draw(
     z_chi = torch.randn((m, df), generator=gen, dtype=dtype, device=device)
     z_beta = torch.randn((m, n_params), generator=gen, dtype=dtype, device=device)
 
+    # HOW we apply L^-1 is device- and size-split: MPS's triangular-solve kernel
+    # is ~250x slower than its matmul, so above a size threshold we invert L with
+    # the matmul-series inverse (Neumann doubling + 1 Newton step) and apply by
+    # matmul. Below it (small n_obs) the sweep is dispatch-bound and the single
+    # solve_triangular kernel still edges out the multi-op series; on CUDA/CPU
+    # triangular solves are fast — so both keep solve_triangular there.
     Xty = Xt @ y_obs.unsqueeze(-1)                   # (m, q+1, 1)
-    fwd = torch.linalg.solve_triangular(L, Xty, upper=False)  # forward subst
-    # The two upper solves share L', so stack them into one wide-RHS back-subst:
-    #   beta_hat = L^{-T} fwd        (= G^{-1} X'y, the normal-equation solution)
-    #   A z      = L^{-T} z_beta     (posterior factor A = L^{-T}, A A' = G^{-1})
-    upper = torch.linalg.solve_triangular(
-        Lt, torch.cat([fwd, z_beta.unsqueeze(-1)], dim=2), upper=True
-    )                                                # (m, q+1, 2)
-    beta_hat = upper[..., 0]                          # (m, q+1)
-    Az = upper[..., 1]                               # (m, q+1)
+    if use_blocked_inverse(L) and n_obs >= _SERIES_INV_MIN_NOBS:
+        Linv = batched_tri_inv_series(L)             # L^-1, matmul-series (MPS)
+        Linvt = Linv.transpose(1, 2)
+        beta_hat = (Linvt @ (Linv @ Xty)).squeeze(-1)    # G^-1 X'y via matmul
+        Az = (Linvt @ z_beta.unsqueeze(-1)).squeeze(-1)  # A z, A = L^-T
+    else:
+        # The two upper solves share L', so stack them into one wide-RHS solve:
+        #   beta_hat = L^-T (L^-1 X'y),  A z = L^-T z_beta.
+        fwd = torch.linalg.solve_triangular(L, Xty, upper=False)
+        upper = torch.linalg.solve_triangular(
+            Lt, torch.cat([fwd, z_beta.unsqueeze(-1)], dim=2), upper=True
+        )                                            # (m, q+1, 2)
+        beta_hat = upper[..., 0]                      # (m, q+1)
+        Az = upper[..., 1]                           # (m, q+1)
 
     resid = y_obs - (Xa @ beta_hat.unsqueeze(-1)).squeeze(-1)  # (m, n_obs)
     rss = (resid * resid).sum(dim=1)                 # (m,)
@@ -127,39 +155,28 @@ def batched_bayes_linreg_draw(
     )
 
 
-def _safe_cholesky_spd(G):
-    """Lower Cholesky of each SPD matrix in a batch, with escalating jitter.
+def _cholesky_ridged(G):
+    """Lower Cholesky of each ridged Gram in the batch — sync-free.
 
-    ``G`` is a ridged Gram (``X'X + ridge·mean·I``, ridge > 0): positive
-    definite in exact arithmetic. FP32 rounding can still leave one marginally
-    indefinite, so we symmetrize and add escalating jitter to the *whole batch*
-    (cheap, keeps the op batched) until ``cholesky_ex`` succeeds for every
-    matrix.
+    ``G = X'X + ridge·mean·I`` (ridge > 0) is positive definite in exact
+    arithmetic. We symmetrize and add a *tiny* unconditional jitter
+    (``1e-8·scale``, three orders below the ridge, so statistically negligible)
+    to absorb FP32 rounding, then factor with ``cholesky_ex``.
 
-    Factoring ``G`` directly is well conditioned — unlike factoring the Gram
-    *inverse*, which the previous path did and which needed an eigenvalue-clip
-    last resort. That last resort is gone: if jitter cannot rescue a matrix here
-    the predictors are genuinely degenerate, so we fail loud (Rule 1) rather
-    than return a silently clipped factor. Avoiding ``eigh`` also keeps this
-    path valid on MPS, where ``eigh`` is unimplemented.
+    Crucially there is **no per-step host sync**: the previous version called
+    ``.item()`` and ``torch.any(info)`` on every sweep step (≈2 GPU↔CPU
+    round-trips × ``maxit·p`` steps), which dominated the small-n sweep. Here we
+    trust the ridge and defer fail-loud to the backend's single end-of-sweep
+    non-finite guard: genuinely degenerate (collinear) predictors yield a
+    non-finite factor that propagates to the imputations and is caught there —
+    one sync per sweep instead of hundreds. (Avoiding ``eigh``/``solve`` also
+    keeps this valid and fast on MPS.)
     """
     import torch
 
     Gs = 0.5 * (G + G.transpose(1, 2))
     eye = torch.eye(Gs.shape[1], dtype=Gs.dtype, device=Gs.device)
     diag = torch.diagonal(Gs, dim1=1, dim2=2)
-    scale = diag.mean().clamp_min(1.0).item()
-
-    jitter = 0.0
-    for _ in range(8):
-        M = Gs if jitter == 0.0 else Gs + jitter * eye
-        L, info = torch.linalg.cholesky_ex(M)
-        if not torch.any(info):
-            return L
-        jitter = scale * (1e-8 if jitter == 0.0 else 10.0 * jitter)
-
-    raise ValidationError(
-        "Batched Cholesky of the predictor Gram failed after ridge + escalating "
-        "jitter: the predictors for an imputation target are near-collinear "
-        "(degenerate design). Inspect the data for redundant/constant columns."
-    )
+    jitter = diag.mean(dim=1).clamp_min(1.0) * 1e-8          # (m,), tensor (no .item())
+    L, _ = torch.linalg.cholesky_ex(Gs + jitter[:, None, None] * eye)
+    return L
