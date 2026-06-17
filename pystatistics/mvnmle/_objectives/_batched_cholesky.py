@@ -42,7 +42,10 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.compute.linalg import batched_tri_inv, use_blocked_inverse
+from pystatistics.core.compute.linalg import (
+    batched_tri_inv_series,
+    use_blocked_inverse,
+)
 
 
 @dataclass(frozen=True)
@@ -196,7 +199,7 @@ def _trace_sigma_inv_m(torch, L, M, method: str = "auto"):
     choice for ablation.
     """
     if use_blocked_inverse(L, method):
-        W = batched_tri_inv(L)                           # L^{-1}
+        W = batched_tri_inv_series(L)                           # L^{-1}
         sigma_inv = W.transpose(-1, -2) @ W             # Sigma^{-1} = L^-T L^-1
         return (sigma_inv * M).sum((-2, -1))
     Y = torch.linalg.solve_triangular(L, M, upper=False)
@@ -207,14 +210,14 @@ def _trace_sigma_inv_m(torch, L, M, method: str = "auto"):
 def _sigma_inv(torch, L, method: str = "auto"):
     """Explicit per-pattern inverse covariance from its Cholesky factor.
 
-    Uses the matmul-only blocked inverse when ``use_blocked_inverse`` (Metal's
+    Uses the matmul-only series inverse when ``use_blocked_inverse`` (Metal's
     triangular-solve / inverse family is slow); otherwise inverts the triangular
     factor with ``solve_triangular`` against the identity and forms
     Sigma^{-1} = L^{-T} L^{-1}. (``cholesky_inverse`` is not implemented on MPS,
     so this portable solve-family form is used on the non-blocked path.)
     """
     if use_blocked_inverse(L, method):
-        W = batched_tri_inv(L)
+        W = batched_tri_inv_series(L)
         return W.transpose(-1, -2) @ W
     eye = torch.eye(L.shape[-1], device=L.device, dtype=L.dtype).expand_as(L).contiguous()
     Linv = torch.linalg.solve_triangular(L, eye, upper=False)

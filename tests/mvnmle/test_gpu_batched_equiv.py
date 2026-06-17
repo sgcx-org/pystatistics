@@ -24,7 +24,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from pystatistics.mvnmle._objectives.gpu_fp64 import GPUObjectiveFP64
-from pystatistics.core.compute.linalg import batched_tri_inv
+from pystatistics.core.compute.linalg import batched_tri_inv_series
 from pystatistics.mvnmle._objectives._batched_cholesky import (
     build_batched_constants,
     to_torch,
@@ -107,22 +107,22 @@ def test_kernel_value_all_observed():
 
 @pytest.mark.parametrize("v", [1, 2, 3, 7, 16, 50])
 @pytest.mark.parametrize("rho", [0.0, 0.9, 0.99])
-def test_blocked_triangular_inverse_exact(v, rho):
-    """The matmul-only blocked inverse equals the true inverse, including for
+def test_series_triangular_inverse_exact(v, rho):
+    """The matmul-only series inverse equals the true inverse, including for
     highly-correlated (ill-conditioned) Cholesky factors where a Neumann series
     would diverge."""
     idx = torch.arange(v)
     corr = rho ** (idx[:, None] - idx[None, :]).abs().to(torch.float64)
     Sig = corr.expand(64, v, v) + 1e-2 * torch.eye(v, dtype=torch.float64)
     L = torch.linalg.cholesky(Sig)
-    W = batched_tri_inv(L)
+    W = batched_tri_inv_series(L)
     eye = torch.eye(v, dtype=torch.float64).expand(64, v, v)
     # W must be the true inverse: W @ L = I
     assert torch.allclose(W @ L, eye, atol=1e-8), (W @ L - eye).abs().max().item()
 
 
-def test_blocked_inverse_autodiff_matches_solve():
-    """tr(Sigma^-1 M) via the blocked inverse has the same gradient as via
+def test_series_inverse_autodiff_matches_solve():
+    """tr(Sigma^-1 M) via the series inverse has the same gradient as via
     triangular solve (both on CPU; the blocked path is forced here)."""
     P, v = 1500, 12
     rng = np.random.default_rng(5)
@@ -137,7 +137,7 @@ def test_blocked_inverse_autodiff_matches_solve():
         return torch.diagonal(X, dim1=-2, dim2=-1).sum(-1)
 
     def via_blocked(L):
-        W = batched_tri_inv(L)
+        W = batched_tri_inv_series(L)
         return ((W.transpose(-1, -2) @ W) * M).sum((-2, -1))
 
     g = {}
@@ -196,7 +196,7 @@ def test_method_toggle_is_result_invariant(method):
     """The trace/inverse ``method`` toggle ('auto'|'solve'|'blocked') selects a
     computational path only — it must not change the result. Each forced method
     yields the same objective value and the same gradient as the default path
-    and as reverse-mode autodiff. Exercised on CPU, where both the blocked
+    and as reverse-mode autodiff. Exercised on CPU, where both the series
     inverse and the triangular-solve path are valid (the solve path uses
     ``solve_triangular`` against the identity, since ``cholesky_inverse`` is
     unavailable on MPS)."""

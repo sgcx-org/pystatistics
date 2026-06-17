@@ -9,4 +9,13 @@
 
 ## Changes
 
-*(empty — no unreleased changes yet)*
+- Internal (no user-facing change): unified the GPU batched triangular-factor
+  inverse onto one primitive. The MVNMLE GPU objective now uses the same
+  matmul-series inverse as the MICE GPU draw
+  (`core.compute.linalg.batched_tri_inv_series`); the older block-recursion
+  inverse (`batched_tri_inv`) was removed. The series inverse is now autograd-safe
+  — a differentiable Newton step from a detached, already-accurate iterate yields
+  the exact matrix-inverse gradient (matches a `solve_triangular` oracle to ~5e-16)
+  — so it is a full drop-in. MVNMLE GPU results are unchanged within the GPU/FP32
+  tolerance (MPS end-to-end vs CPU: max |Δmu| ~6e-5, max |ΔSigma| ~5e-4); CUDA/CPU
+  paths are unaffected.

@@ -32,24 +32,17 @@ def use_blocked_inverse(L, method: str = "auto") -> bool:
     return L.device.type == "mps"
 
 
-def batched_tri_inv_series(L, refine_steps: int = 1):
-    """Inverse of a batched lower-triangular ``L`` (positive diagonal) via the
-    exact finite Neumann series of its nilpotent part, summed by doubling, then
-    Newton-refined. A faster matmul-only alternative to :func:`batched_tri_inv`.
+def _tri_inv_series_value(L):
+    """Value of ``L^-1`` for batched lower-triangular ``L`` via the exact finite
+    Neumann series of its nilpotent part, summed by doubling, then one Newton
+    step. Pure value (no autograd contract — see :func:`batched_tri_inv_series`).
 
-    ``L = D(I+N)`` with ``N = D^-1·(strictly-lower part)``, which is nilpotent
-    (``N^p = 0``), so ``(I+N)^-1 = sum_{k=0}^{p-1} (-N)^k`` is exact and finite.
-    Summed by doubling (``S_{2t} = S_t + P^t S_t``, ``P^{2t} = (P^t)^2``) it costs
-    ~``log2(p)`` *large* batched matmuls — far fewer launches than the block
-    recursion's ``O(p)`` tiny ops, which is what makes it fast on MPS inside a
-    per-step loop (MPS executes few large matmuls well; many tiny kernels poorly).
-
-    In FP32 the bare series loses accuracy for ill-conditioned ``L`` (cancellation
-    among ``O(1)`` terms). One Newton step ``X <- X(2I - L X)`` (quadratic
-    convergence) restores it to the FP32 floor, matching :func:`batched_tri_inv`;
-    a single step suffices for condition numbers up to ~1e6 (beyond which the
-    result is precision-limited, not iteration-limited). Pure matmul/elementwise —
-    no triangular-solve/inverse kernel, no RNG.
+    ``L = D(I+N)`` with ``N = D^-1·(strictly-lower part)`` nilpotent (``N^p = 0``),
+    so ``(I+N)^-1 = sum_{k=0}^{p-1} (-N)^k`` is exact and finite; summed by
+    doubling (``S_{2t} = S_t + P^t S_t``) it costs ~``log2(p)`` *large* matmuls. In
+    FP32 the bare series loses accuracy for ill-conditioned ``L``; one Newton step
+    ``X <- X(2I - L X)`` restores it to the FP32 floor (matching the block
+    inverse) for condition numbers up to ~1e6.
     """
     import torch
 
@@ -67,41 +60,31 @@ def batched_tri_inv_series(L, refine_steps: int = 1):
             Pp = Pp @ Pp                                       # P^t (skip last, unused)
     X = S * dinv.unsqueeze(-2)                                  # (I+N)^-1 D^-1 = L^-1
     eye2 = 2.0 * torch.eye(p, dtype=L.dtype, device=L.device)
-    for _ in range(refine_steps):
-        X = X @ (eye2 - L @ X)
-    return X
+    return X @ (eye2 - L @ X)                                   # one Newton step
 
 
-def batched_tri_inv(L):
-    """Inverse of a batched lower-triangular matrix using matmul only.
+def batched_tri_inv_series(L):
+    """Inverse of a batched lower-triangular ``L`` (positive diagonal), matmul-only
+    and **autograd-safe**. ~log2(p) large batched matmuls (Neumann doubling of the
+    nilpotent part + Newton), which is what makes it fast on MPS inside a per-step
+    loop — MPS runs few large matmuls well, many tiny kernels (e.g. a block
+    recursion, or `solve_triangular`) poorly.
 
-    Divide and conquer: ``inv([[A,0],[B,C]]) = [[A^-1, 0], [-C^-1 B A^-1, C^-1]]``,
-    recursing to a closed-form 2x2 (and 1x1) base. Touches no triangular-solve or
-    inverse kernel — only matmul, slicing and elementwise ops — which is the
-    operation set MPS executes fast. Numerically stable (back-substitution-
-    equivalent; no growing matrix powers) and exact to floating precision. ``L``
-    is ``(..., v, v)`` lower-triangular with positive diagonal.
+    The value comes from :func:`_tri_inv_series_value` (series + Newton). The bare
+    series/Newton expression is *not* differentiable to the true inverse gradient,
+    so we wrap it in one **differentiable Newton step from a detached, already-
+    accurate iterate** ``Yd``::
+
+        Yd = L^-1 (computed graph-free)   ->   return Yd (2I - tril(L) Yd)
+
+    The forward value is inverse-accurate (one more Newton from an accurate ``Yd``);
+    and because ``Yd`` is constant, the gradient is exactly the matrix-inverse VJP
+    ``-Yd^T ḡ Yd^T`` — correct without a custom ``autograd.Function`` (so the module
+    keeps its lazy ``torch`` import). ``tril(L)`` confines the gradient to ``L``'s
+    lower triangle, matching ``solve_triangular`` semantics for a triangular factor.
     """
     import torch
 
-    v = L.shape[-1]
-    if v == 1:
-        return 1.0 / L
-    if v == 2:
-        inv_a = 1.0 / L[..., 0, 0]
-        inv_c = 1.0 / L[..., 1, 1]
-        off = -L[..., 1, 0] * inv_a * inv_c
-        zero = torch.zeros_like(inv_a)
-        row0 = torch.stack([inv_a, zero], dim=-1)
-        row1 = torch.stack([off, inv_c], dim=-1)
-        return torch.stack([row0, row1], dim=-2)
-    h = v // 2
-    A = L[..., :h, :h].contiguous()
-    C = L[..., h:, h:].contiguous()
-    B = L[..., h:, :h].contiguous()
-    Ai = batched_tri_inv(A)
-    Ci = batched_tri_inv(C)
-    BL = -Ci @ (B @ Ai)
-    z = torch.zeros(L.shape[:-2] + (h, v - h), device=L.device, dtype=L.dtype)
-    return torch.cat([torch.cat([Ai, z], dim=-1),
-                      torch.cat([BL, Ci], dim=-1)], dim=-2)
+    Yd = _tri_inv_series_value(L.detach())                     # accurate L^-1, no graph
+    eye = torch.eye(L.shape[-1], dtype=L.dtype, device=L.device)
+    return Yd @ (2.0 * eye - torch.tril(L) @ Yd)               # differentiable Newton step
