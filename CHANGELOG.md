@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.15.1
+
+Imputing ordered factors with `mice` (the `polr` method) is now substantially
+faster and more reliable, and proportional-odds threshold standard errors match
+R's `MASS::polr`.
+
+- **Faster, more reliable ordered-factor imputation (`mice` `polr` method).**
+  Proportional-odds fits are several times faster — a single fit on 10,000 rows
+  drops from ~160 ms to ~40 ms, and end-to-end imputation of an ordered column
+  (n=10,000, m=10, maxit=10) drops from ~21 s to ~7 s, now faster than R's
+  `mice`. The fit also no longer reports false convergence failures on realistic
+  correlated data — which previously forced a fallback to a cruder marginal draw
+  and degraded the imputations — while genuinely unidentifiable (separated) data
+  is still reported as a clear convergence error. Imputed category distributions
+  continue to match R within Monte-Carlo tolerance.
+
+- **`polr` threshold standard errors now match `MASS::polr`.** Threshold
+  (intercept) standard errors and the threshold variance-covariance are now
+  reported on the natural threshold scale, matching R; previously they were on
+  an internal parameterization and disagreed beyond the first threshold. Slope
+  coefficient standard errors are unchanged.
+
 ## 3.15.0
 
 MICE GPU imputation now handles categorical data — both as predictors and as the

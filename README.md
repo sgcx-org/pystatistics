@@ -366,6 +366,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.15.1 — Faster, more reliable ordered-factor imputation
+
+- Imputing ordered factors with `mice` (the `polr` method) is now several times
+  faster — and faster than R's `mice` — and no longer falls back to a cruder
+  draw on realistic correlated data. Proportional-odds threshold standard errors
+  now match R's `MASS::polr`.
+
 ### 3.15.0 — MICE GPU imputes categorical data
 
 - `mice(..., backend='gpu')` now imputes categorical columns on CUDA and Apple
