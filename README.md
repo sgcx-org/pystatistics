@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.15.2 — GPU ordered-factor imputation matches R's threshold variability
+
+- GPU `mice` imputation of ordered factors (`polr`, on CUDA and Apple Silicon)
+  now draws the proportional-odds thresholds on the natural scale, matching the
+  CPU `polr` method and R's `MASS::polr`. Imputed category proportions were
+  already correct, but the between-imputation variability — and the pooled
+  (Rubin's rules) variances and intervals that depend on it — is now correct too.
+
 ### 3.15.1 — Faster, more reliable ordered-factor imputation
 
 - Imputing ordered factors with `mice` (the `polr` method) is now several times

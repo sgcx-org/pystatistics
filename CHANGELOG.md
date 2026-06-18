@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.15.2
+
+GPU imputation of ordered factors with `mice` (the `polr` method) now draws the
+proportional-odds thresholds on the same natural scale as R's `MASS::polr`,
+matching the CPU `polr` method.
+
+- **GPU ordered-factor imputation now matches `MASS::polr` threshold
+  variability.** `mice(..., backend='gpu')` imputation of ordered factors
+  (`polr`, on both CUDA and Apple Silicon) drew the proportional-odds threshold
+  parameters using a covariance on an internal parameterization rather than the
+  natural threshold scale. Imputed category proportions were unaffected, but the
+  between-imputation variability of ordered-factor imputations — and therefore
+  the pooled (Rubin's rules) variances and interval widths derived from them —
+  was understated for the inner thresholds (by roughly 9% on typical data). The
+  GPU draw now uses the natural-scale threshold covariance, matching the CPU
+  `polr` method and R's `MASS::polr`. Slope coefficients and marginal category
+  distributions are unchanged. This brings the GPU `polr` path in line with the
+  CPU correction released in 3.15.1.
+
 ## 3.15.1
 
 Imputing ordered factors with `mice` (the `polr` method) is now substantially
