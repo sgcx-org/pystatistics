@@ -204,15 +204,15 @@ class PolrGPULikelihood:
     def compute_vcov(
         self, params_flat: NDArray[np.floating[Any]],
     ) -> NDArray[np.floating[Any]]:
-        """Hessian → inverse → vcov, fully on GPU.
+        """Hessian → inverse → raw-coordinate vcov, fully on GPU.
 
-        The CPU path in ``_solver._compute_vcov`` runs
-        ``scipy.approx_fprime`` on each component of the gradient — an
-        O(n_params²) sweep of finite-differenced gradient evaluations.
-        On GPU we use ``torch.autograd.functional.hessian`` which does
-        one backward pass per parameter (O(n_params)), all batched over
-        the n-row data tensor. For MASS::housing-scale data this cuts
-        a ~300 ms vcov step down to milliseconds.
+        The CPU path (``_solver.observed_information``) forward-differences
+        the analytic vector gradient — an O(n_params) sweep. On GPU we use
+        ``torch.autograd.functional.hessian`` which does one backward pass
+        per parameter (also O(n_params)), all batched over the n-row data
+        tensor. Both return the variance-covariance in raw (log-gap)
+        coordinates; ``_solver.polr`` applies the delta-method transform to
+        natural threshold coordinates afterward.
         """
         torch = self._torch
         from torch.autograd.functional import hessian as torch_hessian

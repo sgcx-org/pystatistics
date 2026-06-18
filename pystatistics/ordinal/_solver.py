@@ -20,7 +20,8 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.optimize import minimize, approx_fprime
+from scipy.linalg import cho_factor, cho_solve
+from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.validation import (
@@ -39,7 +40,39 @@ from pystatistics.ordinal._likelihood import (
     raw_to_thresholds,
     thresholds_to_raw,
 )
+from pystatistics.ordinal._information import (
+    observed_information,
+    raw_to_natural_jacobian,
+)
 from pystatistics.ordinal.solution import OrdinalSolution
+
+
+# L-BFGS-B's CPU function tolerance. The historical 1e-15 sits below the
+# line-search's achievable precision once the iterate reaches the optimum,
+# so L-BFGS-B routinely reported ABNORMAL_TERMINATION_IN_LNSRCH on fits that
+# had in fact converged (the score was ~0). R's optim() BFGS uses
+# reltol = sqrt(eps) ~ 1.5e-8 and never sees this. We relax to a comparable
+# value and delegate the convergence *decision* to a score-based guard
+# (_accept_fit_vcov) rather than the optimizer's success flag.
+_CPU_FTOL = 1e-10
+
+# Convergence acceptance threshold on the half-Newton-decrement
+# 0.5 * grad^T H^{-1} grad, which estimates the remaining negative-log-
+# likelihood improvement to the MLE (in deviance/2 units) and is invariant to
+# the parameterization. The log-likelihood is concave, so wherever the
+# observed information is positive definite a Newton step moves toward the
+# unique maximum; we therefore polish the optimizer's iterate with a few
+# safeguarded Newton steps until the decrement falls below this threshold.
+# Only genuine data separation (a non-positive-definite / runaway information)
+# fails to converge and is rejected.
+_DECREMENT_TOL = 1e-8
+
+# Maximum safeguarded Newton polishing steps after the quasi-Newton optimizer.
+# L-BFGS-B leaves the iterate within the Newton basin (small gradient), so a
+# handful of quadratically-convergent steps reach the MLE; the cap is a guard
+# against a non-converging (separated) problem, which the decrement test then
+# rejects.
+_MAX_POLISH_STEPS = 12
 
 
 _LINK_MAP: dict[str, type[Link]] = {
@@ -226,9 +259,16 @@ def _fit_polr(
     n_levels: int,
     tol: float,
     max_iter: int,
-) -> tuple[NDArray, int, bool, float]:
+) -> tuple[NDArray, int, bool, float, NDArray]:
     """
     Fit proportional odds model via L-BFGS-B with analytical gradient.
+
+    Convergence is decided by a score-based guard (see ``_accept_fit_vcov``)
+    rather than by L-BFGS-B's ``success`` flag: the flag spuriously reports
+    failure at the optimum under the tight tolerances the model needs, and a
+    loose tolerance could spuriously report success short of it. The guard
+    instead verifies that the maximum-likelihood conditions hold at the
+    returned point.
 
     Args:
         y_codes: Integer codes 0, ..., K-1, length n.
@@ -239,11 +279,13 @@ def _fit_polr(
         max_iter: Maximum optimizer iterations.
 
     Returns:
-        Tuple of (optimal_params, n_iter, converged, neg_loglik).
+        Tuple of (optimal_params, n_iter, converged, neg_loglik, vcov_raw),
+        where vcov_raw is the raw-coordinate variance-covariance matrix.
 
     Raises:
-        ConvergenceError: If optimizer fails to converge and result
-            is not usable.
+        ConvergenceError: If the score-based guard rejects the fit (the
+            observed information is not positive definite, or the iterate is
+            not at the maximum — typically data separation).
     """
     p = X.shape[1]
     x0 = _compute_starting_values(y_codes, n_levels, link, p)
@@ -257,72 +299,106 @@ def _fit_polr(
         options={
             'maxiter': max_iter,
             'gtol': tol,
-            'ftol': 1e-15,
+            'ftol': _CPU_FTOL,
         },
     )
 
-    converged = result.success
-    n_iter = result.nit
-    neg_loglik = result.fun
-
-    if not converged:
-        raise ConvergenceError(
-            f"polr optimizer did not converge: {result.message}. "
-            f"Completed {n_iter} iterations. Try increasing max_iter "
-            f"or check data for separation.",
-            iterations=n_iter,
-            reason=str(result.message),
-        )
-
-    return result.x, n_iter, converged, neg_loglik
+    params_mle, neg_loglik, vcov_raw = _polish_to_mle(
+        result.x, y_codes, X, link, n_levels, result.nit, result.message,
+    )
+    return params_mle, result.nit, True, neg_loglik, vcov_raw
 
 
-def _compute_vcov(
+def _polish_to_mle(
     params: NDArray[np.floating[Any]],
     y_codes: NDArray[np.integer[Any]],
     X: NDArray[np.floating[Any]],
     link: Link,
     n_levels: int,
-) -> NDArray[np.floating[Any]]:
+    n_iter: int,
+    message: Any,
+) -> tuple[NDArray[np.floating[Any]], float, NDArray[np.floating[Any]]]:
     """
-    Compute variance-covariance matrix via numerical Hessian.
+    Safeguarded Newton polish to the MLE, with the score-based convergence
+    guard; returns the polished estimate, its negative log-likelihood, and the
+    raw-coordinate vcov.
 
-    Uses scipy.optimize.approx_fprime to compute the Hessian of the
-    negative log-likelihood, then inverts it to get vcov.
+    At each step the analytic observed information ``H`` is built (reusing a
+    single Cholesky factor for the decrement test, the Newton step, and the
+    final ``H^{-1}``). The fit is accepted once the half-Newton-decrement
+    ``0.5 * grad^T H^{-1} grad`` — the estimated remaining log-likelihood gain
+    to the MLE — falls below ``_DECREMENT_TOL``. Because the log-likelihood is
+    concave, a backtracking-safeguarded Newton step always reduces it while the
+    information is positive definite; if the information ceases to be positive
+    definite the data are separated and the fit is rejected.
+
+    This replaces trusting the optimizer's ``success`` flag (see ``_fit_polr``).
 
     Args:
-        params: Fitted parameters [raw_thresholds, beta].
+        params: Raw-parameterization estimate [raw_thresholds, beta] from the
+            quasi-Newton optimizer.
         y_codes: Integer response codes.
         X: Design matrix.
         link: Link function instance.
         n_levels: Number of categories.
+        n_iter: Optimizer iteration count (for error context).
+        message: Optimizer termination message (for error context).
 
     Returns:
-        Variance-covariance matrix, shape (K-1+p, K-1+p).
+        Tuple (params_mle, neg_loglik, vcov_raw): the polished estimate, its
+        negative log-likelihood, and the raw-coordinate variance-covariance.
+
+    Raises:
+        ConvergenceError: If the observed information is not positive definite
+            (data separation) or the decrement stays above threshold after the
+            Newton-step budget is exhausted.
     """
-    n_params = len(params)
-    eps = np.sqrt(np.finfo(float).eps)
+    x = np.array(params, dtype=np.float64, copy=True)
 
-    # Compute Hessian row by row using approx_fprime on the gradient
-    hessian = np.empty((n_params, n_params))
-    for i in range(n_params):
-        def grad_i(x: NDArray) -> float:
-            """Extract i-th component of the gradient."""
-            return cumulative_gradient(x, y_codes, X, link, n_levels)[i]
-        hessian[i, :] = approx_fprime(params, grad_i, eps)
+    for _ in range(_MAX_POLISH_STEPS + 1):
+        grad = cumulative_gradient(x, y_codes, X, link, n_levels)
+        hess = observed_information(x, y_codes, X, link, n_levels, grad0=grad)
 
-    # Symmetrize (numerical approximation may not be perfectly symmetric)
-    hessian = 0.5 * (hessian + hessian.T)
+        try:
+            chol = cho_factor(hess, lower=True)
+        except np.linalg.LinAlgError as exc:
+            raise ConvergenceError(
+                "polr observed information is not positive definite "
+                f"(likely data separation): {exc}. Optimizer ran {n_iter} "
+                f"iterations ({message}).",
+                iterations=n_iter,
+                reason="non-PD observed information",
+            ) from exc
 
-    # Invert to get vcov. The Hessian of negative log-likelihood should
-    # be positive definite at the MLE.
-    try:
-        vcov = np.linalg.inv(hessian)
-    except np.linalg.LinAlgError:
-        # If Hessian is singular, return NaN matrix as warning
-        vcov = np.full((n_params, n_params), np.nan)
+        step = cho_solve(chol, grad)
+        half_decrement = 0.5 * float(grad @ step)
+        if np.isfinite(half_decrement) and half_decrement <= _DECREMENT_TOL:
+            neg_loglik = float(
+                cumulative_negloglik(x, y_codes, X, link, n_levels)
+            )
+            vcov_raw = cho_solve(chol, np.eye(len(grad)))
+            return x, neg_loglik, vcov_raw
 
-    return vcov
+        # Backtracking Newton step (concave objective => the full step reduces
+        # the negative log-likelihood near the optimum; backtrack otherwise).
+        f0 = cumulative_negloglik(x, y_codes, X, link, n_levels)
+        t = 1.0
+        while t >= 1e-4:
+            x_new = x - t * step
+            if cumulative_negloglik(x_new, y_codes, X, link, n_levels) < f0:
+                break
+            t *= 0.5
+        else:
+            break  # no productive step found; reject below
+        x = x_new
+
+    raise ConvergenceError(
+        "polr did not reach the maximum likelihood estimate within the Newton "
+        f"polishing budget (likely data separation). Optimizer ran {n_iter} "
+        f"iterations ({message}).",
+        iterations=n_iter,
+        reason="score test failed",
+    )
 
 
 def _fit_polr_gpu(
@@ -504,6 +580,7 @@ def polr(
         effective_tol = gpu_fp32_min_tol
 
     gpu_like = None
+    vcov_raw = None
 
     if X_arr is None:
         gpu_device = X_for_gpu.device.type
@@ -513,7 +590,7 @@ def polr(
         )
         backend_name = f"gpu_lbfgsb ({gpu_device}, {'fp64' if use_fp64 else 'fp32'})"
     elif backend == "cpu":
-        opt_params, n_iter, converged, neg_loglik = _fit_polr(
+        opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
             y_codes, X_arr, link, n_levels, tol, max_iter,
         )
         backend_name = "cpu_lbfgsb"
@@ -536,7 +613,7 @@ def polr(
                 "Install PyTorch with CUDA/MPS support or use backend='cpu'."
             )
         else:
-            opt_params, n_iter, converged, neg_loglik = _fit_polr(
+            opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
                 y_codes, X_arr, link, n_levels, tol, max_iter,
             )
             backend_name = "cpu_lbfgsb"
@@ -552,11 +629,16 @@ def polr(
     deviance = -2.0 * log_lik
     aic = deviance + 2.0 * n_total_params
 
-    # Compute vcov on the raw (unconstrained) parameterization
+    # Both backends produce the variance-covariance in raw (unconstrained
+    # log-gap) coordinates; the GPU path computes it from its autograd
+    # Hessian here, the CPU path returned it from the score guard above.
+    # Map to natural threshold coordinates (delta method) so the reported
+    # threshold SEs and the MICE posterior draw over [alpha, beta] are on the
+    # same scale as MASS::polr.
     if gpu_like is not None:
-        vcov = gpu_like.compute_vcov(opt_params)
-    else:
-        vcov = _compute_vcov(opt_params, y_codes, X_arr, link, n_levels)
+        vcov_raw = gpu_like.compute_vcov(opt_params)
+    jac = raw_to_natural_jacobian(raw_thresh, vcov_raw.shape[0])
+    vcov = jac @ vcov_raw @ jac.T
 
     # Build result payload
     params = OrdinalParams(

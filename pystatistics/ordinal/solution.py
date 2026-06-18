@@ -96,8 +96,7 @@ class OrdinalSolution:
         Full variance-covariance matrix.
 
         Ordered as [thresholds, coefficients], shape (K-1+p, K-1+p).
-        This is on the raw (unconstrained) parameterization for
-        thresholds.
+        Reported in natural threshold coordinates (matching MASS::polr).
 
         Returns:
             Variance-covariance matrix.
@@ -123,10 +122,10 @@ class OrdinalSolution:
         """
         Standard errors for threshold parameters.
 
-        These are on the raw (unconstrained) parameterization.
+        These are in natural threshold coordinates (matching MASS::polr).
 
         Returns:
-            Array of shape (K-1,) with SE(raw_threshold).
+            Array of shape (K-1,) with SE(alpha).
         """
         p = self._result.params
         n_thresh = p.n_levels - 1
@@ -164,7 +163,7 @@ class OrdinalSolution:
         """
         Wald z-statistics for thresholds: alpha / SE(alpha).
 
-        Note: these are for the raw (unconstrained) parameterization.
+        These are in natural threshold coordinates (matching MASS::polr).
 
         Returns:
             Array of shape (K-1,).

@@ -642,3 +642,59 @@ class TestPolrGPU:
         from pystatistics.core.exceptions import ValidationError
         with pytest.raises(ValidationError, match="torch.Tensor"):
             polr(gds["y"], gds["X"], backend="cpu")
+
+
+# =========================================================================
+# Convergence guard: Newton polish + score-based acceptance
+# =========================================================================
+
+class TestConvergenceGuard:
+    """The fit is accepted by a score-based guard with Newton polishing,
+    not by the optimizer's success flag (see ``_solver._polish_to_mle``)."""
+
+    @staticmethod
+    def _ar1(p, rho):
+        idx = np.arange(p)
+        return rho ** np.abs(idx[:, None] - idx[None, :])
+
+    def _near_separation(self, seed, n=2000, p=10, K=4, rho=0.9, sig=1.5):
+        """Correlated, high-signal data on which L-BFGS-B stops a few Newton
+        steps short of the optimum (spurious non-convergence pre-fix)."""
+        rng = np.random.default_rng(seed)
+        L = np.linalg.cholesky(self._ar1(p, rho))
+        X = rng.standard_normal((n, p)) @ L.T
+        z = X @ (rng.standard_normal(p) * sig)
+        edges = np.quantile(z, np.linspace(0, 1, K + 1)[1:-1])
+        y = np.digitize(z + 0.3 * rng.logistic(size=n), edges).astype(np.intp)
+        return y, X
+
+    def test_near_separation_converges(self):
+        """Cases that tripped the old success-flag check now converge."""
+        for seed in range(20):
+            y, X = self._near_separation(seed)
+            if len(np.unique(y)) < 4:
+                continue
+            sol = polr(y, X, method="logistic")  # must not raise
+            assert sol.converged
+
+    def test_polished_estimate_is_stationary(self):
+        """The returned estimate satisfies the MLE score condition."""
+        from pystatistics.ordinal._likelihood import cumulative_gradient
+        from pystatistics.ordinal._solver import _fit_polr
+        from pystatistics.regression.families import LogitLink
+        y, X = self._near_separation(0)
+        params, _, _, _, _ = _fit_polr(y, X, LogitLink(), 4, 1e-8, 200)
+        grad = cumulative_gradient(params, y, X, LogitLink(), 4)
+        # Newton polish drives the gradient orders of magnitude below the
+        # L-BFGS-B stopping precision that left ~1e-2 residuals pre-fix.
+        assert np.linalg.norm(grad) < 1e-4
+
+    def test_complete_separation_raises(self):
+        """Perfectly separable data has no finite MLE and must be rejected
+        loudly (Rule 1) rather than returning a bogus fit."""
+        # y is a deterministic step in x: complete separation.
+        x = np.linspace(-3, 3, 60)
+        y = np.where(x < -1, 0, np.where(x < 1, 1, 2)).astype(np.intp)
+        X = x.reshape(-1, 1)
+        with pytest.raises(ConvergenceError):
+            polr(y, X, method="logistic")
