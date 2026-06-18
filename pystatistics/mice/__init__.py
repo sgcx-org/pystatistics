@@ -6,13 +6,15 @@ stabilises, producing ``m`` completed datasets, then combine analyses across
 them with Rubin's rules. R-pegged: numeric defaults follow R's ``mice`` package
 (predictive mean matching for numeric columns).
 
-Public API (Stage 1, CPU, numeric columns):
+Public API:
 
     >>> from pystatistics.mice import mice, pool
     >>> imp = mice(data, m=5, method='pmm', seed=0)
     >>> completed = imp.completed_datasets()      # list of m arrays
 
-Stage 1 supports numeric columns only; categorical methods are planned.
+Supports numeric columns (``pmm``/``norm``) and categorical columns — binary
+(``logreg``), unordered (``polyreg``), and ordered (``polr``) factors — on both
+the CPU and GPU (CUDA / Apple Silicon MPS) backends.
 """
 
 from pystatistics.mice.design import MICEDesign
