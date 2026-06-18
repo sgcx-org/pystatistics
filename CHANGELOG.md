@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.15.3
+
+Test-suite fix only — no change to library behaviour.
+
+- **Fixed a spurious GPU test failure on NVIDIA Blackwell (sm_120) GPUs.** The
+  test comparing FP64 GPU `polr` coefficients to the CPU fit used a tolerance
+  tighter than the solver's convergence guarantee. The CPU and GPU paths both
+  converge to the same maximum-likelihood estimate, but stop on criteria that
+  bound the log-likelihood rather than the coefficients directly, so the two can
+  legitimately differ at the ~1e-6 level. The comparison tolerance now reflects
+  that. Library results are unchanged.
+
 ## 3.15.2
 
 GPU imputation of ordered factors with `mice` (the `polr` method) now draws the
