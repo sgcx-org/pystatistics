@@ -17,6 +17,9 @@ from pystatistics.mice.backends._gpu_linreg import (
     add_intercept,
     batched_bayes_linreg_draw,
 )
+from pystatistics.mice.backends._gpu_logreg import gpu_logreg_impute
+from pystatistics.mice.backends._gpu_polyreg import gpu_polyreg_impute
+from pystatistics.mice.backends._gpu_polr import gpu_polr_impute
 
 
 def gpu_norm_impute(y_obs, X_obs, X_mis, gen, *, donors=None):
@@ -154,4 +157,7 @@ def _insertion_rank(sorted_obs, yhat_mis):
 GPU_METHODS = {
     "norm": gpu_norm_impute,
     "pmm": gpu_pmm_impute,
+    "logreg": gpu_logreg_impute,
+    "polyreg": gpu_polyreg_impute,
+    "polr": gpu_polr_impute,
 }

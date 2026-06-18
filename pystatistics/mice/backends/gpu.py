@@ -33,7 +33,11 @@ from pystatistics.core.compute.timing import Timer
 from pystatistics.core.compute.torch_interop import to_host_f64
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.result import Result
-from pystatistics.mice.backends._gpu_encode import build_predictor_tensor
+from pystatistics.mice.backends._gpu_encode import (
+    build_predictor_tensor,
+    codes_to_indices,
+    indices_to_codes,
+)
 from pystatistics.mice.backends._gpu_methods import GPU_METHODS
 from pystatistics.mice.design import MICEDesign
 from pystatistics.mice.solution import MICEParams
@@ -65,20 +69,10 @@ class GPUMiceBackend:
     ) -> Result[MICEParams]:
         import torch
 
-        # Categorical *predictors* are supported (dummy-encoded in the sweep);
-        # categorical *targets* are not yet — they need a categorical model fit.
-        # A categorical target is an incomplete categorical column; refuse those
-        # with a clear message (fail loud at the boundary, Rule 2).
-        for j in design.incomplete_columns:
-            if design.is_categorical(j):
-                raise ValidationError(
-                    f"Column {j} is categorical and incomplete. GPU imputation "
-                    f"of categorical targets is not yet implemented; use "
-                    f"backend='cpu'. (Numeric targets with categorical "
-                    f"predictors are supported on GPU.)"
-                )
-
-        # Every incomplete (numeric) column's method must have a GPU kernel.
+        # Every incomplete column's method must have a GPU kernel. Numeric targets
+        # (norm/pmm) and categorical targets — binary (logreg), unordered (polyreg)
+        # and ordered (polr) — are all supported; an unrecognised or not-yet-ported
+        # method is refused here rather than silently downgraded (fail loud, Rule 1).
         for j in design.incomplete_columns:
             meth = design.method_for(j)
             if meth not in GPU_METHODS:
@@ -141,10 +135,21 @@ class GPUMiceBackend:
                     X_mis = X[:, mis_idx[j], :]            # (m, n_mis, q)
                     y_obs = data[:, obs_idx[j], j]         # (m, n_obs)
 
-                    imputed = method_fn(
-                        y_obs, X_obs, X_mis, gen, donors=_PMM_DONORS
-                    )
-                    data[:, mis_idx[j], j] = imputed
+                    if design.is_categorical(j):
+                        # Categorical methods speak in 0..K-1 indices; translate
+                        # to/from the column's stored codes (batched over chains),
+                        # mirroring the CPU chain's code<->index wrapping.
+                        levels = cat_levels[j]
+                        y_in = codes_to_indices(y_obs, levels)
+                        imputed_idx = method_fn(
+                            y_in, X_obs, X_mis, gen,
+                            donors=_PMM_DONORS, n_classes=levels.shape[0],
+                        )
+                        data[:, mis_idx[j], j] = indices_to_codes(imputed_idx, levels)
+                    else:
+                        data[:, mis_idx[j], j] = method_fn(
+                            y_obs, X_obs, X_mis, gen, donors=_PMM_DONORS
+                        )
 
                 for j in incomplete:
                     cells = data[:, mis_idx[j], j]          # (m, n_mis)

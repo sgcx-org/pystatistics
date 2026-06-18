@@ -114,3 +114,6 @@ fixtures/*.pkl
 # Only block genuinely large generated artifacts:
 benchmarks/**/*.csv
 benchmarks/**/*.json
+
+# Disposable validation prototypes / scratch work (not shipped)
+scratch/

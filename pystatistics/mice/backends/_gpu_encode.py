@@ -12,10 +12,15 @@ predictor contributes one column; a K-level categorical predictor contributes
 ``K-1`` 0/1 dummy columns (the first level is the reference). No intercept column
 (the regression methods add one).
 
-Categorical *predictors* must be fully observed — the sweep never imputes them
-here (an incomplete categorical column needs a categorical method, refused
-upstream), so their codes, and hence their dummy encoding, are constant across
-chains and sweep steps.
+A categorical predictor's dummy encoding is exact because its values are always
+valid category codes — either fully observed, or (for an incomplete categorical
+column imputed earlier in the sweep) imputed back as one of its level codes. So
+equality against the level set is exact regardless of which chain or sweep step.
+
+This module also owns the batched code<->index mapping for categorical *targets*:
+``codes_to_indices`` / ``indices_to_codes`` translate between a column's stored
+category codes and the consecutive ``0..K-1`` indices the categorical GPU methods
+speak in (the tensor counterpart of ``_encode.codes_to_indices``).
 """
 
 from __future__ import annotations
@@ -61,3 +66,23 @@ def build_predictor_tensor(data, j, p, cat_levels):
             block = (data[:, :, c:c + 1] == levels[1:]).to(data.dtype)  # (m, n, K-1)
             blocks.append(block)
     return torch.cat(blocks, dim=2)
+
+
+def codes_to_indices(values, levels):
+    """Map category codes to consecutive ``0..K-1`` indices (tensor counterpart of
+    ``_encode.codes_to_indices``).
+
+    ``values`` holds exact category codes (drawn from observed values or imputed
+    back as codes), so equality against the sorted ``levels`` (K,) is exact. The
+    one-hot ``argmax`` gives the index; returned in ``values`` dtype so it flows
+    straight into the methods' float arithmetic.
+    """
+    import torch
+
+    onehot = values.unsqueeze(-1) == levels                  # (..., K)
+    return onehot.to(torch.long).argmax(dim=-1).to(values.dtype)
+
+
+def indices_to_codes(indices, levels):
+    """Map ``0..K-1`` class indices back to stored category codes (gather)."""
+    return levels[indices.long()]

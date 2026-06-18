@@ -9,6 +9,43 @@
 
 ## Changes
 
+- MICE GPU backend now supports **ordered categorical targets** (incomplete
+  ordered-factor columns), imputed with the `polr` proportional-odds method on
+  CUDA and Apple Silicon/MPS. The fit is a batched Newton iteration across all `m`
+  chains in the unconstrained threshold parameterization (so the cumulative-logit
+  thresholds stay strictly ordered by construction), with the gradient and
+  observed Hessian taken by autograd, followed by the same joint threshold+slope
+  posterior draw and category sampling as the CPU path. GPU results match the CPU
+  `polr` to ~1e-9 in coefficients/thresholds/covariance at the true MLE.
+  **With this, every categorical target type — binary, unordered, ordered — is now
+  supported on GPU**, and the full mixed-type dataset matches R `mice` 3.19.0
+  imputed category proportions directly on GPU (within Monte-Carlo tolerance).
+
+- MICE GPU backend now supports **unordered categorical targets** (incomplete
+  factor columns with more than two levels), imputed with the `polyreg` method on
+  CUDA and Apple Silicon/MPS. The fit is a batched multinomial-logit Newton
+  iteration across all `m` chains (same convex MLE as the CPU L-BFGS-B path, last
+  class as reference), each step forming the multinomial block Hessian and solving
+  through `cholesky_ex` plus the matmul-series triangular inverse on MPS, followed
+  by the posterior draw `beta* ~ N(beta_hat, H^-1)` and an inverse-CDF category
+  draw per missing cell. GPU results match the CPU `polyreg` distributionally at
+  the GPU/FP32 tolerance (coefficients/probabilities agree with the true MLE to
+  ~1e-6). Ordinal (`polr`) targets remain refused on GPU with a clear message.
+
+- MICE GPU backend now supports **binary categorical targets** (incomplete
+  two-level columns), imputed with the `logreg` method on CUDA and Apple
+  Silicon/MPS. The fit is a batched, ridge-stabilised IRLS logistic regression
+  run across all `m` imputation chains at once (Newton on the logistic
+  log-likelihood with per-chain convergence freezing), followed by the same
+  posterior draw `beta* ~ N(beta_hat, (X'WX)^-1)` R `mice` uses, then a Bernoulli
+  draw per missing cell. The per-step solve goes through `cholesky_ex` plus the
+  matmul-series triangular inverse on MPS (avoiding its slow `solve_triangular`).
+  GPU results match the CPU `logreg` distributionally at the GPU/FP32 tolerance
+  (coefficients agree to machine precision when the fit converges; under
+  separation the predicted probabilities agree to ~5e-5). Multinomial (`polyreg`)
+  and ordinal (`polr`) targets are still refused on GPU with a clear message;
+  numeric targets and categorical predictors are unchanged.
+
 - MICE GPU backend now supports **categorical predictors** for numeric-target
   imputation. Previously `backend='gpu'` refused any data containing a
   categorical column; it now treatment-dummy-encodes categorical predictor

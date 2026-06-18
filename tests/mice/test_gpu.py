@@ -10,10 +10,18 @@ invariants (no NaN, observed values preserved, PMM donor property).
 All tests skip when no CUDA GPU is present.
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from pystatistics.mice import datasets, mice
+from pystatistics.mice.design import MICEDesign
+
+_REF_DIR = Path(__file__).parent / "references"
+_REF_JSON = _REF_DIR / "mice_categorical_reference.json"
+_REF_CSV = _REF_DIR / "mice_categorical_data.csv"
 
 
 def _cuda_available() -> bool:
@@ -158,6 +166,115 @@ class TestGpuScales:
         gpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="gpu")
         for j in gpu.incomplete_columns:
             assert abs(gpu.imputations(j).mean() - cpu.imputations(j).mean()) < 0.1
+
+
+class TestGpuCategoricalTargets:
+    """Categorical (incomplete) targets imputed on CUDA: binary (logreg),
+    unordered (polyreg), ordered (polr). Validated against the trusted CPU methods
+    distributionally at the GPU/FP32 tolerance, plus structural invariants. The
+    device-specific numerics (batched IRLS/Newton, ``solve_triangular`` branch,
+    autograd Hessian for polr) are additionally validated directly on CUDA in
+    ``scratch/mice_cat/cuda_validation.py`` (machine-precision vs CPU)."""
+
+    @staticmethod
+    def _binary_design(seed=0):
+        rng = np.random.default_rng(seed)
+        n = 600
+        x1, x2 = rng.standard_normal(n), rng.standard_normal(n)
+        p = 1.0 / (1.0 + np.exp(-(0.4 + 1.1 * x1 - 0.7 * x2)))
+        b = (rng.random(n) < p).astype(float)
+        X = np.column_stack([b, x1, x2])
+        X[rng.random(n) < 0.25, 0] = np.nan
+        return MICEDesign.from_array(X, column_kinds=["binary", "numeric", "numeric"])
+
+    @staticmethod
+    def _multi_design(K=4, ordered=False, seed=0):
+        rng = np.random.default_rng(seed)
+        n, q = 700, 3
+        X = rng.standard_normal((n, q))
+        if ordered:
+            eta = X @ (rng.standard_normal(q) * 0.9)
+            cuts = np.linspace(-1.2, 1.2, K - 1)
+            u = rng.uniform(size=n)
+            cum = 1.0 / (1.0 + np.exp(-(cuts[None, :] - eta[:, None])))
+            y = (u[:, None] > cum).sum(axis=1).astype(int)
+        else:
+            B = rng.standard_normal((K - 1, q + 1)) * 1.1
+            Xa = np.column_stack([np.ones(n), X])
+            e = np.column_stack([Xa @ B.T, np.zeros(n)])
+            e -= e.max(1, keepdims=True)
+            pp = np.exp(e); pp /= pp.sum(1, keepdims=True)
+            y = np.array([rng.choice(K, p=pp[i]) for i in range(n)], dtype=int)
+        for lv in range(K):
+            if not np.any(y == lv):
+                y[lv] = lv
+        data = np.column_stack([y.astype(float), X])
+        data[rng.random(n) < 0.25, 0] = np.nan
+        kind = "ordered" if ordered else "categorical"
+        return MICEDesign.from_array(data, column_kinds=[kind] + ["numeric"] * q)
+
+    @pytest.mark.parametrize("kind,builder", [
+        ("logreg", lambda s: TestGpuCategoricalTargets._binary_design(s)),
+        ("polyreg", lambda s: TestGpuCategoricalTargets._multi_design(seed=s)),
+        ("polr", lambda s: TestGpuCategoricalTargets._multi_design(ordered=True, seed=s)),
+    ])
+    def test_proportions_match_cpu(self, kind, builder):
+        d = builder(7)
+        assert d.method_for(0) == kind
+        m = 30
+        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
+        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        assert gpu.info["device"] == "cuda"
+        levels = d.levels_for(0)
+        ci, gi = cpu.imputations(0).ravel(), gpu.imputations(0).ravel()
+        cp = np.array([np.mean(ci == lv) for lv in levels])
+        gp = np.array([np.mean(gi == lv) for lv in levels])
+        assert np.max(np.abs(cp - gp)) < 0.06, f"{kind}: cpu={np.round(cp,3)} gpu={np.round(gp,3)}"
+        assert set(np.unique(gi).tolist()).issubset(set(levels.tolist()))
+        for dset in gpu.completed_datasets():
+            assert not np.isnan(dset).any()
+
+    def test_categorical_targets_reproducible(self):
+        d = self._multi_design(ordered=True, seed=2)
+        a = mice(d, m=5, maxit=5, seed=11, backend="gpu")
+        b = mice(d, m=5, maxit=5, seed=11, backend="gpu")
+        for da, db in zip(a.completed_datasets(), b.completed_datasets()):
+            np.testing.assert_array_equal(da, db)
+
+
+@pytest.mark.skipif(
+    not (_REF_JSON.exists() and _REF_CSV.exists()),
+    reason="R categorical fixtures absent (run generate_categorical_fixtures.R)",
+)
+class TestGpuCategoricalMatchesR:
+    """Direct CUDA-vs-R validation on the mixed bin/nom/ord fixture (all categorical
+    methods on GPU). Distributional agreement with R ``mice`` 3.19.0."""
+
+    _COL_BY_NAME = {"bin": 1, "nom": 2, "ord": 3}
+
+    @pytest.fixture(scope="class")
+    def r_and_gpu(self):
+        ref = json.load(open(_REF_JSON))
+        matrix = np.genfromtxt(_REF_CSV, delimiter=",", skip_header=1)
+        design = MICEDesign.from_array(
+            matrix, column_kinds=["numeric", "binary", "categorical", "ordered"]
+        )
+        meta = ref["meta"]
+        sol = mice(design, m=meta["m"], maxit=meta["maxit"], seed=20260614, backend="gpu")
+        return ref, sol
+
+    @pytest.mark.parametrize("name", ["bin", "nom", "ord"])
+    def test_proportions_match_r(self, r_and_gpu, name):
+        ref, sol = r_and_gpu
+        assert sol.info["device"] == "cuda"
+        col = self._COL_BY_NAME[name]
+        levels = [int(lv) for lv in ref[name]["levels"]]
+        imp = sol.imputations(col).ravel()
+        counts = np.array([np.sum(imp == float(lv)) for lv in levels], dtype=float)
+        ours = counts / counts.sum()
+        np.testing.assert_allclose(
+            ours, np.asarray(ref[name]["proportions"], dtype=float), atol=0.06
+        )
 
 
 class TestGpuFp64:
