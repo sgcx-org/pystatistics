@@ -366,6 +366,17 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.15.0 — MICE GPU imputes categorical data
+
+- `mice(..., backend='gpu')` now imputes categorical columns on CUDA and Apple
+  Silicon (MPS), using the same models as R's `mice`: `logreg` for binary
+  columns, `polyreg` for unordered factors, and `polr` for ordered factors. The
+  fits run batched across all imputations; imputed category distributions match
+  the CPU reference and R within Monte-Carlo tolerance. Categorical *predictors*
+  are supported too (treatment-dummy-encoded) when imputing numeric columns.
+  Together these let a full mixed-type dataset be imputed on the GPU — incomplete
+  categorical columns were previously refused.
+
 ### 3.14.0 — Faster MICE GPU imputation on Apple Silicon
 
 - MICE GPU imputation runs about 1.7–2x faster on Apple Silicon (MPS), with no

@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.15.0
+
+MICE GPU imputation now handles categorical data — both as predictors and as the
+columns being imputed — so a full mixed-type dataset can be imputed on the GPU.
+
+- **Categorical target imputation on the GPU (`mice(..., backend='gpu')`).**
+  Incomplete categorical columns are now imputed on CUDA and Apple Silicon (MPS),
+  using the same models R's `mice` uses: binary columns with logistic regression
+  (`logreg`), unordered factors with multinomial logistic regression (`polyreg`),
+  and ordered factors with a proportional-odds model (`polr`). Each fit is solved
+  batched across all imputations at once. Imputed category distributions match the
+  CPU reference — and R `mice` directly — within Monte-Carlo tolerance. With this,
+  every column type can now be imputed on the GPU; incomplete categorical columns
+  were previously refused.
+
+- **Categorical predictors on the GPU.** When imputing a numeric column, the GPU
+  backend now treatment-dummy-encodes categorical predictor columns (matching the
+  CPU path), instead of refusing any dataset that contained a categorical column.
+  Numeric-only problems are unchanged.
+
 ## 3.14.0
 
 MICE GPU imputation is substantially faster on Apple Silicon (MPS) — about
