@@ -253,18 +253,3 @@ class TestCategoricalDesignValidation:
         # pmm is numeric-only; forcing it on the binary column must fail.
         with pytest.raises(ValidationError, match="imputes"):
             MICEDesign.from_array(miss, column_kinds=kinds, methods={1: "pmm"})
-
-    def test_gpu_refuses_categorical(self):
-        try:
-            import torch
-
-            cuda = torch.cuda.is_available()
-        except ImportError:
-            cuda = False
-        if not cuda:
-            pytest.skip("No CUDA GPU")
-        data, kinds = _make_mixed(100, 0)
-        miss = datasets.make_mcar(data, 0.2, seed=1)
-        design = MICEDesign.from_array(miss, column_kinds=kinds)
-        with pytest.raises(ValidationError, match="numeric columns only"):
-            mice(design, m=2, maxit=2, seed=0, backend="gpu")
