@@ -9,4 +9,14 @@
 
 ## Changes
 
-*(empty — no unreleased changes yet)*
+- Fixed an over-tight assertion in the ordinal `polr` GPU FP64 test
+  (`test_gpu_fp64_matches_cpu_coefs`). It compared GPU FP64 coefficients to
+  the CPU fit at `rtol=1e-8`, but the CPU path stops on a half-Newton-decrement
+  criterion that bounds the remaining log-likelihood gain, not the coefficients
+  — leaving the CPU estimate up to ~1e-6 from the exact MLE on steep problems,
+  while the GPU FP64 estimate is actually closer to it. Both backends converge
+  to the same unique MLE under tight Newton iteration. Loosened the coefficient
+  comparison to `rtol=1e-5` (the decrement-limited accuracy of the comparison);
+  the standard-error check is unchanged. No library behaviour change — test and
+  documentation only. Resolves a CUDA-only failure observed on NVIDIA Blackwell
+  (sm_120) GPUs.

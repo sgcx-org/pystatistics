@@ -14,7 +14,10 @@ backward passes total, all batched over the full sample.
 Two-tier validation (see README "Design Philosophy"):
     - CPU is validated against R ``MASS::polr``.
     - GPU is validated against CPU at the ``GPU_FP32`` tier (rtol=1e-4,
-      atol=1e-5). FP64 on CUDA matches CPU to machine precision.
+      atol=1e-5). On FP64 CUDA both backends converge to the same unique
+      MLE; coefficients agree to ~1e-5, bounded not by FP64 precision but
+      by the CPU path's decrement-based stopping criterion (the GPU
+      L-BFGS-B iterate is typically the closer of the two to the MLE).
 
 The ``PolrGPULikelihood`` class holds the (n, p) design matrix and the
 integer ``y_codes`` vector on device between optimizer iterations, so
