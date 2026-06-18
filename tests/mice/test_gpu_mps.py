@@ -418,7 +418,9 @@ class TestMpsPolrOrderedTarget:
         gi = gpu.imputations(0).ravel()
         cp = np.array([np.mean(ci == lv) for lv in levels])
         gp = np.array([np.mean(gi == lv) for lv in levels])
-        assert np.max(np.abs(cp - gp)) < 0.06, f"cpu={np.round(cp,3)} gpu={np.round(gp,3)}"
+        # Proportions are insensitive to the threshold-draw covariance; the
+        # covariance itself is pinned in tests/mice/test_gpu_polr_draw.py.
+        assert np.max(np.abs(cp - gp)) < 0.03, f"cpu={np.round(cp,3)} gpu={np.round(gp,3)}"
 
     def test_imputed_codes_preserve_order_monotonicity(self):
         # Ordered structure should be reflected: the imputed marginal should not

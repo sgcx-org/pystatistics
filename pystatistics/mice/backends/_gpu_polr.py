@@ -9,14 +9,18 @@ approximation, compute category probabilities for the missing rows, and sample.
 
 Faithful to the CPU path in two load-bearing details:
 
-  * **Raw (unconstrained) threshold parameterization.** The fit optimizes
-    ``raw = [alpha_0, log(alpha_1 - alpha_0), ...]`` (the same transform as
-    ``_likelihood.raw_to_thresholds``), so the thresholds stay strictly ordered by
-    construction — no clipping, no FP32 ordering hazard.
-  * **Natural-mean / raw-covariance draw.** Exactly as ``methods/polr.py`` +
-    ``OrdinalSolution``: the draw mean is the natural ``[alpha_hat, beta_hat]`` but
-    the covariance is the inverse of the observed Hessian in *raw* coordinates
-    (``OrdinalSolution.vcov`` is documented to be on the raw parameterization).
+  * **Raw (unconstrained) threshold parameterization for the fit.** The fit
+    optimizes ``raw = [alpha_0, log(alpha_1 - alpha_0), ...]`` (the same transform
+    as ``_likelihood.raw_to_thresholds``), so the thresholds stay strictly ordered
+    by construction — no clipping, no FP32 ordering hazard.
+  * **Natural-coordinate posterior draw.** Exactly as ``methods/polr.py`` +
+    ``OrdinalSolution.vcov``, which (since the issue #5 fix) is the
+    natural-coordinate covariance ``MASS::polr`` reports — NOT the raw-coordinate
+    one. The Hessian is observed in raw coordinates, so the raw-coordinate draw
+    deviation ``L^{-T} z ~ N(0, H_raw^{-1})`` is mapped to natural coordinates by
+    the raw->natural Jacobian ``J`` (delta method): ``J L^{-T} z ~ N(0,
+    J H_raw^{-1} J^T) = vcov_natural``. Drawing in raw coordinates (the pre-fix
+    behaviour) gives the wrong between-imputation threshold variance.
 
 The CPU path fits with L-BFGS-B; here we use **batched Newton in raw coords**. The
 gradient and the (observed) Hessian come from autograd on the batched NLL: because
@@ -53,6 +57,28 @@ def _raw_to_alpha(raw):
 
     inc = torch.cat([raw[:, :1], raw[:, 1:].exp()], dim=1)
     return torch.cumsum(inc, dim=1)
+
+
+def _raw_to_natural_jacobian(raw, P):
+    """Batched raw->natural threshold Jacobian ``d[alpha, beta] / d[raw, beta]``,
+    shape (m, P, P). Mirrors ``ordinal._information.raw_to_natural_jacobian`` (the
+    CPU delta-method transform) batched over the m chains, so the GPU draw uses the
+    same natural-coordinate covariance as the CPU ``polr`` and ``MASS::polr``.
+
+    With ``alpha_0 = raw_0`` and ``alpha_j = alpha_{j-1} + exp(raw_j)``:
+    ``d(alpha_j)/d(raw_0) = 1`` for all thresholds j (column 0), and
+    ``d(alpha_j)/d(raw_k) = exp(raw_k)`` for ``j >= k`` (k >= 1), else 0. The slope
+    block is the identity and the threshold/slope cross-blocks are zero."""
+    import torch
+
+    m, knr = raw.shape
+    jac = torch.eye(P, dtype=raw.dtype, device=raw.device).expand(m, P, P).clone()
+    idx = torch.arange(knr, device=raw.device)
+    lower = (idx[:, None] >= idx[None, :]).to(raw.dtype)            # (knr, knr) j>=k
+    block = lower[None] * raw.exp()[:, None, :]                    # col k = exp(raw_k), j>=k
+    block[:, :, 0] = 1.0                                            # col 0: all-ones (alpha_0=raw_0)
+    jac[:, :knr, :knr] = block
+    return jac
 
 
 def _cat_logprobs(alpha, eta, K):
@@ -114,9 +140,10 @@ def _starting_raw(y_obs, K):
 def batched_polr_newton(y_obs, X_obs, n_classes):
     """Batched Newton in raw coords. ``y_obs`` (m, n_obs) of 0..K-1 ordered
     indices, ``X_obs`` (m, n_obs, q) WITHOUT intercept (thresholds are the
-    intercepts). Returns ``(alpha_hat (m, K-1), beta_hat (m, q), L)`` — natural
-    thresholds, slopes, and the Cholesky of the ridged observed Hessian in *raw*
-    coords (for the raw-coordinate vcov)."""
+    intercepts). Returns ``(alpha_hat (m, K-1), beta_hat (m, q), raw_hat (m, K-1),
+    L)`` — natural thresholds, slopes, the raw thresholds at the optimum (for the
+    raw->natural Jacobian), and the Cholesky of the ridged observed Hessian in
+    *raw* coords (whose inverse is the raw-coordinate covariance)."""
     import torch
 
     K = int(n_classes)
@@ -147,7 +174,30 @@ def batched_polr_newton(y_obs, X_obs, n_classes):
 
     g, H = _grad_and_hessian(params, y_obs, X_obs, K)
     L = _cholesky_ridged(H + ridge_diag[:, None, None] * eye)
-    return _raw_to_alpha(params[:, :knr]), params[:, knr:], L
+    raw_hat = params[:, :knr]
+    return _raw_to_alpha(raw_hat), params[:, knr:], raw_hat, L
+
+
+def draw_natural_theta(alpha_hat, beta_hat, raw_hat, L, gen):
+    """One natural-coordinate posterior draw of ``[alpha, beta]`` per chain,
+    ``theta* ~ N([alpha_hat, beta_hat], vcov_natural)`` — matching CPU ``polr`` /
+    ``MASS::polr``. Returns (m, P).
+
+    The Hessian is observed in raw coordinates, so the deviation is drawn there
+    (``L^{-T} z ~ N(0, H_raw^{-1})``) and mapped to natural coordinates by the
+    raw->natural Jacobian (delta method): ``J L^{-T} z ~ N(0, J H_raw^{-1} J^T) =
+    vcov_natural``. Drawing in raw coordinates (the pre-fix behaviour) gives the
+    wrong between-imputation threshold variance."""
+    import torch
+
+    knr = alpha_hat.shape[1]
+    m, q = beta_hat.shape
+    P = knr + q
+    mean = torch.cat([alpha_hat, beta_hat], dim=1)                 # (m, P)
+    z = torch.randn((m, P), generator=gen, dtype=L.dtype, device=L.device)
+    delta_raw = apply_inv_factor_T(L, z.unsqueeze(-1))             # (m, P, 1)
+    jac = _raw_to_natural_jacobian(raw_hat, P)                     # (m, P, P)
+    return mean + (jac @ delta_raw).squeeze(-1)
 
 
 def _sample_categories(probs, gen):
@@ -171,21 +221,14 @@ def gpu_polr_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
     ``X_mis`` (m, n_mis, q); ``n_classes`` = K required (passed by the sweep).
     Returns (m, n_mis) of 0..K-1 indices. ``donors`` is accepted and ignored.
     """
-    import torch
-
     if n_classes is None:
         raise ValueError("gpu_polr_impute requires n_classes (number of levels)")
     K = int(n_classes)
     knr = K - 1
 
-    alpha_hat, beta_hat, L = batched_polr_newton(y_obs, X_obs, K)
-    m, q = beta_hat.shape
-    P = knr + q
+    alpha_hat, beta_hat, raw_hat, L = batched_polr_newton(y_obs, X_obs, K)
 
-    # theta* ~ N([alpha_hat, beta_hat], vcov_raw): natural mean, raw-coord cov.
-    mean = torch.cat([alpha_hat, beta_hat], dim=1)                 # (m, P)
-    z = torch.randn((m, P), generator=gen, dtype=X_obs.dtype, device=X_obs.device)
-    theta = mean + apply_inv_factor_T(L, z.unsqueeze(-1)).squeeze(-1)
+    theta = draw_natural_theta(alpha_hat, beta_hat, raw_hat, L, gen)
     alpha_s, beta_s = theta[:, :knr], theta[:, knr:]
 
     eta = (X_mis @ beta_s.unsqueeze(-1)).squeeze(-1)
