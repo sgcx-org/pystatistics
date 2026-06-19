@@ -139,6 +139,7 @@ def cumulative_negloglik(
     X: NDArray[np.floating[Any]],
     link: Link,
     n_levels: int,
+    ridge: float = 0.0,
 ) -> float:
     """
     Negative log-likelihood for the cumulative link model.
@@ -155,6 +156,13 @@ def cumulative_negloglik(
         X: Design matrix of shape (n, p). Must NOT include an intercept.
         link: Link function instance (LogitLink, ProbitLink, CLogLogLink).
         n_levels: Number of ordered categories K.
+        ridge: Optional L2 (ridge) penalty coefficient on the slopes beta
+            only (thresholds, which act as intercepts, are never penalized).
+            Adds ``0.5 * ridge * ||beta||^2`` to the objective. The default
+            0.0 leaves the R-validated maximum-likelihood objective unchanged;
+            a positive value makes the objective strongly convex so a
+            (quasi-)separated fit still has a finite, well-conditioned
+            optimum instead of diverging slopes.
 
     Returns:
         Negative log-likelihood (scalar). Minimizing this fits the model.
@@ -176,7 +184,10 @@ def cumulative_negloglik(
     cat_probs = _cumulative_probs_vectorized(alpha, eta, link, n_levels)
     prob = cat_probs[np.arange(len(y_codes)), y_codes]
     prob = np.maximum(prob, 1e-15)
-    return -np.sum(np.log(prob))
+    nll = -np.sum(np.log(prob))
+    if ridge:
+        nll += 0.5 * ridge * float(beta @ beta)
+    return nll
 
 
 def _cumulative_probs_vectorized(
@@ -225,6 +236,7 @@ def cumulative_gradient(
     X: NDArray[np.floating[Any]],
     link: Link,
     n_levels: int,
+    ridge: float = 0.0,
 ) -> NDArray[np.floating[Any]]:
     """
     Gradient of the negative log-likelihood w.r.t. [raw_thresholds, beta].
@@ -238,6 +250,11 @@ def cumulative_gradient(
         X: Design matrix (n, p), no intercept.
         link: Link function instance.
         n_levels: Number of categories K.
+        ridge: Optional L2 (ridge) penalty coefficient on the slopes beta;
+            adds ``ridge * beta`` to the beta block of the gradient (the
+            derivative of the ``0.5 * ridge * ||beta||^2`` penalty in
+            :func:`cumulative_negloglik`). The threshold block is unaffected.
+            Default 0.0 reproduces the unpenalized maximum-likelihood gradient.
 
     Returns:
         Gradient vector of length (K-1 + p).
@@ -326,5 +343,9 @@ def cumulative_gradient(
 
     # Negate for negative log-likelihood
     grad_beta = -grad_beta
+
+    # Ridge penalty derivative on the slopes only (thresholds unpenalized).
+    if ridge:
+        grad_beta = grad_beta + ridge * beta
 
     return np.concatenate([grad_raw, grad_beta])

@@ -259,6 +259,7 @@ def _fit_polr(
     n_levels: int,
     tol: float,
     max_iter: int,
+    ridge: float = 0.0,
 ) -> tuple[NDArray, int, bool, float, NDArray]:
     """
     Fit proportional odds model via L-BFGS-B with analytical gradient.
@@ -277,6 +278,12 @@ def _fit_polr(
         n_levels: Number of categories K.
         tol: Convergence tolerance for L-BFGS-B (gtol).
         max_iter: Maximum optimizer iterations.
+        ridge: Optional L2 (ridge) penalty on the slopes beta (see ``polr``).
+            With ``ridge=0.0`` (default) this is the exact maximum-likelihood
+            fit. A positive value makes the penalized objective strongly convex,
+            so a (quasi-)separated problem converges in a handful of iterations
+            with a positive-definite observed information instead of running
+            L-BFGS-B to ``max_iter`` and being rejected by the guard.
 
     Returns:
         Tuple of (optimal_params, n_iter, converged, neg_loglik, vcov_raw),
@@ -285,7 +292,7 @@ def _fit_polr(
     Raises:
         ConvergenceError: If the score-based guard rejects the fit (the
             observed information is not positive definite, or the iterate is
-            not at the maximum — typically data separation).
+            not at the maximum — typically data separation with ``ridge=0``).
     """
     p = X.shape[1]
     x0 = _compute_starting_values(y_codes, n_levels, link, p)
@@ -293,7 +300,7 @@ def _fit_polr(
     result = minimize(
         fun=cumulative_negloglik,
         x0=x0,
-        args=(y_codes, X, link, n_levels),
+        args=(y_codes, X, link, n_levels, ridge),
         method='L-BFGS-B',
         jac=cumulative_gradient,
         options={
@@ -305,6 +312,7 @@ def _fit_polr(
 
     params_mle, neg_loglik, vcov_raw = _polish_to_mle(
         result.x, y_codes, X, link, n_levels, result.nit, result.message,
+        ridge=ridge,
     )
     return params_mle, result.nit, True, neg_loglik, vcov_raw
 
@@ -317,6 +325,7 @@ def _polish_to_mle(
     n_levels: int,
     n_iter: int,
     message: Any,
+    ridge: float = 0.0,
 ) -> tuple[NDArray[np.floating[Any]], float, NDArray[np.floating[Any]]]:
     """
     Safeguarded Newton polish to the MLE, with the score-based convergence
@@ -343,6 +352,10 @@ def _polish_to_mle(
         n_levels: Number of categories.
         n_iter: Optimizer iteration count (for error context).
         message: Optimizer termination message (for error context).
+        ridge: Optional L2 (ridge) penalty on the slopes beta (see ``polr``).
+            The polish optimizes the same penalized objective the optimizer did,
+            so the decrement test, Newton step, and returned ``vcov_raw`` are all
+            for the penalized fit. Default 0.0 is the unpenalized MLE polish.
 
     Returns:
         Tuple (params_mle, neg_loglik, vcov_raw): the polished estimate, its
@@ -356,8 +369,10 @@ def _polish_to_mle(
     x = np.array(params, dtype=np.float64, copy=True)
 
     for _ in range(_MAX_POLISH_STEPS + 1):
-        grad = cumulative_gradient(x, y_codes, X, link, n_levels)
-        hess = observed_information(x, y_codes, X, link, n_levels, grad0=grad)
+        grad = cumulative_gradient(x, y_codes, X, link, n_levels, ridge)
+        hess = observed_information(
+            x, y_codes, X, link, n_levels, grad0=grad, ridge=ridge,
+        )
 
         try:
             chol = cho_factor(hess, lower=True)
@@ -373,6 +388,8 @@ def _polish_to_mle(
         step = cho_solve(chol, grad)
         half_decrement = 0.5 * float(grad @ step)
         if np.isfinite(half_decrement) and half_decrement <= _DECREMENT_TOL:
+            # Report the genuine (unpenalized) log-likelihood at the estimate so
+            # deviance/AIC describe the model fit, not the penalized objective.
             neg_loglik = float(
                 cumulative_negloglik(x, y_codes, X, link, n_levels)
             )
@@ -381,11 +398,11 @@ def _polish_to_mle(
 
         # Backtracking Newton step (concave objective => the full step reduces
         # the negative log-likelihood near the optimum; backtrack otherwise).
-        f0 = cumulative_negloglik(x, y_codes, X, link, n_levels)
+        f0 = cumulative_negloglik(x, y_codes, X, link, n_levels, ridge)
         t = 1.0
         while t >= 1e-4:
             x_new = x - t * step
-            if cumulative_negloglik(x_new, y_codes, X, link, n_levels) < f0:
+            if cumulative_negloglik(x_new, y_codes, X, link, n_levels, ridge) < f0:
                 break
             t *= 0.5
         else:
@@ -466,6 +483,7 @@ def polr(
     level_names: list[str] | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
+    ridge: float = 0.0,
     backend: str | None = None,
     use_fp64: bool = False,
 ) -> OrdinalSolution:
@@ -490,6 +508,17 @@ def polr(
             defaults to '0', '1', etc.
         tol: Convergence tolerance (gradient norm) for L-BFGS-B.
         max_iter: Maximum number of optimizer iterations.
+        ridge: L2 (ridge) penalty coefficient on the slope coefficients beta
+            (the threshold/intercept parameters are never penalized). The
+            penalty ``0.5 * ridge * ||beta||^2`` is added to the negative
+            log-likelihood. The default 0.0 fits the exact, R-validated
+            maximum-likelihood model. A small positive value makes the
+            objective strongly convex, which keeps the fit finite and
+            well-conditioned under (quasi-)complete separation — where the
+            unpenalized slopes would diverge, L-BFGS-B would run to ``max_iter``,
+            and the fit would be rejected. Reported coefficients, standard
+            errors, and vcov are then those of the penalized fit. CPU backend
+            only; the GPU backend applies its own ridge stabilization.
 
     Returns:
         OrdinalSolution wrapping the fitted model parameters, with
@@ -569,6 +598,20 @@ def polr(
             f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
         )
 
+    if not np.isfinite(ridge) or ridge < 0.0:
+        raise ValidationError(
+            f"ridge: must be a finite non-negative float, got {ridge!r}"
+        )
+    # The ridge penalty is wired through the CPU L-BFGS-B/Newton path only; the
+    # GPU path applies its own ridge stabilization. Fail loud rather than
+    # silently ignore a requested penalty (Rule 1).
+    if ridge > 0.0 and backend != "cpu":
+        raise ValidationError(
+            "ridge > 0 is only supported on the CPU backend (the GPU backend "
+            "applies its own ridge stabilization). Use backend='cpu' or "
+            "ridge=0.0."
+        )
+
     # Resolve link
     link = _resolve_method_link(method)
 
@@ -591,7 +634,7 @@ def polr(
         backend_name = f"gpu_lbfgsb ({gpu_device}, {'fp64' if use_fp64 else 'fp32'})"
     elif backend == "cpu":
         opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
-            y_codes, X_arr, link, n_levels, tol, max_iter,
+            y_codes, X_arr, link, n_levels, tol, max_iter, ridge=ridge,
         )
         backend_name = "cpu_lbfgsb"
     else:
@@ -614,7 +657,7 @@ def polr(
             )
         else:
             opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
-                y_codes, X_arr, link, n_levels, tol, max_iter,
+                y_codes, X_arr, link, n_levels, tol, max_iter, ridge=ridge,
             )
             backend_name = "cpu_lbfgsb"
 

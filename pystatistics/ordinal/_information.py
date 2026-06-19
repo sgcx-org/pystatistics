@@ -76,6 +76,7 @@ def observed_information(
     link: Link,
     n_levels: int,
     grad0: NDArray[np.floating[Any]] | None = None,
+    ridge: float = 0.0,
 ) -> NDArray[np.floating[Any]]:
     """
     Observed information (Hessian of the negative log-likelihood) in raw
@@ -88,14 +89,20 @@ def observed_information(
         link: Link function instance.
         n_levels: Number of categories K.
         grad0: Analytic gradient at ``params``, if already computed. Recomputed
-            when None.
+            when None. Must be the gradient at the *same* ``ridge`` so the
+            forward difference is consistent.
+        ridge: Optional L2 (ridge) penalty coefficient on the slopes beta. The
+            penalty adds ``ridge`` to each diagonal entry of the beta block;
+            because the Hessian is differenced from the penalized gradient, this
+            happens automatically when ``ridge`` is threaded through. Default
+            0.0 reproduces the unpenalized observed information.
 
     Returns:
-        Symmetric (d, d) Hessian of the negative log-likelihood.
+        Symmetric (d, d) Hessian of the (penalized) negative log-likelihood.
     """
     d = len(params)
     if grad0 is None:
-        grad0 = cumulative_gradient(params, y_codes, X, link, n_levels)
+        grad0 = cumulative_gradient(params, y_codes, X, link, n_levels, ridge)
 
     # Same step scaling as scipy's approx_fprime, but applied to the analytic
     # vector gradient so the whole Hessian costs d gradient evaluations.
@@ -105,7 +112,7 @@ def observed_information(
     for k in range(d):
         shifted = params.copy()
         shifted[k] += step[k]
-        grad_k = cumulative_gradient(shifted, y_codes, X, link, n_levels)
+        grad_k = cumulative_gradient(shifted, y_codes, X, link, n_levels, ridge)
         hess[:, k] = (grad_k - grad0) / step[k]
 
     # Forward differences are not perfectly symmetric; symmetrize.

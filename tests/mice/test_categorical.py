@@ -3,6 +3,8 @@ Tests for categorical imputation: logreg, polyreg, polr, encoding, and
 mixed-type integration through mice().
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -189,6 +191,41 @@ class TestPolr:
         out_low = PolrMethod().impute(y, X, X[low], rng)
         out_high = PolrMethod().impute(y, X, X[high], rng)
         assert out_high.mean() > out_low.mean()
+
+    @staticmethod
+    def _separated(n=4000, seed=0, p=3):
+        """Quasi-complete separation: sparse extreme categories perfectly
+        ordered by continuous predictors (issue #7's in-MICE failure mode)."""
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        z = X @ np.array([2.0, -1.5, 1.0])
+        thr = np.quantile(z, [0.55, 0.99, 0.998])
+        y = np.digitize(z, thr).astype(float)
+        return X, y, z
+
+    def test_separated_fit_does_not_fall_back_to_marginal(self):
+        """The ridge keeps the conditional fit usable, so the predictor-blind
+        marginal-draw fallback (which silently degraded polr on exactly these
+        real-data fits) no longer fires."""
+        X, y, z = self._separated()
+        rng = np.random.default_rng(1)
+        mis = rng.random(X.shape[0]) < 0.2
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            PolrMethod().impute(y[~mis], X[~mis], X[mis], make_rng(0))
+        assert not any("marginal draw" in str(w.message) for w in caught)
+
+    def test_separated_fit_stays_predictor_aware(self):
+        """On separated sweep data imputations still track the predictor — the
+        whole point of not degrading to a marginal draw."""
+        X, y, z = self._separated()
+        rng = np.random.default_rng(1)
+        mis = rng.random(X.shape[0]) < 0.2
+        out = PolrMethod().impute(y[~mis], X[~mis], X[mis], make_rng(0))
+        zmis = z[mis]
+        lo = out[zmis < np.quantile(zmis, 0.25)].mean()
+        hi = out[zmis > np.quantile(zmis, 0.75)].mean()
+        assert hi > lo
 
 
 # ----------------------------------------------------------- mixed integration

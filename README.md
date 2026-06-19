@@ -366,6 +366,19 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.16.0 — Reliable ordered-factor imputation under near-separation
+
+- `mice` imputation of ordered factors (the `polr` method) no longer degrades to
+  a predictor-blind marginal draw when chained equations push a column into
+  near-separation (a sparse extreme category ordered almost perfectly by a
+  continuous predictor). A small ridge on the slopes keeps the fit finite and
+  fast, so it stays a proper predictor-aware imputer on exactly the columns where
+  it used to fall back.
+- `polr` gains an optional `ridge` parameter — an L2 penalty on the slope
+  coefficients that keeps the fit finite and well-conditioned under
+  (quasi-)complete separation. The default `ridge=0.0` is the exact
+  maximum-likelihood fit.
+
 ### 3.15.2 — GPU ordered-factor imputation matches R's threshold variability
 
 - GPU `mice` imputation of ordered factors (`polr`, on CUDA and Apple Silicon)

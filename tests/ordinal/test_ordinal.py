@@ -709,3 +709,87 @@ class TestConvergenceGuard:
         X = x.reshape(-1, 1)
         with pytest.raises(ConvergenceError):
             polr(y, X, method="logistic")
+
+
+# =========================================================================
+# Ridge penalty on the slopes (issue #7): keep (quasi-)separated fits finite
+# =========================================================================
+
+class TestRidgePenalty:
+    """A small ridge on the slopes makes a (quasi-)separated proportional-odds
+    fit converge quickly to a finite, well-conditioned estimate instead of
+    running L-BFGS-B to ``max_iter`` and being rejected by the score guard."""
+
+    @staticmethod
+    def _separated(seed=0, n=5000, p=3):
+        """Latent perfectly determined by the predictors with sparse extreme
+        categories (counts ~ [2750, 2200, 40, 10]) — the quasi-complete
+        separation chained equations induce on an ordinal-given-numeric fit."""
+        rng = np.random.default_rng(seed)
+        X = rng.standard_normal((n, p))
+        z = X @ np.array([2.0, -1.5, 1.0])
+        thr = np.quantile(z, [0.55, 0.99, 0.998])
+        y = np.digitize(z, thr).astype(np.intp)
+        return y, X
+
+    def test_unpenalized_runs_to_max_iter_and_is_rejected(self):
+        """Baseline: without the ridge the same data exhausts the optimizer
+        budget and is rejected (documents the issue and that ridge=0 — the
+        R-validated default — is unchanged)."""
+        y, X = self._separated()
+        with pytest.raises(ConvergenceError) as exc:
+            polr(y, X, method="logistic", max_iter=200)
+        assert exc.value.iterations == 200
+
+    def test_ridge_converges_well_below_max_iter(self):
+        """With the ridge the fit converges in a small fraction of the budget
+        (issue #7 performance goal: no longer runs to max_iter)."""
+        y, X = self._separated()
+        sol = polr(y, X, method="logistic", ridge=0.05, max_iter=200)
+        assert sol.converged
+        # Far below the 200-iteration limit the unpenalized fit exhausts.
+        assert sol._result.params.n_iter < 80
+
+    def test_ridge_fit_is_finite_and_well_conditioned(self):
+        """The penalized estimate is finite with a positive-definite vcov —
+        usable for the MICE posterior draw (issue #7 correctness goal)."""
+        y, X = self._separated()
+        sol = polr(y, X, method="logistic", ridge=0.05)
+        assert np.all(np.isfinite(sol.coefficients))
+        assert np.all(np.isfinite(sol.vcov))
+        assert np.linalg.eigvalsh(sol.vcov).min() > 0.0
+
+    def test_ridge_is_negligible_on_well_conditioned_data(self):
+        """On a well-identified fit the small relative ridge perturbs the
+        maximum-likelihood coefficients negligibly."""
+        rng = np.random.default_rng(7)
+        X = rng.standard_normal((2000, 2))
+        u = 0.8 * X[:, 0] - 0.4 * X[:, 1] + rng.logistic(size=2000)
+        y = np.digitize(u, np.quantile(u, [0.4, 0.7])).astype(np.intp)
+        c0 = polr(y, X).coefficients
+        c1 = polr(y, X, ridge=1e-5 * X.shape[0]).coefficients
+        assert_allclose(c1, c0, rtol=1e-3)
+
+    def test_ridge_zero_matches_default(self):
+        """Passing ridge=0.0 explicitly is identical to the default fit."""
+        rng = np.random.default_rng(3)
+        X = rng.standard_normal((600, 2))
+        u = X[:, 0] - 0.5 * X[:, 1] + rng.logistic(size=600)
+        y = np.digitize(u, np.quantile(u, [0.4, 0.7])).astype(np.intp)
+        a = polr(y, X)
+        b = polr(y, X, ridge=0.0)
+        assert_allclose(a.coefficients, b.coefficients, rtol=0, atol=0)
+
+    def test_negative_or_nonfinite_ridge_rejected(self):
+        """Invalid ridge values fail loudly (Rule 1)."""
+        y, X = self._separated(n=400)
+        for bad in (-1.0, -1e-9, np.inf, np.nan):
+            with pytest.raises(ValidationError):
+                polr(y, X, ridge=bad)
+
+    def test_positive_ridge_on_gpu_backend_rejected(self):
+        """ridge>0 is CPU-only; requesting it on the GPU backend fails loudly
+        rather than silently ignoring the penalty (Rule 1)."""
+        y, X = self._separated(n=400)
+        with pytest.raises((ValidationError, RuntimeError)):
+            polr(y, X, ridge=0.1, backend="gpu")

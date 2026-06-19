@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.16.0
+
+Imputing ordered factors with `mice` (the `polr` method) is now reliable on
+real-world mixed data where the model is driven into near-separation, and `polr`
+gains an optional ridge penalty for fitting such data directly.
+
+- **`mice` `polr` no longer degrades to a non-conditional imputer on
+  near-separated columns.** In chained equations an ordered column is often
+  driven into quasi-complete separation against continuous predictors (a sparse
+  extreme category that a numeric predictor orders almost perfectly). The
+  proportional-odds slopes would then diverge, the optimizer would run out its
+  full iteration budget, the fit would be rejected, and imputation would fall
+  back to a marginal draw that ignores the predictors — silently turning `polr`
+  into a non-conditional imputer on exactly those columns. The fit now applies a
+  small ridge penalty to the slopes, so it converges quickly to a finite estimate
+  and stays a proper predictor-aware imputer. On a real mixed-survey example with
+  several sparse ordered columns, the predictor-blind fallback fired on most
+  `polr` fits before and on none after. The GPU `polr` path already used an
+  equivalent stabilization and is unchanged.
+
+- **`polr` gains an optional `ridge` parameter.** `polr(y, X, ridge=λ)` adds an
+  L2 penalty on the slope coefficients (the thresholds are never penalized),
+  which keeps the fit finite and well-conditioned under (quasi-)complete
+  separation, where the unpenalized maximum-likelihood slopes would diverge. The
+  default `ridge=0.0` is the exact maximum-likelihood fit as before. Available on
+  the CPU backend.
+
 ## 3.15.3
 
 Test-suite fix only — no change to library behaviour.
