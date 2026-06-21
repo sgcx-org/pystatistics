@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.16.1
+
+GPU `mice` imputation of ordered factors (`polr`) is now reliable under
+(quasi-)complete separation, matching the CPU path.
+
+- **GPU `mice` `polr` no longer collapses ordered columns onto a single category
+  under near-separation.** On real-world mixed survey data — where an ordered
+  column has a sparse extreme category that a continuous predictor orders almost
+  perfectly — the GPU proportional-odds fit could diverge, driving the thresholds
+  to extreme values and assigning nearly every imputed cell the same category.
+  The fit now (1) penalizes the slopes with the same ridge the CPU path uses and
+  (2) damps each optimizer step with a line search that keeps the thresholds
+  bounded; the line search is what prevents the collapse. GPU `polr` now
+  reproduces the CPU fit and recovers the sparse category instead of collapsing.
+  (The 3.16.0 note that the GPU path "already used an equivalent stabilization"
+  was inaccurate — it did not, which is what this release fixes.)
+
 ## 3.16.0
 
 Imputing ordered factors with `mice` (the `polr` method) is now reliable on

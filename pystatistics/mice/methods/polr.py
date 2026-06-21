@@ -13,8 +13,11 @@ column into (quasi-)complete separation against continuous predictors. Without
 it the unpenalised slopes diverge, the optimizer burns its full iteration budget,
 and the fit is rejected for a predictor-blind marginal draw — silently degrading
 ``polr`` to a non-conditional imputer on exactly the fits where it is selected.
-The penalty keeps the fit finite, fast, and predictor-aware; the GPU backend
-applies the equivalent stabilization in ``backends/_gpu_polr.py``.
+The penalty keeps the fit finite, fast, and predictor-aware. The GPU backend in
+``backends/_gpu_polr.py`` mirrors this slope ridge AND additionally globalises
+its Newton iteration with a line search — the latter is what bounds the
+*unpenalised thresholds*, which a slope ridge alone cannot (the dominant runaway
+on imbalanced ordinals); here L-BFGS-B's own line search already provides it.
 
 The target arrives as consecutive ``0..K-1`` class indices (ordered) and the
 method returns indices; the chain maps to/from the column's category codes.
@@ -50,6 +53,17 @@ from pystatistics.mice.methods.registry import register
 # well-identified directions while bounding the runaway in separated ones — the
 # latter is what lets L-BFGS-B converge in tens of iterations instead of 200.
 _RIDGE = 1e-5
+
+# Investigated (not a bug): the secondary issue-#8 claim that this ridge
+# over-shrinks the dominant slope and over-disperses imputations on quasi-
+# separated ordinals does NOT hold. Against an R ``mice`` oracle (GSS, CSES) the
+# fit reproduces the observed marginal in-sample even under separation (thresholds
+# are unpenalised), the posterior draw stays well-conditioned, and the
+# pystatistics/R differences trace to R's structural choices (per-column
+# collinearity pruning, mice's own ridge, R's *improper* point-estimate polr
+# draw) — not this ridge. Lowering ``lambda`` toward the PD floor makes the R
+# agreement *worse*. Do not "fix" this without re-running that oracle. The pinned
+# behaviour lives in ``tests/mice/test_polr_ridge_characterization.py``.
 
 
 def _slope_ridge(X_obs: np.ndarray) -> float:

@@ -366,6 +366,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.16.1 — Reliable GPU ordered-factor imputation under near-separation
+
+- GPU `mice` imputation of ordered factors (`polr`, on CUDA and Apple Silicon)
+  no longer collapses a column onto a single category when chained equations push
+  it into near-separation (a sparse extreme category ordered almost perfectly by
+  a continuous predictor). The GPU fit now matches the CPU `polr` method,
+  recovering the sparse extreme category instead of assigning nearly every
+  imputed cell the same value.
+
 ### 3.16.0 — Reliable ordered-factor imputation under near-separation
 
 - `mice` imputation of ordered factors (the `polr` method) no longer degrades to
