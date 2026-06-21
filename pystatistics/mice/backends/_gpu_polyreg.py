@@ -37,7 +37,11 @@ a non-finite imputation caught by the backend's end-of-sweep guard.
 
 from __future__ import annotations
 
-from pystatistics.mice.backends._gpu_linreg import add_intercept, _cholesky_ridged
+from pystatistics.mice.backends._gpu_linreg import (
+    add_intercept,
+    discrete_glm_compute_dtype,
+    _cholesky_ridged,
+)
 from pystatistics.mice.backends._gpu_spd import apply_inv_factor_T, solve_spd
 
 # Relative ridge on the Hessian (matches the numeric/logreg stabiliser); also
@@ -123,16 +127,25 @@ def batched_multinomial_newton(y_onehot, Xa, n_classes):
 def _sample_categories(probs, gen):
     """Inverse-CDF sample one class per row from a (m, n, K) probability tensor.
     Robust to tiny negatives from an indefinite draw (clip + renormalise), the
-    batched counterpart of ``_draw.sample_categories``. Returns (m, n) indices."""
+    batched counterpart of ``_draw.sample_categories``. Returns (m, n) of class
+    indices as a float tensor.
+
+    Fail loud (Rule 1): a row with any non-finite probability yields ``NaN``,
+    never a silent category 0 (under NaN, ``(cdf >= u)`` is all-False and
+    ``argmax`` returns 0). Emitting NaN lets a degenerate fit reach the backend's
+    end-of-sweep non-finite guard. Finite rows are unaffected."""
     import torch
 
-    probs = probs.clamp_min(0.0)
-    probs = probs / probs.sum(dim=2, keepdim=True).clamp_min(torch.finfo(probs.dtype).tiny)
-    cdf = probs.cumsum(dim=2)
+    finite_row = torch.isfinite(probs).all(dim=2)                  # (m, n)
+    safe = torch.where(finite_row.unsqueeze(2), probs, torch.zeros_like(probs))
+    safe = safe.clamp_min(0.0)
+    safe = safe / safe.sum(dim=2, keepdim=True).clamp_min(torch.finfo(safe.dtype).tiny)
+    cdf = safe.cumsum(dim=2)
     u = torch.rand(
-        probs.shape[:2] + (1,), generator=gen, dtype=probs.dtype, device=probs.device
+        safe.shape[:2] + (1,), generator=gen, dtype=safe.dtype, device=safe.device
     )
-    return (cdf >= u).to(torch.int64).argmax(dim=2)
+    idx = (cdf >= u).to(torch.int64).argmax(dim=2).to(safe.dtype)
+    return torch.where(finite_row, idx, torch.full_like(idx, float("nan")))
 
 
 def gpu_polyreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
@@ -149,6 +162,11 @@ def gpu_polyreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None)
         raise ValueError("gpu_polyreg_impute requires n_classes (number of levels)")
     K = int(n_classes)
 
+    out_dtype = X_obs.dtype
+    compute_dtype = discrete_glm_compute_dtype(X_obs.device, out_dtype)
+    X_obs = X_obs.to(compute_dtype)
+    X_mis = X_mis.to(compute_dtype)
+
     Xa = add_intercept(X_obs)
     m, n, P = Xa.shape
     knr = K - 1
@@ -164,4 +182,4 @@ def gpu_polyreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None)
     Xa_mis = add_intercept(X_mis)
     eta_nr = Xa_mis @ beta_star.transpose(1, 2)
     probs = _log_probs(eta_nr).exp()
-    return _sample_categories(probs, gen).to(Xa.dtype)
+    return _sample_categories(probs, gen).to(out_dtype)

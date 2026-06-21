@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.16.2
+
+GPU `mice` imputation of categorical and ordered columns is now reliable on
+imbalanced real-world data, where it could previously collapse a column onto a
+single category.
+
+- **GPU `mice` no longer collapses categorical or ordered columns onto one
+  category under (quasi-)separation.** On imbalanced mixed data — a binary column
+  almost perfectly predicted by a covariate, or an ordered column with a very
+  sparse middle category — the GPU logistic, multinomial, and proportional-odds
+  fits could lose numerical precision and impute every missing cell as a single
+  category (all-zeros for binary, one level for ordered). Because a collapsed
+  column then feeds a constant predictor into the rest of the imputation, the
+  damage spread across the dataset. The fits are now numerically stabilized (a
+  positive-definite Newton step for the ordinal model) and computed in double
+  precision internally on CUDA and CPU, so imputed category proportions track the
+  CPU backend and R's `mice`. On a real mixed-survey example the GPU ordered-
+  category proportions went from grossly wrong to within normal run-to-run
+  variation of the CPU result. (Apple Silicon / MPS, which has no double
+  precision, is unchanged.)
+- **Degenerate GPU fits now fail loudly instead of silently imputing category 0.**
+  If a categorical or ordered fit is genuinely degenerate, the GPU backend now
+  raises a clear error at the end of the sweep rather than returning plausible-
+  looking but meaningless category-0 imputations.
+
 ## 3.16.1
 
 GPU `mice` imputation of ordered factors (`polr`) is now reliable under

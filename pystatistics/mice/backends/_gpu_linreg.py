@@ -74,6 +74,28 @@ def add_intercept(X):
     return torch.cat([ones, X], dim=2)
 
 
+def discrete_glm_compute_dtype(device, out_dtype):
+    """Working precision for a discrete-outcome GLM fit + posterior draw: FP64
+    where the device supports it (CUDA / CPU), else the caller's precision (MPS
+    has no float64).
+
+    The logistic / multinomial / proportional-odds fits are ill-conditioned under
+    the (quasi-)separation chained equations routinely induce — a near-empty
+    category or a perfectly ordered predictor drives thresholds/coefficients to
+    large values and the information matrix to near-singular. In FP32 the fit and
+    draw lose all precision and the imputation silently collapses every missing
+    cell onto a single category (binary -> all-0, ordinal -> one level), which on
+    a mixed sweep then corrupts every column that uses it as a predictor. These
+    fits are per-column and small, so computing them in FP64 is cheap and makes
+    the GPU imputation track the CPU reference (the numeric ``norm``/``pmm``
+    methods are well-conditioned and stay at the sweep's precision). MPS keeps
+    FP32 — it has no FP64 — but its matmul-only solve path is less exposed, and
+    the sampled indices are always returned in the caller's dtype regardless."""
+    import torch
+
+    return out_dtype if device.type == "mps" else torch.float64
+
+
 def batched_bayes_linreg_draw(
     y_obs,
     X_obs,

@@ -366,6 +366,18 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.16.2 — Reliable GPU categorical & ordered imputation on imbalanced data
+
+- GPU `mice` imputation of binary, unordered-categorical, and ordered columns no
+  longer collapses a column onto a single category on imbalanced mixed data
+  (a binary column nearly separated by a covariate, or an ordered column with a
+  very sparse middle category). The GPU fits are numerically stabilized and run
+  in double precision internally on CUDA and CPU, so imputed category
+  proportions track the CPU backend and R's `mice`. (Apple Silicon / MPS, which
+  has no double precision, is unchanged.)
+- A genuinely degenerate GPU categorical/ordered fit now raises a clear error
+  rather than silently imputing every missing cell as category 0.
+
 ### 3.16.1 — Reliable GPU ordered-factor imputation under near-separation
 
 - GPU `mice` imputation of ordered factors (`polr`, on CUDA and Apple Silicon)

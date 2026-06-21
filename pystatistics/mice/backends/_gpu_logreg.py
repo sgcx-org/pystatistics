@@ -36,7 +36,11 @@ Results match the CPU reference distributionally at the GPU/FP32 tolerance tier.
 
 from __future__ import annotations
 
-from pystatistics.mice.backends._gpu_linreg import add_intercept, _cholesky_ridged
+from pystatistics.mice.backends._gpu_linreg import (
+    add_intercept,
+    discrete_glm_compute_dtype,
+    _cholesky_ridged,
+)
 from pystatistics.mice.backends._gpu_spd import apply_inv_factor_T, solve_spd
 
 # Mirrors the CPU logreg constants (methods/logreg.py): relative ridge on X'WX
@@ -107,8 +111,22 @@ def gpu_logreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
     (m, n_mis) of 0/1 indices. ``donors`` and ``n_classes`` are accepted and
     ignored (binary is always 2-class) so the backend calls every categorical
     method with one uniform signature.
+
+    The fit and draw run in FP64 where the device supports it
+    (``discrete_glm_compute_dtype``): under (quasi-)separation the FP32 IRLS Gram
+    goes near-singular, the Cholesky/solve returns a non-finite estimate, and the
+    Bernoulli draw silently collapses every cell to 0 (``u < NaN`` is False) —
+    which then corrupts every column using this one as a predictor. A non-finite
+    predicted probability now yields NaN (never a silent 0), so a genuinely
+    degenerate fit surfaces via the backend's end-of-sweep guard (Rule 1).
     """
     import torch
+
+    out_dtype = X_obs.dtype
+    compute_dtype = discrete_glm_compute_dtype(X_obs.device, out_dtype)
+    X_obs = X_obs.to(compute_dtype)
+    X_mis = X_mis.to(compute_dtype)
+    y_obs = y_obs.to(compute_dtype)
 
     Xa = add_intercept(X_obs)
     beta_hat, L = batched_logistic_irls(y_obs, Xa)
@@ -120,5 +138,7 @@ def gpu_logreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
     Xa_mis = add_intercept(X_mis)
     eta = (Xa_mis @ beta_star.unsqueeze(-1)).squeeze(-1).clamp(-_ETA_CLIP, _ETA_CLIP)
     p = torch.sigmoid(eta)
-    u = torch.rand(p.shape, generator=gen, dtype=Xa.dtype, device=Xa.device)
-    return (u < p).to(Xa.dtype)
+    u = torch.rand(p.shape, generator=gen, dtype=p.dtype, device=p.device)
+    out = (u < p).to(out_dtype)
+    # Fail loud (Rule 1): non-finite p -> NaN, not a silent 0.
+    return torch.where(torch.isfinite(p), out, torch.full_like(out, float("nan")))

@@ -48,7 +48,7 @@ GPU/FP32 tolerance tier. All randomness flows through the passed generator.
 
 from __future__ import annotations
 
-from pystatistics.mice.backends._gpu_linreg import _cholesky_ridged
+from pystatistics.mice.backends._gpu_linreg import discrete_glm_compute_dtype
 from pystatistics.mice.backends._gpu_spd import apply_inv_factor_T, solve_spd
 
 # Relative ridge on the observed Hessian (matches the other GPU GLM methods).
@@ -61,14 +61,84 @@ _PROB_FLOOR = 1e-12
 # a step of ~1e-15, well past any useful progress, so a chain still not
 # decreasing there is at a degenerate stall and is frozen with finite params.
 _MAX_BACKTRACK = 50
+# Levenberg-Marquardt escalation budget for the Hessian-modified Newton solve.
+# Starting from the base ridge (~1e-5 relative), ×10 per try reaches ~1e7, far
+# above any indefinite eigenvalue magnitude seen in practice (~1e2-1e3), so the
+# factored matrix is positive definite within a handful of tries.
+_MAX_LM_TRIES = 14
+
+
+def _pd_cholesky(H, base_diag, eye):
+    """Lower Cholesky of a Hessian made positive definite by per-chain
+    Levenberg-Marquardt damping, batched over the leading dim.
+
+    The proportional-odds NLL is convex in the natural thresholds but the fit
+    runs in the RAW (log-gap) parameterization, where it is NON-convex — so the
+    observed Hessian is routinely INDEFINITE away from the optimum (negative
+    eigenvalues of magnitude ~1e2 are common on imbalanced ordinals). A fixed
+    tiny ridge cannot factor that: ``cholesky_ex`` returns a non-finite factor,
+    which stalls the step and poisons the posterior-draw factor. This was the
+    issue #8 NaN collapse on CUDA, where ``cholesky_ex`` surfaces the indefinite
+    matrix as non-finite (CPU LAPACK happened to return finite garbage that
+    limped along).
+
+    Each chain's damping ``mu`` starts at ``base_diag`` (plus a tiny FP-rounding
+    jitter) and is multiplied by 10 until ``H + mu*I`` factors (``info == 0`` and
+    finite) — a true descent direction. Near the optimum the Hessian is positive
+    definite, ``mu`` stays at the base on the first try, and the step is full
+    Newton and the factor is the true observed information used for the vcov
+    draw — so well-conditioned fits (and the #5/#6/#7 vcov) are unchanged. A
+    chain that never reaches PD keeps its last (non-finite) factor, which
+    propagates to the imputation and trips the backend's non-finite guard."""
+    import torch
+
+    m = H.shape[0]
+    Hs = 0.5 * (H + H.transpose(1, 2))
+    diag = torch.diagonal(Hs, dim1=1, dim2=2)
+    jitter = diag.mean(dim=1).clamp_min(1.0) * 1e-8                # (m,) FP floor
+    mu = base_diag + jitter                                       # (m,)
+    done = torch.zeros(m, dtype=torch.bool, device=H.device)
+    L_out = torch.zeros_like(Hs)
+    L_last = L_out
+    for _ in range(_MAX_LM_TRIES):
+        L_try, info = torch.linalg.cholesky_ex(Hs + mu[:, None, None] * eye)
+        ok = (info == 0) & torch.isfinite(L_try).flatten(1).all(dim=1)
+        newly = (~done) & ok
+        L_out = torch.where(newly[:, None, None], L_try, L_out)
+        done = done | newly
+        L_last = L_try
+        if bool(done.all()):
+            break
+        mu = torch.where(done, mu, mu * 10.0)
+    # Chains that never reached PD keep their last factor (non-finite -> guard).
+    return torch.where(done[:, None, None], L_out, L_last)
+
+
+# Upper clamp on the raw log-gap parameters before ``exp`` in the raw->threshold
+# transform. In FP32 ``exp`` overflows to +inf at ~88.7 (ln of the float32 max);
+# the autograd backward through an overflowed ``exp`` then yields inf/NaN in the
+# gradient, which is unrecoverable (the line search's ``f1 <= f0`` is always
+# False under NaN). A near-empty *intermediate* category (e.g. 2 obs in 4000)
+# wants a large threshold gap, and an ill-conditioned Newton step under FP32
+# (notably the device cholesky on CUDA) can transiently push a log-gap past the
+# overflow edge. Clamping at 50 keeps every gap finite (``exp(50)`` ~ 5e21, and
+# the cumulative sum over the K-1 thresholds stays far below the FP32 max even
+# for large K) while sitting an order of magnitude above any log-gap a real fit
+# reaches (~5), so it never binds at a legitimate optimum — the GPU fit still
+# matches the CPU penalised MLE. Above the clamp the ``exp`` gradient is zero,
+# which damps the overshoot instead of exploding it.
+_LOG_GAP_CLAMP = 50.0
 
 
 def _raw_to_alpha(raw):
     """raw (m, K-1) -> ordered thresholds (m, K-1), autograd-friendly.
-    ``increments = [raw_0, exp(raw_1), ...]``; ``alpha = cumsum(increments)``."""
+    ``increments = [raw_0, exp(raw_1), ...]``; ``alpha = cumsum(increments)``.
+    The log-gaps are clamped at ``_LOG_GAP_CLAMP`` before ``exp`` so a transient
+    FP32 overshoot cannot overflow to inf/NaN (see the constant's note); the
+    clamp sits far above any real fit, so it never binds at the optimum."""
     import torch
 
-    inc = torch.cat([raw[:, :1], raw[:, 1:].exp()], dim=1)
+    inc = torch.cat([raw[:, :1], raw[:, 1:].clamp(max=_LOG_GAP_CLAMP).exp()], dim=1)
     return torch.cumsum(inc, dim=1)
 
 
@@ -193,7 +263,14 @@ def _backtracking_step(params, delta, y_obs, X_obs, K, slope_ridge, frozen):
     and the iterate is stuck at a degenerate |alpha| ~ 1e6 point — the issue #8
     collapse. Requiring a per-chain decrease keeps every step in the basin of
     the finite penalised MLE, matching the CPU L-BFGS-B globalisation. Evaluated
-    without autograd (objective values only)."""
+    without autograd (objective values only).
+
+    The accepted trial must also be FINITE: under a near-empty intermediate
+    category an ill-conditioned step can produce a non-finite trial objective,
+    and ``NaN <= f0`` is always False — so a NaN-blind search would halve to a
+    near-zero step yet never accept, then commit ``step*NaN`` and poison the
+    fit. Requiring ``isfinite(f1)`` rejects such trials so the step keeps
+    halving toward the last finite iterate."""
     import torch
 
     with torch.no_grad():
@@ -203,7 +280,7 @@ def _backtracking_step(params, delta, y_obs, X_obs, K, slope_ridge, frozen):
         for _ in range(_MAX_BACKTRACK):
             trial = params - step.unsqueeze(-1) * delta
             f1 = _nll_per_chain(trial, y_obs, X_obs, K, slope_ridge)
-            ok = frozen | (f1 <= f0 + slack)
+            ok = frozen | (torch.isfinite(f1) & (f1 <= f0 + slack))
             if bool(ok.all()):
                 break
             step = torch.where(ok, step, step * 0.5)
@@ -250,11 +327,20 @@ def batched_polr_newton(y_obs, X_obs, n_classes):
     converged = torch.zeros(m, dtype=torch.bool, device=device)
     for _ in range(_MAX_NEWTON_ITER):
         g, H = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
-        L = _cholesky_ridged(H + ridge_diag[:, None, None] * eye)
+        L = _pd_cholesky(H, ridge_diag, eye)                       # LM-damped, PD
         delta = solve_spd(L, g.unsqueeze(-1)).squeeze(-1)          # (m, P) Newton step
         step = _backtracking_step(params, delta, y_obs, X_obs, K, slope_ridge, converged)
         apply = (~converged).to(dtype) * step                     # frozen -> 0 step
         update = apply.unsqueeze(-1) * delta
+        # A near-empty intermediate category makes the threshold Hessian
+        # near-singular; an FP32 device solve (notably CUDA cholesky) can then
+        # return a non-finite delta. Zero any non-finite update entry so it can
+        # never poison ``params`` — that chain simply takes no step this
+        # iteration and is re-evaluated from its last finite iterate next time
+        # (or freezes via ``small`` below). Complements the finite-trial guard
+        # in the line search; together they keep the fit finite regardless of
+        # device solve precision.
+        update = torch.where(torch.isfinite(update), update, torch.zeros_like(update))
         small = update.abs().amax(dim=1) < _NEWTON_TOL
         params = params - update                                  # damped, minimise NLL
         converged = converged | (~converged & small)
@@ -262,7 +348,7 @@ def batched_polr_newton(y_obs, X_obs, n_classes):
             break
 
     g, H = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
-    L = _cholesky_ridged(H + ridge_diag[:, None, None] * eye)
+    L = _pd_cholesky(H, ridge_diag, eye)
     raw_hat = params[:, :knr]
     return _raw_to_alpha(raw_hat), params[:, knr:], raw_hat, L
 
@@ -290,17 +376,28 @@ def draw_natural_theta(alpha_hat, beta_hat, raw_hat, L, gen):
 
 
 def _sample_categories(probs, gen):
-    """Inverse-CDF sample one class per row. probs (m, n, K) -> (m, n) indices.
-    Clips tiny negatives from a draw whose thresholds nudged out of order."""
+    """Inverse-CDF sample one class per row. probs (m, n, K) -> (m, n) of class
+    indices as a float tensor. Clips tiny negatives from a draw whose thresholds
+    nudged out of order.
+
+    Fail loud (Rule 1): a row with any NON-FINITE probability yields ``NaN``,
+    never a silent category 0. Under NaN probabilities ``(cdf >= u)`` is all-False
+    and ``argmax`` would return index 0 — so a genuinely degenerate fit would
+    masquerade as valid category-0 imputations and never reach the backend's
+    end-of-sweep non-finite guard. Emitting NaN instead lets that guard catch it.
+    Finite rows are unaffected (same draw, same RNG consumption)."""
     import torch
 
-    probs = probs.clamp_min(0.0)
-    probs = probs / probs.sum(dim=2, keepdim=True).clamp_min(torch.finfo(probs.dtype).tiny)
-    cdf = probs.cumsum(dim=2)
+    finite_row = torch.isfinite(probs).all(dim=2)                  # (m, n)
+    safe = torch.where(finite_row.unsqueeze(2), probs, torch.zeros_like(probs))
+    safe = safe.clamp_min(0.0)
+    safe = safe / safe.sum(dim=2, keepdim=True).clamp_min(torch.finfo(safe.dtype).tiny)
+    cdf = safe.cumsum(dim=2)
     u = torch.rand(
-        probs.shape[:2] + (1,), generator=gen, dtype=probs.dtype, device=probs.device
+        safe.shape[:2] + (1,), generator=gen, dtype=safe.dtype, device=safe.device
     )
-    return (cdf >= u).to(torch.int64).argmax(dim=2)
+    idx = (cdf >= u).to(torch.int64).argmax(dim=2).to(safe.dtype)  # (m, n) float
+    return torch.where(finite_row, idx, torch.full_like(idx, float("nan")))
 
 
 def gpu_polr_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
@@ -309,11 +406,26 @@ def gpu_polr_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
     ``y_obs`` (m, n_obs) of 0..K-1 ordered class indices, ``X_obs`` (m, n_obs, q),
     ``X_mis`` (m, n_mis, q); ``n_classes`` = K required (passed by the sweep).
     Returns (m, n_mis) of 0..K-1 indices. ``donors`` is accepted and ignored.
-    """
+
+    The fit and posterior draw run in FP64 where the device supports it
+    (``discrete_glm_compute_dtype``): the category probabilities are differences
+    of cumulative logits ``sigmoid(alpha_j) - sigmoid(alpha_{j-1})`` that underflow
+    in FP32 once a near-empty category forces large thresholds (|alpha| ~ 1e2),
+    so an FP32 sweep produces grossly wrong ordered proportions (see the helper).
+    The sampled indices are returned in the caller's dtype."""
+    import torch
+
     if n_classes is None:
         raise ValueError("gpu_polr_impute requires n_classes (number of levels)")
     K = int(n_classes)
     knr = K - 1
+
+    out_dtype = X_obs.dtype
+    # Upcast to FP64 for the fit+draw where available; MPS has no float64.
+    compute_dtype = discrete_glm_compute_dtype(X_obs.device, out_dtype)
+    y_obs = y_obs.to(compute_dtype)
+    X_obs = X_obs.to(compute_dtype)
+    X_mis = X_mis.to(compute_dtype)
 
     alpha_hat, beta_hat, raw_hat, L = batched_polr_newton(y_obs, X_obs, K)
 
@@ -322,4 +434,4 @@ def gpu_polr_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None):
 
     eta = (X_mis @ beta_s.unsqueeze(-1)).squeeze(-1)
     probs = _cat_logprobs(alpha_s, eta, K).exp()
-    return _sample_categories(probs, gen).to(X_obs.dtype)
+    return _sample_categories(probs, gen).to(out_dtype)

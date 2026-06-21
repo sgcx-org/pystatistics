@@ -37,6 +37,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from pystatistics.mice.backends._gpu_polr import (
+    _sample_categories,
     batched_polr_newton,
     gpu_polr_impute,
 )
@@ -187,3 +188,134 @@ class TestSeparatedFitOnDevice:
         p_cpu, p_gpu = _props(cpu_imp, K), _props(gpu_imp, K)
         assert p_gpu[K - 1] > 0.5 * p_cpu[K - 1] > 0.0
         assert _tv(p_cpu, p_gpu) < 0.06, f"{device} TV = {_tv(p_cpu, p_gpu):.4f}"
+
+
+# ------------------------------------------------------ near-empty intermediate
+
+def _near_empty_dataset(seed: int, n: int = 4000):
+    """K=7 ordinal ordered by a continuous predictor with a near-empty
+    *intermediate* category (~2–8 observations) — the actual GSS failure
+    signature, distinct from the sparse *extreme* category above. The tight
+    quantile gap ``[0.95, 0.952]`` puts ~0.2% of rows in level 4, whose threshold
+    gap wants to be large; in FP32 an ill-conditioned Newton step there used to
+    overflow ``exp`` in the raw->threshold transform to NaN. ``z`` is inert."""
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal(n)
+    z = rng.standard_normal(n)
+    cuts = np.quantile(x, [0.05, 0.07, 0.93, 0.95, 0.952, 0.99])
+    y = np.digitize(x, cuts).astype(np.intp)
+    K = int(y.max()) + 1
+    for lv in range(K):
+        if not np.any(y == lv):
+            y[lv] = lv
+    return y, np.column_stack([x, z]), K
+
+
+class TestNearEmptyCategoryCPU:
+    """FP64 core: a near-empty intermediate category yields a finite, bounded fit
+    on the CPU penalised MLE (no NaN from raw->threshold overflow)."""
+
+    def test_has_a_near_empty_category(self):
+        """The fixture genuinely has a near-empty intermediate category — without
+        it the regression has no teeth."""
+        y, _, K = _near_empty_dataset(seed=0)
+        counts = np.bincount(y, minlength=K)
+        interior = counts[1:-1]
+        assert interior.min() <= 10, f"no near-empty interior category: {counts}"
+
+    def test_fit_finite_and_bounded(self):
+        y, X, K = _near_empty_dataset(seed=0)
+        alpha, beta = _gpu_fit(y, X, K, torch.device("cpu"), torch.float64)
+        assert torch.isfinite(alpha).all() and torch.isfinite(beta).all()
+        assert alpha.abs().max().item() < _FINITE_BOUND
+        assert beta.abs().max().item() < _FINITE_BOUND
+
+    def test_fit_matches_cpu_ridged(self):
+        y, X, K = _near_empty_dataset(seed=0)
+        fit = polr(y, X, ridge=_slope_ridge(X.astype(np.float64)))
+        alpha, beta = _gpu_fit(y, X, K, torch.device("cpu"), torch.float64)
+        np.testing.assert_allclose(
+            alpha.numpy(), fit.threshold_values, atol=1e-2, rtol=1e-3
+        )
+        np.testing.assert_allclose(
+            beta.numpy(), fit.coefficients, atol=1e-2, rtol=1e-3
+        )
+
+    def test_imputed_proportions_track_cpu(self):
+        y, X, K = _near_empty_dataset(seed=0)
+        y_obs, X_obs, X_mis, _ = _split(y, X, seed=0, n_mis=1500)
+        cpu_imp = PolrMethod().impute(y_obs, X_obs, X_mis, np.random.default_rng(1))
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(1)
+        gpu_imp = gpu_polr_impute(
+            torch.tensor(y_obs, dtype=torch.float64).unsqueeze(0),
+            torch.tensor(X_obs, dtype=torch.float64).unsqueeze(0),
+            torch.tensor(X_mis, dtype=torch.float64).unsqueeze(0),
+            gen,
+            n_classes=K,
+        )[0].numpy()
+        assert np.isfinite(gpu_imp).all()
+        p_cpu, p_gpu = _props(cpu_imp, K), _props(gpu_imp, K)
+        assert _tv(p_cpu, p_gpu) < 0.05, f"TV(cpu, gpu) = {_tv(p_cpu, p_gpu):.4f}"
+
+
+@pytest.mark.skipif(not _accelerators(), reason="No CUDA/MPS device available")
+class TestNearEmptyCategoryOnDevice:
+    """On-device FP32: the near-empty-category fit stays finite/bounded and the
+    imputed proportions track the CPU `polr` — the CUDA path is where the
+    raw->threshold overflow to NaN actually surfaced (issue #8, 3.16.1)."""
+
+    @pytest.mark.parametrize("device", _accelerators())
+    def test_fit_finite_and_bounded(self, device):
+        y, X, K = _near_empty_dataset(seed=0)
+        alpha, beta = _gpu_fit(y, X, K, torch.device(device), torch.float32)
+        assert torch.isfinite(alpha).all() and torch.isfinite(beta).all()
+        assert alpha.abs().max().item() < _FINITE_BOUND
+        assert beta.abs().max().item() < _FINITE_BOUND
+
+    @pytest.mark.parametrize("device", _accelerators())
+    def test_imputed_proportions_track_cpu(self, device):
+        y, X, K = _near_empty_dataset(seed=0)
+        y_obs, X_obs, X_mis, _ = _split(y, X, seed=0, n_mis=1500)
+        cpu_imp = PolrMethod().impute(y_obs, X_obs, X_mis, np.random.default_rng(1))
+        dev = torch.device(device)
+        gen = torch.Generator(device=dev)
+        gen.manual_seed(1)
+        gpu_imp = gpu_polr_impute(
+            torch.tensor(y_obs, dtype=torch.float32, device=dev).unsqueeze(0),
+            torch.tensor(X_obs, dtype=torch.float32, device=dev).unsqueeze(0),
+            torch.tensor(X_mis, dtype=torch.float32, device=dev).unsqueeze(0),
+            gen,
+            n_classes=K,
+        )[0].cpu().numpy()
+        assert np.isfinite(gpu_imp).all(), f"{device} produced non-finite imputations"
+        p_cpu, p_gpu = _props(cpu_imp, K), _props(gpu_imp, K)
+        assert _tv(p_cpu, p_gpu) < 0.06, f"{device} TV = {_tv(p_cpu, p_gpu):.4f}"
+
+
+# ----------------------------------------------------------------- fail-loud
+
+class TestSampleCategoriesFailLoud:
+    """`_sample_categories` must emit NaN (never a silent category 0) on
+    non-finite probabilities, so a degenerate fit reaches the backend's
+    end-of-sweep non-finite guard instead of masquerading as category-0 draws."""
+
+    def test_non_finite_row_yields_nan(self):
+        probs = torch.ones(1, 3, 4) / 4.0
+        probs[0, 1, :] = float("nan")
+        gen = torch.Generator()
+        gen.manual_seed(0)
+        out = _sample_categories(probs, gen)
+        assert torch.isnan(out[0, 1]), "non-finite row must yield NaN, not category 0"
+        assert torch.isfinite(out[0, 0]) and torch.isfinite(out[0, 2])
+
+    def test_all_finite_unaffected(self):
+        """Finite probabilities sample to valid in-range indices (no NaN)."""
+        torch.manual_seed(0)
+        probs = torch.rand(2, 50, 4)
+        probs = probs / probs.sum(dim=2, keepdim=True)
+        gen = torch.Generator()
+        gen.manual_seed(0)
+        out = _sample_categories(probs, gen)
+        assert torch.isfinite(out).all()
+        assert out.min() >= 0 and out.max() <= 3
