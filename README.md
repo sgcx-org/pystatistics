@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.16.3 — Faster GPU ordered-factor imputation on Apple Silicon
+
+- GPU `mice` imputation of ordered factors (`polr`) is faster on Apple Silicon
+  (MPS): the line search that stabilizes the fit under near-separation now reaches
+  its step by quadratic interpolation instead of repeated halving, using far fewer
+  objective evaluations. Purely a performance change — the imputation results and
+  stability guarantees are unchanged; CUDA is unaffected.
+
 ### 3.16.2 — Reliable GPU categorical & ordered imputation on imbalanced data
 
 - GPU `mice` imputation of binary, unordered-categorical, and ordered columns no

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pystatistics"
-version = "3.16.2"
+version = "3.16.3"
 description = "GPU-accelerated statistical computing for Python"
 readme = "README.md"
 license = "MIT"

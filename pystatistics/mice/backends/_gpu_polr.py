@@ -187,9 +187,13 @@ def _nll_per_chain(params, y_obs, X_obs, K, slope_ridge):
     ``methods/polr.py`` (``cumulative_negloglik`` adds ``0.5*ridge*beta@beta``).
 
     This is the single source of truth for the optimisation objective: the
-    Newton gradient/Hessian differentiate its sum (``_batched_nll``) and the
-    line search compares it per chain, so the damped step is accepted against
-    exactly the objective the step minimises."""
+    Newton gradient/Hessian differentiate its sum (in ``_grad_and_hessian``) and
+    the line search compares it per chain, so the damped step is accepted against
+    exactly the objective the step minimises. Differentiating the sum contributes
+    ``lambda_m * beta_m`` to chain ``m``'s gradient and ``lambda_m`` to its
+    beta-block Hessian diagonal, so the slope-penalty curvature flows into the
+    observed Hessian (and hence ``L`` / the posterior covariance) via autograd,
+    exactly as the penalised CPU fit."""
     import torch
 
     knr = K - 1
@@ -201,38 +205,25 @@ def _nll_per_chain(params, y_obs, X_obs, K, slope_ridge):
     return -logp_y.sum(dim=1) + penalty
 
 
-def _batched_nll(params, y_obs, X_obs, K, slope_ridge):
-    """Scalar total NLL over all chains (the sum of ``_nll_per_chain``).
-
-    Because the chains are independent and the total NLL sums over them,
-    differentiating this contributes ``lambda_m * beta_m`` to chain ``m``'s
-    gradient and ``lambda_m`` to its beta-block Hessian diagonal — so the slope
-    penalty curvature flows into the observed Hessian (and hence ``L`` / the
-    posterior covariance) via autograd, exactly as the penalised CPU fit. The
-    slope penalty keeps the proportional-odds slopes finite under separation; it
-    is complementary to (a) the Hessian-solve ridge in ``batched_polr_newton``
-    (linear-solve stability only) and (b) the line-search globalisation there
-    (which is what bounds the *unpenalised thresholds*, the dominant runaway on
-    imbalanced real-survey ordinals)."""
-    return _nll_per_chain(params, y_obs, X_obs, K, slope_ridge).sum()
-
-
 def _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge):
-    """Exact batched gradient (m, P) and observed Hessian (m, P, P) via P+1
-    backward passes (chains independent -> one backward per Hessian row covers
-    all chains). ``slope_ridge`` (m,) is threaded into the penalised NLL so the
-    returned gradient and Hessian both include the objective-ridge curvature."""
+    """Exact batched gradient (m, P), observed Hessian (m, P, P) and per-chain
+    objective ``f0`` (m,) via P+1 backward passes (chains independent -> one
+    backward per Hessian row covers all chains). ``slope_ridge`` (m,) is threaded
+    into the penalised NLL so the gradient and Hessian both include the
+    objective-ridge curvature. ``f0`` is the same forward pass the gradient
+    differentiates, returned (detached) so the line search reuses it instead of
+    recomputing ``NLL(params)`` — one fewer objective evaluation per Newton step."""
     import torch
 
     P = params.shape[1]
     params = params.detach().requires_grad_(True)
-    nll = _batched_nll(params, y_obs, X_obs, K, slope_ridge)
-    g = torch.autograd.grad(nll, params, create_graph=True)[0]      # (m, P)
+    per_chain = _nll_per_chain(params, y_obs, X_obs, K, slope_ridge)  # (m,)
+    g = torch.autograd.grad(per_chain.sum(), params, create_graph=True)[0]
     rows = [
         torch.autograd.grad(g[:, d].sum(), params, retain_graph=(d < P - 1))[0]
         for d in range(P)
     ]
-    return g.detach(), torch.stack(rows, dim=1).detach()
+    return g.detach(), torch.stack(rows, dim=1).detach(), per_chain.detach()
 
 
 def _starting_raw(y_obs, K):
@@ -248,42 +239,63 @@ def _starting_raw(y_obs, K):
     return raw[: K - 1]
 
 
-def _backtracking_step(params, delta, y_obs, X_obs, K, slope_ridge, frozen):
+def _backtracking_step(params, delta, gdotdelta, f0, y_obs, X_obs, K, slope_ridge, frozen):
     """Per-chain backtracking line-search scale for the Newton step ``delta``.
 
-    Returns ``step`` (m,): the largest of ``1, 1/2, 1/4, ...`` for which
-    ``NLL(params - step*delta) <= NLL(params)`` per chain (a small relative
-    slack absorbs floating-point noise at the full step near convergence).
-    ``frozen`` chains (already converged) are not searched — their step is held
-    at 1 and ignored by the caller.
+    Returns ``step`` (m,): a per-chain scale for which
+    ``NLL(params - step*delta) <= NLL(params)`` (a small relative slack absorbs
+    floating-point noise at the full step near convergence). ``frozen`` chains
+    (already converged) are not searched — their step is held at 1 and ignored by
+    the caller. ``f0`` (m,) is ``NLL(params)`` (reused from ``_grad_and_hessian``)
+    and ``gdotdelta`` (m,) is ``g . delta`` (> 0 for the PD-damped Newton
+    direction, so the directional derivative ``phi'(0) = -gdotdelta`` is negative
+    — a descent direction).
 
     This globalises the Newton iteration. A full undamped step overshoots the
     *unpenalised thresholds* into the saturated tail of the cumulative logits on
     imbalanced ordinals (a sparse extreme category), where the gradient vanishes
     and the iterate is stuck at a degenerate |alpha| ~ 1e6 point — the issue #8
-    collapse. Requiring a per-chain decrease keeps every step in the basin of
-    the finite penalised MLE, matching the CPU L-BFGS-B globalisation. Evaluated
-    without autograd (objective values only).
+    collapse. Requiring a per-chain decrease keeps every step in the basin of the
+    finite penalised MLE, matching the CPU L-BFGS-B globalisation.
+
+    Step selection is **safeguarded quadratic interpolation**, not plain halving:
+    under (quasi-)separation the full step overshoots by orders of magnitude, so
+    halving needs ~12 objective evaluations to reach an acceptable step. Fitting
+    the quadratic ``q(t) = f0 + phi'(0) t + c t^2`` through the last trial and
+    jumping to its minimiser ``t* = -phi'(0)/(2c)`` (safeguarded to
+    ``[0.1, 0.5]*step`` per Nocedal & Wright) reaches it in ~3-4 — a large MPS
+    dispatch saving (issue #9) with the *same* acceptance test, so the
+    convergence guarantee is unchanged. The model is used only when it is valid
+    (finite trial, convex ``c > 0``, descent ``gdotdelta > 0``); otherwise the
+    step falls back to halving.
 
     The accepted trial must also be FINITE: under a near-empty intermediate
     category an ill-conditioned step can produce a non-finite trial objective,
-    and ``NaN <= f0`` is always False — so a NaN-blind search would halve to a
-    near-zero step yet never accept, then commit ``step*NaN`` and poison the
-    fit. Requiring ``isfinite(f1)`` rejects such trials so the step keeps
-    halving toward the last finite iterate."""
+    and ``NaN <= f0`` is always False — so a NaN-blind search would shrink the
+    step yet never accept, then commit ``step*NaN`` and poison the fit. Requiring
+    ``isfinite(f1)`` rejects such trials. Evaluated without autograd."""
     import torch
 
     with torch.no_grad():
-        f0 = _nll_per_chain(params, y_obs, X_obs, K, slope_ridge)   # (m,)
         slack = 1e-8 * (1.0 + f0.abs())
+        phi_prime0 = -gdotdelta                                     # (m,), < 0 for descent
+        tiny = torch.finfo(f0.dtype).tiny
         step = torch.ones_like(f0)
+        accepted = frozen.clone()
         for _ in range(_MAX_BACKTRACK):
             trial = params - step.unsqueeze(-1) * delta
             f1 = _nll_per_chain(trial, y_obs, X_obs, K, slope_ridge)
-            ok = frozen | (torch.isfinite(f1) & (f1 <= f0 + slack))
+            ok = accepted | (torch.isfinite(f1) & (f1 <= f0 + slack))
             if bool(ok.all()):
                 break
-            step = torch.where(ok, step, step * 0.5)
+            # Quadratic-model minimiser for the not-yet-accepted chains.
+            c = (f1 - f0 - phi_prime0 * step) / step.clamp_min(tiny).pow(2)
+            t_interp = (-phi_prime0) / (2.0 * c).clamp_min(tiny)
+            t_safe = t_interp.clamp(min=0.1 * step, max=0.5 * step)
+            valid = torch.isfinite(f1) & (c > 0) & (gdotdelta > 0) & torch.isfinite(t_safe)
+            t_next = torch.where(valid, t_safe, 0.5 * step)         # halving fallback
+            step = torch.where(ok, step, t_next)
+            accepted = ok
     return step
 
 
@@ -326,10 +338,13 @@ def batched_polr_newton(y_obs, X_obs, n_classes):
 
     converged = torch.zeros(m, dtype=torch.bool, device=device)
     for _ in range(_MAX_NEWTON_ITER):
-        g, H = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
+        g, H, f0 = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
         L = _pd_cholesky(H, ridge_diag, eye)                       # LM-damped, PD
         delta = solve_spd(L, g.unsqueeze(-1)).squeeze(-1)          # (m, P) Newton step
-        step = _backtracking_step(params, delta, y_obs, X_obs, K, slope_ridge, converged)
+        gdotdelta = (g * delta).sum(dim=1)                         # (m,) > 0 (PD solve)
+        step = _backtracking_step(
+            params, delta, gdotdelta, f0, y_obs, X_obs, K, slope_ridge, converged
+        )
         apply = (~converged).to(dtype) * step                     # frozen -> 0 step
         update = apply.unsqueeze(-1) * delta
         # A near-empty intermediate category makes the threshold Hessian
@@ -347,7 +362,7 @@ def batched_polr_newton(y_obs, X_obs, n_classes):
         if bool(converged.all()):
             break
 
-    g, H = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
+    g, H, _ = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
     L = _pd_cholesky(H, ridge_diag, eye)
     raw_hat = params[:, :knr]
     return _raw_to_alpha(raw_hat), params[:, knr:], raw_hat, L

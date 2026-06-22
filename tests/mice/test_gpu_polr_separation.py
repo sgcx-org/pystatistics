@@ -37,10 +37,17 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from pystatistics.mice.backends._gpu_polr import (
+    _RIDGE,
+    _backtracking_step,
+    _grad_and_hessian,
+    _nll_per_chain,
+    _pd_cholesky,
     _sample_categories,
+    _starting_raw,
     batched_polr_newton,
     gpu_polr_impute,
 )
+from pystatistics.mice.backends._gpu_spd import solve_spd
 from pystatistics.mice.methods.polr import PolrMethod, _slope_ridge
 from pystatistics.ordinal import polr
 
@@ -92,6 +99,67 @@ def _gpu_fit(y, X, K, device, dtype):
     X_obs = torch.tensor(X, dtype=dtype, device=device).unsqueeze(0)
     alpha, beta, _, _ = batched_polr_newton(y_obs, X_obs, K)
     return alpha[0], beta[0]
+
+
+# ------------------------------------------------------------- line search (#9)
+
+class TestBacktrackingStepContract:
+    """The interpolating line search (issue #9 optimization) must preserve its
+    contract: the returned step decreases the per-chain objective. Convergence
+    of the damped Newton — and the issue #8 anti-collapse guarantee — rests on
+    this; the speed-up changes *how fast* an acceptable step is found, not the
+    acceptance test."""
+
+    def _one_newton_step_inputs(self, dtype=torch.float64):
+        """Build (params, delta, gdotdelta, f0, ...) at the start of a fit on a
+        separated ordinal, where the full Newton step overshoots and the line
+        search must back off."""
+        y, X, K = _separated_dataset(seed=0)
+        dev = torch.device("cpu")
+        y_obs = torch.tensor(y, dtype=dtype, device=dev).unsqueeze(0)
+        X_obs = torch.tensor(X, dtype=dtype, device=dev).unsqueeze(0)
+        m, n, q = X_obs.shape
+        knr, P = K - 1, K - 1 + q
+        params = torch.zeros((m, P), dtype=dtype, device=dev)
+        params[:, :knr] = torch.as_tensor(_starting_raw(y_obs, K), dtype=dtype)
+        sm = (X_obs * X_obs).sum(dim=1).mean(dim=1)
+        ridge_diag = _RIDGE * sm.clamp_min(1e-12) / n
+        slope_ridge = _RIDGE * (sm / n).clamp_min(1e-12) * n
+        eye = torch.eye(P, dtype=dtype, device=dev)
+        g, H, f0 = _grad_and_hessian(params, y_obs, X_obs, K, slope_ridge)
+        L = _pd_cholesky(H, ridge_diag, eye)
+        delta = solve_spd(L, g.unsqueeze(-1)).squeeze(-1)
+        gdotdelta = (g * delta).sum(dim=1)
+        return params, delta, gdotdelta, f0, y_obs, X_obs, K, slope_ridge
+
+    def test_step_decreases_objective(self):
+        params, delta, gdotdelta, f0, y_obs, X_obs, K, sr = (
+            self._one_newton_step_inputs()
+        )
+        frozen = torch.zeros(1, dtype=torch.bool)
+        step = _backtracking_step(
+            params, delta, gdotdelta, f0, y_obs, X_obs, K, sr, frozen
+        )
+        assert torch.isfinite(step).all() and (step > 0).all()
+        f1 = _nll_per_chain(params - step.unsqueeze(-1) * delta, y_obs, X_obs, K, sr)
+        slack = 1e-8 * (1.0 + f0.abs())
+        assert bool((f1 <= f0 + slack).all()), "line search returned a non-decreasing step"
+
+    def test_full_step_fast_path(self):
+        """When the full step already decreases the objective, it is accepted as
+        step=1 (no needless backtracking)."""
+        params, delta, gdotdelta, f0, y_obs, X_obs, K, sr = (
+            self._one_newton_step_inputs()
+        )
+        # A tiny step trivially decreases (locally downhill), so step=1 on a
+        # scaled-down delta must be accepted unchanged.
+        small_delta = delta * 1e-4
+        gdd = (gdotdelta * 1e-4)
+        frozen = torch.zeros(1, dtype=torch.bool)
+        step = _backtracking_step(
+            params, small_delta, gdd, f0, y_obs, X_obs, K, sr, frozen
+        )
+        assert torch.allclose(step, torch.ones_like(step))
 
 
 # ---------------------------------------------------------------- device-agnostic

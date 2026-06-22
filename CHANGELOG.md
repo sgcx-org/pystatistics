@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.16.3
+
+- **Faster GPU ordered-factor (`polr`) imputation on Apple Silicon.** The line
+  search that keeps the proportional-odds fit stable under near-separation now
+  finds its step by quadratic interpolation instead of repeated halving, reaching
+  an acceptable step in far fewer objective evaluations (~2.6x fewer on a
+  synthetic mixed GPU run on Apple Silicon, MPS). This is purely a performance
+  change — the fit it converges to and the imputation distribution are unchanged,
+  including the stability guarantees added in 3.16.1–3.16.2. CUDA is unaffected.
+
 ## 3.16.2
 
 GPU `mice` imputation of categorical and ordered columns is now reliable on
