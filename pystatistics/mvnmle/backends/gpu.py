@@ -1,30 +1,34 @@
 """
-GPU backend for MVN MLE.
+PyTorch forward-Cholesky backend for direct MVN MLE.
 
-Supports CUDA (FP32 and FP64) and MPS (FP32 only).
-Uses PyTorch autodiff for analytical gradients.
+Drives CUDA (FP32/FP64), MPS (FP32 only), and a CPU torch device (FP64 — the
+fast default CPU path). Uses PyTorch autodiff for analytical gradients.
 """
 
 from pystatistics.core.result import Result
-from pystatistics.core.compute.timing import Timer
 from pystatistics.mvnmle.design import MVNDesign
 from pystatistics.mvnmle.solution import MVNParams
-from pystatistics.mvnmle.backends._optimize import run_scaled_minimize
+from pystatistics.mvnmle.backends._direct import run_direct_solve
 
 
-class GPUMLEBackend:
+class DirectMLEBackend:
     """
-    GPU backend for MVN MLE.
+    PyTorch forward-Cholesky backend for direct MVN MLE.
 
-    Supports CUDA and MPS (Apple Silicon).
-    Automatically selects precision based on device:
+    Device-parametrised. Despite the historical name, this backend also drives
+    the fast CPU path: a CPU torch device with FP64 runs the same
+    forward-Cholesky estimator and is the default CPU backend (it beats the
+    numpy inverse-Cholesky reference substantially while matching R to ~1e-9).
+
+    Precision is selected by device:
+    - CPU torch device: FP64 (the fast default CPU path)
     - MPS: FP32 only (MPS doesn't support FP64)
     - CUDA consumer (RTX): FP32 by default
     - CUDA data center (A100/H100): FP64 available
 
     Args:
-        device: 'cuda', 'mps', or 'auto'
-        use_fp64: Force FP64 (CUDA only, raises on MPS)
+        device: 'cpu', 'cuda', 'mps', or 'auto'
+        use_fp64: Force FP64 (raises on MPS, which has no FP64)
     """
 
     def __init__(self, device: str = 'auto', use_fp64: bool = False):
@@ -54,6 +58,10 @@ class GPUMLEBackend:
     @property
     def name(self) -> str:
         precision = 'fp64' if self._use_fp64 else 'fp32'
+        # A CPU torch device is a CPU backend, not a GPU one — report it
+        # honestly so ``backend_name`` is truthful on torch-free-GPU machines.
+        if self._device == 'cpu':
+            return f'cpu_cholesky_{precision}'
         return f'gpu_{self._device}_{precision}'
 
     def solve(
@@ -82,10 +90,6 @@ class GPUMLEBackend:
         -------
         Result[MVNParams]
         """
-        timer = Timer(sync_cuda=(self._device == 'cuda'))
-        timer.start()
-        warnings_list = []
-
         # Select objective class and defaults based on precision
         if self._use_fp64:
             from pystatistics.mvnmle._objectives.gpu_fp64 import GPUObjectiveFP64
@@ -100,59 +104,16 @@ class GPUMLEBackend:
 
         method = method or default_method
         tol = tol or default_tol
+        device = self._device
 
-        # Create objective
-        with timer.section('objective_setup'):
-            objective = ObjectiveClass(design.data, device=self._device)
-
-        # Get initial parameters
-        with timer.section('initial_parameters'):
-            theta0 = objective.get_initial_parameters()
-
-        # Run optimization on the per-observation-scaled objective so that
-        # `gtol` is a meaningful, dataset-size-invariant convergence test
-        # (see backends/_optimize.py). Scaling does not move the optimum, so
-        # the estimates and log-likelihood below are unchanged.
-        with timer.section('optimization'):
-            opt = run_scaled_minimize(
-                objective, theta0, method=method, tol=tol, max_iter=max_iter
-            )
-
-        # Extract parameters from the (unscaled) objective.
-        with timer.section('parameter_extraction'):
-            mu, sigma, loglik = objective.extract_parameters(opt.x)
-
-        if not opt.success:
-            msg = opt.message or 'Unknown convergence failure'
-            warnings_list.append(f"Optimization did not converge: {msg}")
-
-        # Clean up GPU memory
-        objective.clear_cache()
-
-        timer.stop()
-
-        params = MVNParams(
-            muhat=mu,
-            sigmahat=sigma,
-            loglik=loglik,
-            n_iter=opt.n_iter,
-            converged=opt.success,
-            gradient_norm=opt.gradient_norm,
-        )
-
-        return Result(
-            params=params,
-            info={
-                'method': method,
-                'device': self._device,
-                'precision': 'fp64' if self._use_fp64 else 'fp32',
-                'objective_value': opt.objective_value,
-                'n_function_evals': opt.n_function_evals,
-                'n_gradient_evals': opt.n_gradient_evals,
-                'message': opt.message,
-                'parameterization': 'cholesky',
-            },
-            timing=timer.result(),
+        return run_direct_solve(
+            lambda: ObjectiveClass(design.data, device=device),
+            method=method,
+            tol=tol,
+            max_iter=max_iter,
             backend_name=self.name,
-            warnings=tuple(warnings_list),
+            parameterization='cholesky',
+            device=device,
+            precision='fp64' if self._use_fp64 else 'fp32',
+            sync_cuda=(device == 'cuda'),
         )

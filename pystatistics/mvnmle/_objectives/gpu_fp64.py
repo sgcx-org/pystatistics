@@ -98,7 +98,12 @@ class GPUObjectiveFP64(MLEObjectiveBase):
                     "MPS does not support FP64. Use GPUObjectiveFP32 for MPS, "
                     "or use CUDA for FP64."
                 )
-            if device.type != 'cuda':
+            # A CPU torch device is a deliberate, supported configuration: the
+            # forward-Cholesky FP64 estimator on CPU is the fast default CPU
+            # path (it beats the numpy inverse-Cholesky reference and matches R
+            # to ~1e-9), so it is NOT warned about here. CUDA is the other
+            # supported device; anything else is an unexpected request.
+            if device.type not in ('cuda', 'cpu'):
                 warnings.warn(
                     f"FP64 objective requested on {device.type}. "
                     f"Performance may be poor. Consider using FP32 objective."

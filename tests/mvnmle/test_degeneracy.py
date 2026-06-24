@@ -130,9 +130,15 @@ class TestMlestDegeneracyGuard:
 
     def test_collinearity_tol_can_relax_the_guard(self):
         X = _collinear_data()
-        # A tolerance below the degenerate floor (~3e-6) lets the fit through
-        # without raising.
-        res = mlest(X, backend="cpu", algorithm="direct", collinearity_tol=1e-9)
+        # Demonstrated on the numpy inverse-Cholesky reference, whose degenerate
+        # floor is well-characterized at ~3e-6: a tolerance below that floor lets
+        # the fit through without raising. (The default forward-Cholesky path
+        # drives the collinear direction to ~1e-13 — essentially machine zero and
+        # platform-sensitive — so the relaxation window there is not a stable
+        # thing to assert on. The default path's *raise* on collinear input is
+        # covered by test_direct_collinear_raises.)
+        res = mlest(X, backend="cpu-reference", algorithm="direct",
+                    collinearity_tol=1e-9)
         assert res is not None  # no SingularMatrixError
 
     def test_full_rank_data_unaffected(self):

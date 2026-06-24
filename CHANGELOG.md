@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.17.0
+
+- **Much faster CPU MLE by default.** `mlest(..., algorithm='direct')` with
+  `backend='cpu'` (the default) now uses a PyTorch forward-Cholesky estimator in
+  double precision. It matches R's `mvnmle` to about 1e-9 and is dramatically
+  faster than the previous default — for example a 10-variable fit over 2,000
+  rows with 15% missingness completes in roughly 0.1s instead of about 100s. The
+  estimates are unchanged. This path uses PyTorch, available via the optional
+  `pystatistics[gpu]` extra.
+- **New `backend='cpu-reference'`.** Selects the original numpy reference
+  optimizer, which matches R and requires no PyTorch. Use it when you want a
+  dependency-free, independent reference fit. It is valid only with
+  `algorithm='direct'`; combining it with `algorithm='em'` or `'monotone'`
+  raises `ValueError`.
+- **Graceful behavior without PyTorch.** If PyTorch is not installed, the default
+  CPU path automatically falls back to the numpy reference and emits a warning
+  explaining how to enable the faster path. Results remain correct either way.
+- `backend='auto'` on a machine without a CUDA GPU now uses the fast CPU path
+  when PyTorch is available.
+
 ## 3.16.4
 
 - **`mlest(..., algorithm='direct')` no longer reports spurious non-convergence

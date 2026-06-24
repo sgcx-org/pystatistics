@@ -366,6 +366,19 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.17.0 — Much faster CPU MLE by default
+
+- `mlest(..., algorithm='direct')` with `backend='cpu'` (the default) now uses a
+  PyTorch forward-Cholesky estimator in double precision. It matches R's `mvnmle`
+  to about 1e-9 and is far faster than before — a 10-variable fit over 2,000 rows
+  with 15% missingness runs in roughly 0.1s instead of about 100s, with identical
+  estimates. The fast path uses PyTorch (the optional `pystatistics[gpu]` extra).
+- New `backend='cpu-reference'` selects the original numpy reference optimizer:
+  it matches R, needs no PyTorch, and is handy as a dependency-free reference. It
+  is valid only with `algorithm='direct'`.
+- Without PyTorch installed, the default CPU path falls back to the numpy
+  reference automatically (with a warning), so results stay correct everywhere.
+
 ### 3.16.4 — Correct convergence reporting for direct MLE on large datasets
 
 - `mlest(..., algorithm='direct')` no longer reports spurious non-convergence on

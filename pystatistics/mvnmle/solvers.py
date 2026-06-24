@@ -14,7 +14,7 @@ from pystatistics.mvnmle.solution import MVNSolution
 from pystatistics.mvnmle.backends.cpu import CPUMLEBackend
 
 
-BackendChoice = Literal['auto', 'cpu', 'gpu']
+BackendChoice = Literal['auto', 'cpu', 'gpu', 'cpu-reference']
 AlgorithmChoice = Literal['direct', 'em', 'monotone']
 
 
@@ -44,8 +44,11 @@ def mlest(
         Data matrix with NaN for missing values, or MVNDesign object.
     algorithm : str
         Estimation algorithm:
-        - 'direct' (default): BFGS optimization on the log-likelihood,
-          using R-exact inverse Cholesky parameterization.
+        - 'direct' (default): gradient-based optimization on the
+          log-likelihood. The parameterization depends on the backend (see
+          ``backend``): the default CPU path uses a forward-Cholesky
+          factorization; ``backend='cpu-reference'`` uses the R-exact inverse
+          Cholesky parameterization.
         - 'em': Expectation-Maximization algorithm. Typically slower to
           converge but guaranteed monotone likelihood increase.
         - 'monotone': Closed-form MLE for monotone missingness patterns
@@ -55,9 +58,16 @@ def mlest(
           for general patterns. When applicable, this is orders of
           magnitude faster than iterative algorithms.
     backend : str or None
-        Backend selection. Default None → 'cpu' (R-reference path,
-        validated for regulated-industry use). Explicit values:
-        'cpu', 'gpu', or 'auto' to prefer GPU when available.
+        Backend selection. Default None → 'cpu'.
+        - 'cpu' (and the default): fast PyTorch forward-Cholesky FP64 path
+          when PyTorch is installed; otherwise falls back (with a warning) to
+          the numpy inverse-Cholesky reference. Both match R; the PyTorch path
+          is substantially faster.
+        - 'cpu-reference': force the numpy inverse-Cholesky reference. This is
+          the R-exact validation anchor and the only direct path that needs no
+          PyTorch. Valid only with ``algorithm='direct'``.
+        - 'gpu': require a GPU (CUDA or MPS); raises if none is available.
+        - 'auto': prefer CUDA when present, else the fast CPU path.
     method : str or None
         Optimization method for direct algorithm. If None, auto-selected
         by backend. Ignored for EM.
@@ -92,10 +102,20 @@ def mlest(
     >>> print(result.muhat)
     >>> print(result.loglik)
     """
-    # Unspecified backend → CPU (R-reference path). GPU is never the
-    # default; callers must opt in explicitly or request 'auto'.
+    # Unspecified backend → CPU. GPU is never the default; callers must opt in
+    # explicitly or request 'auto'.
     if backend is None:
         backend = 'cpu'
+
+    # The numpy inverse-Cholesky reference is a direct-optimizer concept; it has
+    # no meaning for EM or the closed-form monotone solver. Fail loud (Rule 1)
+    # rather than silently ignoring the request.
+    if backend == 'cpu-reference' and algorithm != 'direct':
+        raise ValueError(
+            "backend='cpu-reference' selects the numpy inverse-Cholesky "
+            "reference optimizer and is only valid with algorithm='direct'. "
+            f"Got algorithm={algorithm!r}. Use backend='cpu' instead."
+        )
 
     # Get or build Design
     if isinstance(data_or_design, MVNDesign):
@@ -377,29 +397,65 @@ def _get_em_device(
         raise ValueError(f"Unknown backend: {backend_choice!r}")
 
 
+def _fast_cpu_backend(implicit: bool):
+    """Return the fast forward-Cholesky FP64 CPU backend, or the numpy
+    inverse-Cholesky reference when PyTorch is unavailable.
+
+    The PyTorch forward-Cholesky estimator on a CPU torch device is the fast
+    default CPU path (it beats the numpy reference substantially and matches R
+    to ~1e-9). PyTorch is an optional dependency, so on a bare install the only
+    direct path is the numpy reference; we fall back to it rather than failing.
+
+    Per Rule 1 (no silent fallbacks), an *implicit* fallback — the user asked
+    for the default/'cpu'/'auto' and got the reference because PyTorch is
+    missing — is surfaced via ``UserWarning``. An explicit ``backend=
+    'cpu-reference'`` request is silent (handled by the caller).
+    """
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        if implicit:
+            warnings.warn(
+                "PyTorch is not installed, so direct MVN MLE falls back to the "
+                "numpy inverse-Cholesky reference. This path is correct and "
+                "R-validated but substantially slower than the PyTorch "
+                "forward-Cholesky path. Install 'pystatistics[gpu]' for the "
+                "fast path, or pass backend='cpu-reference' to select the "
+                "reference explicitly and silence this warning.",
+                UserWarning, stacklevel=4,
+            )
+        return CPUMLEBackend()
+    from pystatistics.mvnmle.backends.gpu import DirectMLEBackend
+    return DirectMLEBackend(device='cpu', use_fp64=True)
+
+
 def _get_backend(choice: BackendChoice, verbose: bool = False):
     """Select backend based on user choice and hardware availability."""
     if choice == 'auto':
         device = select_device('auto')
         if device.device_type == 'cuda':
             try:
-                from pystatistics.mvnmle.backends.gpu import GPUMLEBackend
-                return GPUMLEBackend(device='cuda')
+                from pystatistics.mvnmle.backends.gpu import DirectMLEBackend
+                return DirectMLEBackend(device='cuda')
             except (ImportError, RuntimeError) as e:
                 if verbose:
                     print(f"GPU backend unavailable: {e}. Using CPU.")
-                return CPUMLEBackend()
-        # auto + MPS -> CPU (same as regression: MPS not auto-selected)
-        # auto + CPU -> CPU
-        return CPUMLEBackend()
+                return _fast_cpu_backend(implicit=True)
+        # auto + MPS -> fast CPU (MPS not auto-selected for direct)
+        # auto + CPU -> fast CPU
+        return _fast_cpu_backend(implicit=True)
 
     elif choice == 'cpu':
+        return _fast_cpu_backend(implicit=True)
+
+    elif choice == 'cpu-reference':
+        # Explicit opt-in to the R-exact numpy reference; no PyTorch needed.
         return CPUMLEBackend()
 
     elif choice == 'gpu':
         device = select_device('gpu')  # raises RuntimeError if no GPU
-        from pystatistics.mvnmle.backends.gpu import GPUMLEBackend
-        return GPUMLEBackend(device=device.device_type)
+        from pystatistics.mvnmle.backends.gpu import DirectMLEBackend
+        return DirectMLEBackend(device=device.device_type)
 
     else:
         raise ValueError(f"Unknown backend: {choice!r}")
