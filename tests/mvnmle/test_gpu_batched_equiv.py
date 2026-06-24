@@ -33,6 +33,8 @@ from pystatistics.mvnmle._objectives._batched_cholesky import (
     auto_chunk_size,
     accumulate_gradient,
     analytic_gradient,
+    analytic_value_and_gradient,
+    objective_value,
 )
 
 EPS = 1e-6
@@ -189,6 +191,49 @@ def test_analytic_gradient_matches_autodiff():
         g_ana = analytic_gradient(torch, t2, obj._unpack_gpu, obj._consts,
                                   obj.eps, obj.chunk_size).detach().numpy()
         np.testing.assert_allclose(g_ana, g_auto, rtol=1e-8, atol=1e-9)
+
+
+def test_fused_value_and_gradient_matches_separate():
+    """The fused single-pass value+gradient (``analytic_value_and_gradient``, and
+    the objective's ``compute_value_and_gradient`` wrapper around it) must return
+    exactly what the separate ``objective_value`` and ``analytic_gradient`` paths
+    return.
+
+    This guards the optimiser-loop change that folds the per-evaluation objective
+    and gradient into one device pass / one host<->device transfer: the coalescing
+    is purely a transfer-layer optimisation and must not move the value or the
+    gradient. If this drifts, the fused path is silently computing something
+    different from the validated reference — the failure mode this test exists to
+    catch."""
+    X = _make_data(seed=6, n=240, p=7)
+    obj = GPUObjectiveFP64(X, device="cpu")
+    theta = obj.get_initial_parameters()
+    for scale in (1.0, 0.9, 1.15):
+        th = theta * scale
+
+        # Reference: value via the forward path, gradient via the closed form.
+        mu, sigma = obj._unpack_gpu(torch.tensor(th, dtype=torch.float64))
+        val_ref = objective_value(torch, mu, sigma, obj._consts, obj.eps,
+                                  obj.chunk_size).item()
+        t_ref = torch.tensor(th, dtype=torch.float64, requires_grad=True)
+        g_ref = analytic_gradient(torch, t_ref, obj._unpack_gpu, obj._consts,
+                                  obj.eps, obj.chunk_size).detach().numpy()
+
+        # Fused kernel: value and gradient from one pass.
+        t_fused = torch.tensor(th, dtype=torch.float64, requires_grad=True)
+        val_f, g_f = analytic_value_and_gradient(
+            torch, t_fused, obj._unpack_gpu, obj._consts, obj.eps, obj.chunk_size)
+        np.testing.assert_allclose(val_f.item(), val_ref, rtol=1e-10)
+        np.testing.assert_allclose(g_f.detach().numpy(), g_ref,
+                                   rtol=1e-10, atol=1e-12)
+
+        # Objective wrapper: same value+gradient as compute_objective/gradient,
+        # and the gradient is returned as a writable (n_params,) float array.
+        v_w, g_w = obj.compute_value_and_gradient(th)
+        np.testing.assert_allclose(v_w, obj.compute_objective(th), rtol=1e-10)
+        np.testing.assert_allclose(g_w, obj.compute_gradient(th),
+                                   rtol=1e-10, atol=1e-12)
+        assert g_w.shape == (obj.n_params,)
 
 
 @pytest.mark.parametrize("method", ["auto", "solve", "blocked"])

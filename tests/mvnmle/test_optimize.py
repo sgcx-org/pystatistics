@@ -118,3 +118,72 @@ class TestOptimumUnchanged:
         )
         _, _, loglik = obj.extract_parameters(opt.x)
         assert abs(opt.objective_value - (-2.0 * loglik)) < 1e-6
+
+
+class _FusedAdapter:
+    """Wrap an objective to expose ``compute_value_and_gradient`` and count which
+    callables the driver actually invokes.
+
+    The fused method returns the same value/gradient as the separate callables
+    (it delegates to them), so any optimum difference is attributable purely to
+    which scipy code path was taken — exactly what the wiring tests below check.
+    """
+
+    def __init__(self, obj):
+        self._obj = obj
+        self.n_fused = 0
+        self.n_sep_obj = 0
+
+    def __getattr__(self, name):
+        return getattr(self._obj, name)
+
+    def compute_objective(self, theta):
+        self.n_sep_obj += 1
+        return self._obj.compute_objective(theta)
+
+    def compute_value_and_gradient(self, theta):
+        self.n_fused += 1
+        return self._obj.compute_objective(theta), self._obj.compute_gradient(theta)
+
+
+class TestFusedValueGradient:
+    """The driver folds value+gradient into one fused callable when the objective
+    exposes ``compute_value_and_gradient`` (one host<->device sync per eval on a
+    GPU objective), and falls back to the two-callable path otherwise."""
+
+    def test_fused_path_used_when_available(self):
+        X = _clean_data(n=2000)
+        obj = _FusedAdapter(CPUObjectiveFP64(X, validate=False))
+        opt = run_scaled_minimize(
+            obj, obj.get_initial_parameters(),
+            method='L-BFGS-B', tol=1e-5, max_iter=200,
+        )
+        assert opt.n_iter > 0
+        # The fused callable drove the optimisation; scipy never called the
+        # standalone objective callable (it is fed jac=True instead).
+        assert obj.n_fused > 0
+        assert obj.n_sep_obj == 0
+
+    def test_fallback_path_when_method_absent(self):
+        """An objective without ``compute_value_and_gradient`` (the numpy CPU
+        reference) uses the original two-callable path unchanged."""
+        X = _clean_data(n=2000)
+        obj = CPUObjectiveFP64(X, validate=False)
+        assert not hasattr(obj, 'compute_value_and_gradient')
+        opt = run_scaled_minimize(
+            obj, obj.get_initial_parameters(),
+            method='L-BFGS-B', tol=1e-5, max_iter=200,
+        )
+        assert opt.n_iter > 0
+
+    def test_fused_and_fallback_reach_same_optimum(self):
+        X = _clean_data(n=2000)
+        theta0 = CPUObjectiveFP64(X, validate=False).get_initial_parameters()
+        fused = _FusedAdapter(CPUObjectiveFP64(X, validate=False))
+        sep = CPUObjectiveFP64(X, validate=False)  # no fused method -> fallback
+        o_f = run_scaled_minimize(fused, theta0, method='BFGS',
+                                  tol=1e-8, max_iter=100000)
+        o_s = run_scaled_minimize(sep, theta0, method='BFGS',
+                                  tol=1e-8, max_iter=100000)
+        np.testing.assert_allclose(o_f.x, o_s.x, rtol=1e-6, atol=1e-7)
+        assert abs(o_f.objective_value - o_s.objective_value) < 1e-6

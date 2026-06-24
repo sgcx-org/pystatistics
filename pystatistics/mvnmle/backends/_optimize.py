@@ -146,13 +146,35 @@ def run_scaled_minimize(
     if method in ('BFGS', 'L-BFGS-B'):
         options['gtol'] = tol
 
-    opt_result = minimize(
-        scaled_objective,
-        theta0,
-        jac=scaled_gradient,
-        method=method,
-        options=options,
-    )
+    # Fused value+gradient path (Rule 1: opt-in by capability, no silent
+    # behaviour change). When the objective can return the value and gradient
+    # together, drive scipy with a single `jac=True` callable so each evaluation
+    # triggers ONE device->host synchronisation instead of two separate ones
+    # (objective then gradient). On a GPU objective at large p that sync latency
+    # dominates wall-clock — coalescing it is the main optimiser-loop saving.
+    # Objectives without this method (the numpy CPU reference) use the original
+    # two-callable path unchanged.
+    fused = getattr(objective, 'compute_value_and_gradient', None)
+    if callable(fused):
+        def scaled_value_and_gradient(theta: np.ndarray):
+            value, grad = objective.compute_value_and_gradient(theta)
+            return value / scale, grad / scale
+
+        opt_result = minimize(
+            scaled_value_and_gradient,
+            theta0,
+            jac=True,
+            method=method,
+            options=options,
+        )
+    else:
+        opt_result = minimize(
+            scaled_objective,
+            theta0,
+            jac=scaled_gradient,
+            method=method,
+            options=options,
+        )
 
     # Report the objective on the ORIGINAL scale (multiply back) so it stays
     # consistent with the log-likelihood. Report the gradient norm on the

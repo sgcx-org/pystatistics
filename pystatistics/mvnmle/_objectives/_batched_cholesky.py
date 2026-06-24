@@ -224,10 +224,9 @@ def _sigma_inv(torch, L, method: str = "auto"):
     return Linv.transpose(-1, -2) @ Linv
 
 
-def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
-                      chunk_size=None, method: str = "auto"):
-    """Gradient of ``-2 log L`` w.r.t. ``theta`` via the closed-form matrix
-    gradient, avoiding automatic differentiation through ``cholesky``.
+def analytic_value_and_gradient(torch, theta, unpack, consts: dict, eps: float,
+                                chunk_size=None, method: str = "auto"):
+    """Objective value AND gradient of ``-2 log L`` in a *single* device pass.
 
     The per-pattern objective $n_k\\log|\\Sigma_k| + \\mathrm{tr}(\\Sigma_k^{-1}M_k)$
     has the closed-form partials
@@ -239,11 +238,22 @@ def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
     reconstruction---so no gradient flows through ``cholesky`` or the matrix
     inverse. On Metal this replaces a ~20s Cholesky-backward (at p=100, tens of
     thousands of patterns) with milliseconds; results are identical to
-    reverse-mode autodiff. ``unpack`` is a callable ``theta -> (mu, sigma)``.
-    Returns the gradient tensor.
+    reverse-mode autodiff.
+
+    The objective value is read off the SAME per-chunk intermediates the gradient
+    already forms: ``logdet`` from the Cholesky factor ``L`` and the trace from the
+    explicit ``Sinv`` (``tr(Sigma^{-1} M) = sum(Sinv * M)``), so it costs only two
+    extra reductions and no extra factorisation. Returning both lets the optimiser
+    driver fold value and gradient into one host<->device sync per evaluation
+    instead of two (the dominant end-to-end cost on MPS at large p).
+
+    ``unpack`` is a callable ``theta -> (mu, sigma)``. Returns ``(value, grad)`` as
+    device tensors (a 0-d scalar and a ``(n_params,)`` vector) so the caller can
+    coalesce them into a single device->host transfer.
     """
     P = consts["obs_idx"].shape[0]
-    total = None
+    total_grad = None
+    total_val = None
     for s, e in chunk_bounds(P, chunk_size):
         cc = _slice_consts(consts, s, e)
         idx = cc["obs_idx"]
@@ -271,11 +281,33 @@ def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
             g_sig = (nb * Sinv - (Sinv @ M) @ Sinv) * mo            # dF/d(gathered sig)
             g_mu = (-2.0 * n_k.view(-1, 1)
                     * (Sinv @ delta[:, :, None]).squeeze(-1)) * maskf  # dF/d(gathered mu_k)
+            # Objective value from the same intermediates (no extra factorisation):
+            #   F = sum_k [ n_k log|Sigma_k| + tr(Sigma_k^{-1} M_k) ].
+            logdet = 2.0 * torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(-1)
+            val = (n_k * logdet + (Sinv * M).sum((-2, -1))).sum()
 
         g = torch.autograd.grad(outputs=[sig, mu_k], inputs=theta,
                                 grad_outputs=[g_sig, g_mu])[0]
-        total = g if total is None else total + g
-    return total
+        total_grad = g if total_grad is None else total_grad + g
+        total_val = val if total_val is None else total_val + val
+    return total_val, total_grad
+
+
+def analytic_gradient(torch, theta, unpack, consts: dict, eps: float,
+                      chunk_size=None, method: str = "auto"):
+    """Gradient of ``-2 log L`` w.r.t. ``theta`` via the closed-form matrix
+    gradient, avoiding automatic differentiation through ``cholesky``.
+
+    Thin wrapper over :func:`analytic_value_and_gradient` that discards the
+    objective value, kept as the gradient-only entry point for callers that do
+    not also need the value (e.g. the standalone ``compute_gradient`` path and the
+    Hessian setup). The two share one implementation so the closed-form gradient
+    cannot drift between them. ``unpack`` is a callable ``theta -> (mu, sigma)``.
+    Returns the gradient tensor.
+    """
+    _, grad = analytic_value_and_gradient(
+        torch, theta, unpack, consts, eps, chunk_size, method)
+    return grad
 
 
 def batched_neg2_loglik(torch, mu, sigma, consts: dict, eps: float,

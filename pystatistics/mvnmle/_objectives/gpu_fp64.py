@@ -18,6 +18,7 @@ from ._batched_cholesky import (
     unpack_cholesky,
     objective_value,
     analytic_gradient,
+    analytic_value_and_gradient,
     auto_chunk_size,
 )
 
@@ -197,6 +198,34 @@ class GPUObjectiveFP64(MLEObjectiveBase):
             self._consts, self.eps, self.chunk_size)
 
         return grad_tensor.cpu().numpy()
+
+    def compute_value_and_gradient(self, theta: np.ndarray) -> Tuple[float, np.ndarray]:
+        """Objective (-2 log L) and its gradient in one device pass, returned via
+        a single device->host transfer.
+
+        The optimiser driver calls this instead of ``compute_objective`` +
+        ``compute_gradient`` separately so each evaluation pays the host<->device
+        synchronisation ONCE (one ``.cpu()``), not twice. This halves the per-eval
+        round-trips on every device; the win is largest on MPS, where sync latency
+        dominates the end-to-end fit at large p. The value and gradient come from
+        the same closed-form intermediates as ``compute_gradient`` (no autodiff
+        through ``cholesky``), so estimates are unchanged."""
+        torch = self.torch
+
+        theta_gpu = torch.tensor(
+            theta,
+            device=self.device,
+            dtype=self.dtype,
+            requires_grad=True
+        )
+
+        val, grad = analytic_value_and_gradient(
+            torch, theta_gpu, self._unpack_gpu,
+            self._consts, self.eps, self.chunk_size)
+
+        # Coalesce scalar + gradient into ONE device->host copy (single sync).
+        packed = torch.cat([val.reshape(1), grad]).cpu().numpy()
+        return float(packed[0]), packed[1:]
 
     def compute_hessian(self, theta: np.ndarray) -> np.ndarray:
         """Compute Hessian matrix using automatic differentiation."""
