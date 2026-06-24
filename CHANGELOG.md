@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.18.0
+
+- **Faster GPU MVN MLE on Apple Silicon.** `mlest(..., algorithm='direct',
+  backend='gpu')` now computes each optimizer step's objective value and gradient
+  in a single GPU pass with one device-to-host transfer, instead of two separate
+  passes and transfers. On Apple Silicon (MPS), where that transfer latency
+  dominates wide-data fits, the per-evaluation cost at 100 variables over 50,000
+  rows drops by roughly 1.9x (about 4.7s to 2.5s per evaluation); NVIDIA CUDA fits
+  are also modestly faster. Estimates and log-likelihood are unchanged.
+
 ## 3.17.0
 
 - **Much faster CPU MLE by default.** `mlest(..., algorithm='direct')` with

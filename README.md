@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.18.0 — Faster GPU MVN MLE on Apple Silicon
+
+- `mlest(..., algorithm='direct', backend='gpu')` now evaluates the objective and
+  its gradient in a single GPU pass per optimizer step, with one device-to-host
+  transfer instead of two. On Apple Silicon (MPS) this roughly halves the
+  per-evaluation cost on wide data — about 1.9x faster at 100 variables over
+  50,000 rows — and also speeds up NVIDIA CUDA fits. Estimates are unchanged.
+
 ### 3.17.0 — Much faster CPU MLE by default
 
 - `mlest(..., algorithm='direct')` with `backend='cpu'` (the default) now uses a
