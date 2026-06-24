@@ -4,14 +4,12 @@ CPU backend for MVN MLE using BFGS optimization.
 Uses the R-exact CPUObjectiveFP64 with scipy.optimize.minimize.
 """
 
-import numpy as np
-from scipy.optimize import minimize
-
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
 from pystatistics.mvnmle.design import MVNDesign
 from pystatistics.mvnmle.solution import MVNParams
 from pystatistics.mvnmle._objectives.cpu import CPUObjectiveFP64
+from pystatistics.mvnmle.backends._optimize import run_scaled_minimize
 
 
 class CPUMLEBackend:
@@ -64,30 +62,21 @@ class CPUMLEBackend:
         with timer.section('initial_parameters'):
             theta0 = objective.get_initial_parameters()
 
-        # Run optimization
+        # Run optimization on the per-observation-scaled objective so that
+        # `gtol` is a meaningful, dataset-size-invariant convergence test
+        # (see backends/_optimize.py). Scaling does not move the optimum, so
+        # the estimates and log-likelihood below are unchanged.
         with timer.section('optimization'):
-            opt_result = minimize(
-                objective.compute_objective,
-                theta0,
-                jac=objective.compute_gradient,
-                method=method,
-                options={
-                    'maxiter': max_iter,
-                    'gtol': tol,
-                }
+            opt = run_scaled_minimize(
+                objective, theta0, method=method, tol=tol, max_iter=max_iter
             )
 
-        # Extract parameters
+        # Extract parameters from the (unscaled) objective.
         with timer.section('parameter_extraction'):
-            mu, sigma, loglik = objective.extract_parameters(opt_result.x)
+            mu, sigma, loglik = objective.extract_parameters(opt.x)
 
-        # Compute gradient norm
-        grad_norm = None
-        if hasattr(opt_result, 'jac') and opt_result.jac is not None:
-            grad_norm = float(np.max(np.abs(opt_result.jac)))
-
-        if not opt_result.success:
-            msg = getattr(opt_result, 'message', 'Unknown convergence failure')
+        if not opt.success:
+            msg = opt.message or 'Unknown convergence failure'
             warnings_list.append(f"Optimization did not converge: {msg}")
 
         timer.stop()
@@ -96,19 +85,19 @@ class CPUMLEBackend:
             muhat=mu,
             sigmahat=sigma,
             loglik=loglik,
-            n_iter=getattr(opt_result, 'nit', 0),
-            converged=opt_result.success,
-            gradient_norm=grad_norm,
+            n_iter=opt.n_iter,
+            converged=opt.success,
+            gradient_norm=opt.gradient_norm,
         )
 
         return Result(
             params=params,
             info={
                 'method': method,
-                'objective_value': float(opt_result.fun),
-                'n_function_evals': getattr(opt_result, 'nfev', 0),
-                'n_gradient_evals': getattr(opt_result, 'njev', 0),
-                'message': getattr(opt_result, 'message', ''),
+                'objective_value': opt.objective_value,
+                'n_function_evals': opt.n_function_evals,
+                'n_gradient_evals': opt.n_gradient_evals,
+                'message': opt.message,
                 'parameterization': 'inverse_cholesky',
             },
             timing=timer.result(),

@@ -366,6 +366,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.16.4 — Correct convergence reporting for direct MLE on large datasets
+
+- `mlest(..., algorithm='direct')` no longer reports spurious non-convergence on
+  large datasets. The optimizer now judges convergence on a per-observation
+  scale, so a good fit on tens of thousands of rows is correctly flagged as
+  converged instead of warning "Optimization did not converge". The estimates and
+  log-likelihood are unchanged; the fix applies to the CPU and GPU backends.
+- `little_mcar_test` no longer raises a spurious non-convergence error on large,
+  well-conditioned data whose underlying fit had actually converged.
+
 ### 3.16.3 — Faster GPU ordered-factor imputation on Apple Silicon
 
 - GPU `mice` imputation of ordered factors (`polr`) is faster on Apple Silicon

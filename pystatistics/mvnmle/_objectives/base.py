@@ -68,6 +68,13 @@ class MLEObjectiveBase:
         self.patterns = self._extract_patterns()
         self.n_patterns = len(self.patterns)
 
+        # Number of observed (non-missing) scalar values across the dataset.
+        # Used by the optimisation driver to scale the summed -2*log-likelihood
+        # to a per-observation mean, so the gradient magnitude is O(1) and
+        # scipy's `gtol` is a meaningful, dataset-size-invariant convergence
+        # test (see backends/_optimize.py).
+        self.n_observed_scalars = int(self.presence_absence.sum())
+
         # Compute sample statistics for subclasses
         self.sample_mean = np.nanmean(self.original_data, axis=0)
         self.sample_cov = self._compute_sample_covariance()

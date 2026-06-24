@@ -148,23 +148,78 @@ class TestMissvalsDataset:
         assert result.sigmahat.shape == (5, 5)
 
 
-class TestDirectNonConvergence:
-    """Document known limitation: direct optimizer does not converge on
-    pathological small-n/high-missingness datasets like missvals.
+class TestDirectReachesOptimumOnMissvals:
+    """The direct optimizer reaches R's optimum on missvals.
 
-    This is a fail-loud contract: the result correctly signals
-    ``converged=False`` and the user is expected to check it or use EM.
+    Earlier the direct optimizer wandered far from the optimum here (it exhausted
+    max_iter with a meaningless last iterate). Scaling the objective to a
+    per-observation mean conditions the problem so the optimizer reaches R's
+    maximum-likelihood solution.
+
+    Note on the ``converged`` flag: missvals is a hard, tiny-n (n=13, p=5),
+    high-missingness problem whose per-observation gradient floor sits near the
+    default ``gtol`` and lands on either side of it depending on platform
+    floating-point (it flags True on some, False on others). The estimates are
+    correct regardless, so we assert the estimates match R rather than the flag.
+    Robust convergence-flag coverage lives in TestConvergenceFlag, which uses a
+    large-objective fit where scaling gives ample margin.
     """
 
-    def test_direct_reports_non_convergence_on_missvals(self):
-        """Direct optimizer must signal non-convergence rather than
-        silently returning a meaningless answer."""
+    def test_direct_missvals_matches_r_reference(self, missvals_ref):
         result = mlest(datasets.missvals, algorithm='direct', backend='cpu',
-                       max_iter=500)
+                       max_iter=2000)
+        assert abs(result.loglik - missvals_ref['loglik']) < 1e-5, (
+            f"loglik {result.loglik} != R reference {missvals_ref['loglik']}"
+        )
+        np.testing.assert_allclose(
+            result.muhat, missvals_ref['muhat'], rtol=1e-3, atol=1e-3
+        )
+
+
+class TestConvergenceFlag:
+    """The ``converged`` flag must reflect genuine stationarity, not the
+    magnitude of the (summed) objective.
+
+    Regression guard for the false-negative bug: on large datasets the summed
+    -2*log-likelihood is large enough that scipy's absolute ``gtol`` test could
+    never be met, so good fits were reported as ``converged=False``. Scaling the
+    objective to a per-observation mean fixes the flag without suppressing it.
+    """
+
+    @staticmethod
+    def _clean_data(n, p=5, seed=0):
+        """Well-conditioned MCAR data with no all-missing rows."""
+        rng = np.random.default_rng(seed)
+        A = rng.standard_normal((p, p))
+        sigma = A @ A.T + p * np.eye(p)  # well-conditioned PD covariance
+        mu = rng.standard_normal(p)
+        X = mu + rng.standard_normal((n, p)) @ np.linalg.cholesky(sigma).T
+        mask = rng.random((n, p)) < 0.15
+        mask[mask.all(axis=1)] = False  # avoid all-missing rows
+        X[mask] = np.nan
+        return X
+
+    def test_clean_large_n_fit_converges(self):
+        """A clean, well-conditioned fit with a large summed objective must
+        report ``converged=True``."""
+        X = self._clean_data(n=5000)
+        result = mlest(X, backend='cpu', algorithm='direct')
+        assert result.converged, (
+            "Clean well-conditioned fit should converge; a False flag here is "
+            "the objective-scale false negative this fix addresses."
+        )
+        assert np.all(np.isfinite(result.muhat))
+        assert np.all(np.isfinite(result.sigmahat))
+
+    def test_starved_fit_reports_non_convergence(self):
+        """A genuinely starved fit (too few iterations to reach the optimum)
+        must still report ``converged=False`` — the fix must not blanket-suppress
+        the flag."""
+        X = self._clean_data(n=5000)
+        result = mlest(X, backend='cpu', algorithm='direct', max_iter=2)
         assert not result.converged, (
-            "Direct optimizer is expected to fail to converge on missvals "
-            "(n=13, p=5 with high missingness); if it now converges, "
-            "remove this test or tighten the assertion."
+            "A 2-iteration fit is far from the optimum and must report "
+            "non-convergence."
         )
 
 

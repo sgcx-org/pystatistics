@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.16.4
+
+- **`mlest(..., algorithm='direct')` no longer reports spurious non-convergence
+  on large datasets.** The direct optimizer judged convergence on the magnitude
+  of its objective's gradient, which grows with the number of observations. On
+  large datasets (tens of thousands of rows) the fit could reach the
+  maximum-likelihood solution and still report `converged=False` with an
+  "Optimization did not converge" warning, because floating-point precision
+  prevented the raw gradient from meeting the tolerance at that scale. The
+  optimizer now measures convergence on a per-observation scale, so the flag is
+  meaningful and independent of dataset size. The estimates and log-likelihood
+  are unchanged — only the convergence determination is corrected. Applies to
+  the CPU and GPU backends.
+- As a consequence, `little_mcar_test` no longer raises a spurious
+  "ML estimation did not converge" error on large, well-conditioned datasets
+  whose underlying fit had in fact converged.
+- `MVNSolution.gradient_norm` for the direct optimizer is now reported on the
+  same per-observation scale used for the convergence test, so a small value
+  corresponds to a converged fit. The reported log-likelihood is unchanged.
+
 ## 3.16.3
 
 - **Faster GPU ordered-factor (`polr`) imputation on Apple Silicon.** The line

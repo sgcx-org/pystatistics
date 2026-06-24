@@ -78,28 +78,42 @@ def test_sklearn_demo_datasets_complete(loader_name):
     assert 0.0 <= result.p_value <= 1.0
 
 
-def test_unconverged_mle_raises_not_silently_returned():
+def test_unconverged_mle_raises_not_silently_returned(monkeypatch):
     """Rule 1: never return a chi-square built on non-MLE estimates.
 
-    Forcing algorithm='direct' with a miserly max_iter on
-    many-pattern data reliably fails to converge; the function must
-    refuse to fabricate a statistic from whatever the optimizer's
-    last iterate happened to be.
+    When the underlying ML estimation does not converge, ``little_mcar_test``
+    must refuse to fabricate a statistic from whatever the optimizer's last
+    iterate happened to be — it must raise.
+
+    The convergence flag is now scale-invariant, so realistic many-pattern data
+    converges rather than exhausting ``max_iter`` (and ``little_mcar_test`` does
+    not forward ``max_iter`` anyway). We therefore drive the branch directly:
+    force ``mlest`` to report ``converged=False`` and assert the guard fires.
     """
     rng = np.random.default_rng(0)
-    X = rng.standard_normal((200, 13))
+    X = rng.standard_normal((40, 4))
     X[rng.random(X.shape) < 0.15] = np.nan
-    # This combination previously returned a noise statistic silently.
-    # mlest's max_iter lives on mlest, not on little_mcar_test — so
-    # we drive the convergence failure by asking for BFGS with a
-    # token iteration budget via the underlying mlest flag, which
-    # little_mcar_test does not currently forward. Instead, we
-    # exercise the convergence check by invoking mlest directly
-    # with a clipped budget and then walking through the same
-    # wrapping RuntimeError the mcar_test would emit. Easiest path:
-    # pass algorithm='direct' (which on this shape will exhaust the
-    # default max_iter=100 with our Python-loop pattern objective).
-    from pystatistics.mvnmle import little_mcar_test
+
+    from pystatistics.mvnmle import solvers
+
+    real_mlest = solvers.mlest
+
+    class _NonConverged:
+        """Genuine estimates, but flagged not-converged, so the mcar guard
+        (not a downstream NaN) is what raises."""
+
+        def __init__(self, real):
+            self.muhat = real.muhat
+            self.sigmahat = real.sigmahat
+            self.loglik = real.loglik
+            self.n_iter = real.n_iter
+            self.converged = False
+
+    def non_converged_mlest(*args, **kwargs):
+        return _NonConverged(real_mlest(*args, **kwargs))
+
+    monkeypatch.setattr(solvers, "mlest", non_converged_mlest)
+
     with pytest.raises(RuntimeError, match="did not converge"):
         little_mcar_test(X, algorithm="direct")
 
