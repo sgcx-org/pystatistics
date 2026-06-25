@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pystatsval"
+version = "0.1.0"
+description = "pystatistics validation harness core (not shipped in the pystatistics wheel)"
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+gpu = ["torch"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pystatsval"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
