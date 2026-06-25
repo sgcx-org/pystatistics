@@ -16,6 +16,6 @@ the pystatistics-validation repo's ``drivers/`` and import this package.
 
 from __future__ import annotations
 
-from . import device, estimates, record, rrunner, serialize, timing
+from . import device, estimates, measure, record, rrunner, serialize, timing
 
-__all__ = ["timing", "record", "estimates", "device", "serialize", "rrunner"]
+__all__ = ["timing", "measure", "record", "estimates", "device", "serialize", "rrunner"]

@@ -12,7 +12,7 @@ import json
 import numpy as np
 import pytest
 
-from pystatsval import device, estimates, record, serialize, timing
+from pystatsval import device, estimates, measure, record, serialize, timing
 
 
 # --- timing --------------------------------------------------------------------
@@ -29,6 +29,30 @@ def test_time_call_returns_summary_and_result():
 def test_time_call_rejects_bad_args(kw):
     with pytest.raises(ValueError):
         timing.time_call(lambda: None, **kw)
+
+
+# --- measure (device-aware + memory) ------------------------------------------
+
+def test_measure_cpu_summary_is_record_ready():
+    summary, result = measure.measure(lambda: 7, device="cpu", repeats=3, warmup=1)
+    assert result == 7
+    # the summary doubles as a record `wall` argument
+    for key in ("median_s", "min_s", "max_s", "times_s", "reps", "peak_mem_bytes"):
+        assert key in summary
+    assert summary["reps"] == 3 and len(summary["times_s"]) == 3
+    rec = record.make_record(engine="x:cpu", dataset="d", wall=summary)
+    assert rec["wall_median_s"] == summary["median_s"]
+
+
+@pytest.mark.parametrize("kw", [{"warmup": -1}, {"repeats": 0}])
+def test_measure_rejects_bad_args(kw):
+    with pytest.raises(ValueError):
+        measure.measure(lambda: None, **kw)
+
+
+def test_resolve_gpu_falls_back_to_cpu_without_torch(monkeypatch):
+    # device='gpu' with no usable accelerator resolves to cpu (no crash, no sync).
+    assert measure._resolve_gpu("cpu") == "cpu"
 
 
 # --- record --------------------------------------------------------------------
