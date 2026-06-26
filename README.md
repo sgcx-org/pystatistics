@@ -366,6 +366,20 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.19.0 — GLM on Apple Silicon GPUs, faster GPU OLS and count models
+
+- Generalized linear models (`fit(..., family=...)` with `backend='gpu'`) now run
+  on Apple Silicon GPUs. Logistic, Poisson, Gamma, and negative-binomial fits
+  previously errored on Metal; the IRLS inner step now uses a Metal-supported
+  Cholesky solve, matching the CPU result to single-precision rounding and running
+  several times faster than the CPU on large problems. CUDA GLM fits are faster too.
+- GPU ordinary least squares no longer decomposes the full design matrix on every
+  fit to check conditioning — it uses the small cross-product matrix instead, with
+  identical results. Small and medium OLS fits on Apple Silicon are up to ~3x faster.
+- Negative-binomial and Gamma fits are about 2x faster (vectorized deviance
+  residuals); a negative-binomial fit is now faster than R's `MASS::glm.nb`.
+  Results are unchanged.
+
 ### 3.18.0 — Faster GPU MVN MLE on Apple Silicon
 
 - `mlest(..., algorithm='direct', backend='gpu')` now evaluates the objective and

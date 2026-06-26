@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.19.0
+
+- **GLM (`fit(..., family=...)`) now runs on Apple Silicon GPUs.** Logistic,
+  Poisson, Gamma, and negative-binomial fits with `backend='gpu'` previously
+  failed on Apple Silicon (Metal/MPS) with a "GPU LSTSQ failed" error, because the
+  IRLS inner solve relied on an operation Metal does not implement. The inner step
+  now uses a Cholesky solve of the weighted normal equations, which runs on Metal.
+  GLM fits on Apple Silicon match the CPU result to single-precision rounding and,
+  on large problems, run several times faster than the CPU. CUDA GLM fits are also
+  faster (the smaller per-iteration solve replaces a full least-squares solve).
+- **Faster GPU ordinary least squares.** The GPU OLS path computed a full
+  singular-value decomposition of the whole design matrix on every fit just to
+  check conditioning — and on Apple Silicon that decomposition fell back to the
+  CPU, copying the entire design across the bus each time. The conditioning check
+  now uses the small p×p cross-product matrix instead, leaving results unchanged
+  while removing that cost; small and medium OLS fits on Apple Silicon are up to
+  ~3x faster.
+- **Faster negative-binomial and Gamma fits.** Deviance residuals for these
+  families were computed with a per-observation Python loop; they are now
+  vectorized. A negative-binomial fit on a typical dataset is about 2x faster
+  (now faster than R's `MASS::glm.nb`). Residuals and all reported statistics are
+  unchanged.
+
 ## 3.18.0
 
 - **Faster GPU MVN MLE on Apple Silicon.** `mlest(..., algorithm='direct',

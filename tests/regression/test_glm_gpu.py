@@ -20,17 +20,24 @@ import numpy as np
 from pystatistics.regression import Design, fit, GLMSolution
 
 
-def _cuda_available():
-    """Check for CUDA specifically — MPS does not support torch.linalg.lstsq."""
+def _gpu_available():
+    """Check for any GPU (CUDA or MPS).
+
+    The GPU GLM IRLS backend now uses a Cholesky inner solve (not lstsq), which is
+    supported on Metal, so these tests run on Apple Silicon (MPS) as well as CUDA.
+    """
     try:
         import torch
-        return torch.cuda.is_available()
+        if torch.cuda.is_available():
+            return True
+        mps = getattr(torch.backends, "mps", None)
+        return bool(mps and mps.is_available())
     except ImportError:
         return False
 
 
 pytestmark = pytest.mark.skipif(
-    not _cuda_available(), reason="CUDA GPU required (MPS does not support lstsq)"
+    not _gpu_available(), reason="GPU (CUDA or MPS) required"
 )
 
 

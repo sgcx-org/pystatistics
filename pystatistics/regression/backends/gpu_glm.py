@@ -154,23 +154,31 @@ class GPUIRLSBackend:
                 z_gpu = torch.from_numpy(z_np).to(device=self.device, dtype=self.dtype)
                 w_gpu = torch.from_numpy(w_np).to(device=self.device, dtype=self.dtype)
 
-                # WLS via lstsq: transform to √w·X and √w·z
-                sqrt_w_gpu = torch.sqrt(w_gpu)
-                X_tilde = X_gpu * sqrt_w_gpu.unsqueeze(1)
-                z_tilde = z_gpu * sqrt_w_gpu
-
-                # Solve via lstsq (GPU)
-                # MPS may not support lstsq — fall back to CPU if needed
+                # WLS via the weighted normal equations (Xᵀ W X) β = Xᵀ W z,
+                # solved by Cholesky + two triangular solves. This is
+                # mathematically the same weighted least-squares step as the
+                # √w·X / √w·z lstsq formulation, but uses only Cholesky and
+                # triangular solves — which ARE supported on MPS (lstsq is NOT,
+                # so the old path failed outright on Apple Silicon) and are far
+                # cheaper than a full lstsq on the n×p system on CUDA. The p×p
+                # Gram solve also stays on-device, removing the lstsq's larger
+                # work and (on MPS) its unsupported-op fallback.
+                wX_gpu = w_gpu.unsqueeze(1) * X_gpu          # W X  (n×p)
+                XtWX = X_gpu.T @ wX_gpu                       # p×p
+                XtWz = X_gpu.T @ (w_gpu * z_gpu)             # p
                 try:
-                    lstsq_result = torch.linalg.lstsq(
-                        X_tilde, z_tilde.unsqueeze(1)
-                    )
-                    coef_gpu = lstsq_result.solution.squeeze(1)
-                except (NotImplementedError, RuntimeError):
+                    L = torch.linalg.cholesky(XtWX)
+                    sol = torch.linalg.solve_triangular(
+                        L, XtWz.unsqueeze(1), upper=False)
+                    coef_gpu = torch.linalg.solve_triangular(
+                        L.T, sol, upper=True).squeeze(1)
+                except torch._C._LinAlgError as exc:
                     raise RuntimeError(
-                        "GPU LSTSQ failed on this device. The operation is not supported "
-                        "on your GPU backend. Use backend='cpu' instead."
-                    )
+                        "GPU GLM IRLS inner solve failed: the weighted normal "
+                        "equations (XᵀWX) are not positive-definite (singular or "
+                        "collinear design). Use backend='cpu' (QR-based, more "
+                        "stable) or check for collinear predictors."
+                    ) from exc
 
                 # Update η = X @ β and μ = linkinv(η)
                 eta_gpu = X_gpu @ coef_gpu
@@ -336,6 +344,17 @@ class GPUIRLSBackend:
             with np.errstate(divide='ignore', invalid='ignore'):
                 term = np.where(y > 0, y * np.log(y / mu_c), 0.0)
             d = 2.0 * (term - (y - mu_c))
+        elif family.name == 'Gamma':
+            mu_c = np.maximum(mu, 1e-10)
+            y_safe = np.maximum(y, 1e-10)
+            d = 2.0 * ((y - mu_c) / mu_c - np.log(y_safe / mu_c))
+        elif family.name == 'negative.binomial':
+            theta = family.theta
+            mu_c = np.maximum(mu, 1e-10)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                term1 = np.where(y > 0, y * np.log(y / mu_c), 0.0)
+                term2 = (y + theta) * np.log((y + theta) / (mu_c + theta))
+            d = 2.0 * (term1 - term2)
         else:
             n = len(y)
             d = np.zeros(n, dtype=np.float64)

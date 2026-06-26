@@ -629,3 +629,32 @@ class TestEdgeCases:
         fam = NegativeBinomial(theta=None)
         r = repr(fam)
         assert 'None' in r
+
+
+class TestVectorizedDevianceResiduals:
+    """The vectorized Gamma/NB unit-deviance branches must be exact.
+
+    By definition the deviance residuals satisfy sum(d_i^2) == deviance. This
+    guards the vectorized formulas that replaced the per-observation Python loop
+    (a performance change that must not alter the residuals).
+    """
+
+    def test_nb_deviance_residuals_sum_to_deviance(self):
+        rng = np.random.default_rng(7)
+        n = 400
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, 3)) * 0.4])
+        eta = X @ np.array([1.0, 0.3, -0.2, 0.1])
+        y = rng.poisson(np.exp(eta)).astype(float)
+        result = fit(X, y, family='negative.binomial', backend='cpu')
+        assert np.sum(result.residuals_deviance ** 2) == pytest.approx(
+            result.deviance, rel=1e-9)
+
+    def test_gamma_deviance_residuals_sum_to_deviance(self):
+        rng = np.random.default_rng(8)
+        n = 300
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, 2)) * 0.3])
+        mu = np.exp(X @ np.array([1.0, 0.2, -0.1]))
+        y = rng.gamma(shape=3.0, scale=mu / 3.0)
+        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        assert np.sum(result.residuals_deviance ** 2) == pytest.approx(
+            result.deviance, rel=1e-9)

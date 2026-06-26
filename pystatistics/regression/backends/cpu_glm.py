@@ -283,9 +283,24 @@ class CPUIRLSBackend:
             with np.errstate(divide='ignore', invalid='ignore'):
                 term = np.where(y > 0, y * np.log(y / mu_c), 0.0)
             d = 2.0 * (term - (y - mu_c))
+        elif family.name == 'Gamma':
+            # Unit deviance 2*((y-μ)/μ - log(y/μ)); matches GammaFamily.deviance.
+            mu_c = np.maximum(mu, 1e-10)
+            y_safe = np.maximum(y, 1e-10)
+            d = 2.0 * ((y - mu_c) / mu_c - np.log(y_safe / mu_c))
+        elif family.name == 'negative.binomial':
+            # Unit deviance 2*(y*log(y/μ) - (y+θ)*log((y+θ)/(μ+θ))); matches
+            # NegativeBinomial.deviance. θ is the fitted dispersion on the family.
+            theta = family.theta
+            mu_c = np.maximum(mu, 1e-10)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                term1 = np.where(y > 0, y * np.log(y / mu_c), 0.0)
+                term2 = (y + theta) * np.log((y + theta) / (mu_c + theta))
+            d = 2.0 * (term1 - term2)
         else:
-            # Fallback: numerical unit deviance from total deviance
-            # This is slow but correct for any family
+            # Fallback: per-observation unit deviance from total deviance.
+            # Correct for any family but slow (Python loop) — the common
+            # families above are vectorized, so this only runs for unusual ones.
             n = len(y)
             d = np.zeros(n, dtype=np.float64)
             ones = np.ones(1, dtype=np.float64)

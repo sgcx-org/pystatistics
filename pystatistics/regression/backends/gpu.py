@@ -117,13 +117,27 @@ class GPUQRBackend:
             X = torch.from_numpy(X_np).to(device=self.device, dtype=self.dtype)
             y = torch.from_numpy(y_np).to(device=self.device, dtype=self.dtype)
 
-        # Condition number check via singular values
-        # svdvals not implemented on MPS — fall back to CPU for this check
+        # Compute normal equations (needed for the Cholesky solve regardless).
+        with timer.section('normal_equations'):
+            XtX = X.T @ X
+            Xty = X.T @ y
+
+        # Condition number check on the p×p Gram matrix instead of the n×p
+        # design: cond(X) = sqrt(cond(X'X)). svdvals on a p×p matrix is orders of
+        # magnitude cheaper than on n×p, and on MPS (which has no svdvals) it
+        # downloads only the tiny p×p Gram, not the full design (previously the
+        # whole n×p matrix round-tripped to the CPU on every solve). The fp32
+        # Cholesky below remains the hard backstop: a genuinely ill-conditioned
+        # X'X fails it and is refused, so this pre-check only needs to flag the
+        # clearly-bad cases early with a helpful message.
         with timer.section('condition_check'):
             try:
-                sv = torch.linalg.svdvals(X)
+                sv_gram = torch.linalg.svdvals(XtX)
             except (NotImplementedError, RuntimeError):
-                sv = torch.linalg.svdvals(X.cpu()).to(X.device)
+                sv_gram = torch.linalg.svdvals(XtX.cpu()).to(X.device)
+            # Singular values of X are the sqrt of the eigen/singular values of
+            # X'X; used for both the condition number and the rank fallback below.
+            sv = torch.sqrt(torch.clamp(sv_gram, min=0.0))
             sv_min = float(sv[-1].item())
             sv_max = float(sv[0].item())
             cond = sv_max / sv_min if sv_min > 0 else float('inf')
@@ -140,11 +154,6 @@ class GPUQRBackend:
                 f"  - Use ridge regression (different estimator)\n"
                 f"  - Pass force=True to proceed with Cholesky anyway"
             )
-
-        # Compute normal equations
-        with timer.section('normal_equations'):
-            XtX = X.T @ X
-            Xty = X.T @ y
 
         # Cholesky solve with lstsq fallback
         warnings_list = []
