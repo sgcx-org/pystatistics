@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.19.1
+
+- **GPU GLM now fails loudly instead of returning a wrong fit.** A generalized
+  linear model fit with `backend='gpu'` for a log-link family (Poisson or Gamma) at
+  large sample size could, in float32, fail to converge and return non-converged
+  coefficients — most often on Apple Silicon, which has no float64. It now raises a
+  clear `NumericalError` telling you to re-run with `backend='cpu'` for a correct
+  double-precision fit, rather than returning unreliable numbers. Small and medium
+  GLM fits, and large fits on CUDA hardware (which converge), are unaffected.
+
 ## 3.19.0
 
 - **GLM (`fit(..., family=...)`) now runs on Apple Silicon GPUs.** Logistic,

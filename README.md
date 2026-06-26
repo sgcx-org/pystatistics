@@ -366,6 +366,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.19.1 — Correctness fix for large GPU GLM fits
+
+- A GLM fit with `backend='gpu'` for a log-link family (Poisson/Gamma) at large
+  sample size could fail to converge in float32 (especially on Apple Silicon) and
+  return non-converged coefficients. It now raises a clear error pointing you to
+  `backend='cpu'` for a correct fit, instead of returning unreliable numbers.
+  Small/medium GLM fits and large fits on CUDA are unaffected.
+
 ### 3.19.0 — GLM on Apple Silicon GPUs, faster GPU OLS and count models
 
 - Generalized linear models (`fit(..., family=...)` with `backend='gpu'`) now run

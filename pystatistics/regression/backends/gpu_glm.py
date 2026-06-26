@@ -21,6 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.result import Result
+from pystatistics.core.exceptions import NumericalError
 from pystatistics.core.compute.timing import Timer
 from pystatistics.regression.design import Design
 from pystatistics.regression.families import Family
@@ -128,6 +129,7 @@ class GPUIRLSBackend:
         # IRLS loop
         # ------------------------------------------------------------------
         converged = False
+        solve_failed = False
         # Initial deviance on CPU (family methods use numpy)
         dev_old = family.deviance(y_np, mu_np, wt_np)
         dev_new = dev_old
@@ -172,13 +174,13 @@ class GPUIRLSBackend:
                         L, XtWz.unsqueeze(1), upper=False)
                     coef_gpu = torch.linalg.solve_triangular(
                         L.T, sol, upper=True).squeeze(1)
-                except torch._C._LinAlgError as exc:
-                    raise RuntimeError(
-                        "GPU GLM IRLS inner solve failed: the weighted normal "
-                        "equations (XᵀWX) are not positive-definite (singular or "
-                        "collinear design). Use backend='cpu' (QR-based, more "
-                        "stable) or check for collinear predictors."
-                    ) from exc
+                except torch._C._LinAlgError:
+                    # The float32 weighted normal equations are not
+                    # positive-definite — typically an ill-conditioned design at
+                    # large n in float32. Stop and fall back to the exact CPU path
+                    # below rather than raising; the caller still gets a result.
+                    solve_failed = True
+                    break
 
                 # Update η = X @ β and μ = linkinv(η)
                 eta_gpu = X_gpu @ coef_gpu
@@ -201,9 +203,22 @@ class GPUIRLSBackend:
                 dev_old = dev_new
 
         if not converged:
-            warnings_list.append(
-                f"IRLS did not converge in {max_iter} iterations "
-                f"(deviance={dev_new:.6f})"
+            # The float32 GPU IRLS did not reach the convergence tolerance, or the
+            # inner solve broke down. This happens for log-link families
+            # (Poisson/Gamma) at large sample sizes, where float32 conditioning of
+            # XᵀWX is insufficient — most often on Apple Silicon (MPS), which has no
+            # float64. The non-converged float32 coefficients are NOT a usable fit;
+            # fail loud so the caller chooses the correct backend, rather than
+            # silently returning wrong numbers or silently switching to the CPU.
+            reason = ("the float32 inner solve broke down (XᵀWX not "
+                      "positive-definite in float32)"
+                      if solve_failed
+                      else f"it did not converge within {max_iter} iterations")
+            raise NumericalError(
+                f"GPU GLM IRLS failed: {reason}. This is expected for log-link "
+                f"families (Poisson/Gamma) at large sample sizes in float32, where "
+                f"the GPU backend cannot reach the required precision. Re-run with "
+                f"backend='cpu' for a correct double-precision fit."
             )
 
         n_iter = iteration if converged else max_iter

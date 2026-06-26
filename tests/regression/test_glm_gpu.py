@@ -18,6 +18,7 @@ import pytest
 import numpy as np
 
 from pystatistics.regression import Design, fit, GLMSolution
+from pystatistics.core.exceptions import NumericalError
 
 
 def _gpu_available():
@@ -336,3 +337,28 @@ class TestGLMGPUStress:
             gpu_result.coefficients, cpu_result.coefficients
         )[0, 1]
         assert corr > 0.9999
+
+    def test_huge_loglink_converges_or_raises(self):
+        """Contract at very large n+p in float32: the GPU GLM must EITHER converge
+        to the CPU result OR raise NumericalError. It must never silently return
+        non-converged (wrong) coefficients. At 200k x 128 the float32 conditioning
+        of XtWX is often insufficient (especially on MPS, which has no float64), so
+        a loud failure is the correct outcome — not a wrong answer, not a silent
+        switch to the CPU."""
+        n, p = 200_000, 128
+        rng = np.random.default_rng(0)
+        X = np.column_stack([np.ones(n), rng.standard_normal((n, p))])
+        eta = X @ (rng.standard_normal(p + 1) * 0.4 / np.sqrt(p))
+        y = rng.poisson(np.exp(eta)).astype(np.float64)
+        design = Design.from_arrays(X, y)
+        cpu = fit(design, family='poisson', backend='cpu')
+        try:
+            gpu = fit(design, family='poisson', backend='gpu')
+        except NumericalError:
+            return  # failed loud — acceptable per the contract
+        # If it did NOT raise, it must be a genuinely converged, correct fit.
+        assert gpu.converged
+        rel = np.max(np.abs(gpu.coefficients - cpu.coefficients)
+                     / np.maximum(np.abs(cpu.coefficients), 1e-8))
+        assert rel < 1e-2, (
+            f"GPU returned non-converged coefficients without raising (rel={rel:.2e})")
