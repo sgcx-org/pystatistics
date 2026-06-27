@@ -102,7 +102,13 @@ lowercase words, no dots, no single-letter codes); **A2** — a test's null valu
 is named for the quantity it constrains (`pop_mean` for a population mean, else
 `null_value`); **A3** — the Wald statistic accessor is `.t_values` (t-reference:
 linear models, LMM) or `.z_values` (normal reference: GLM, GLMM, ordinal,
-multinomial, Cox), never `.test_statistics`/`.z_statistics`/`.t_statistics`.
+multinomial, Cox), never `.test_statistics`/`.z_statistics`/`.t_statistics`;
+**A5** — the naming law governs the public API surface (parameters, accessors,
+option values, repr labels); purely internal identifiers are implementation
+detail, but the reserved taxonomy selectors and Wald accessors are protected
+library-wide, so a private field must not repurpose one for another concept
+(resolved: internal `OrdinalParams.method`→`link`, `GLMMParams.t_values`→
+`z_values`; `LMMParams.t_values` unchanged — it genuinely holds t-statistics).
 
 #### Result/Solution object consistency (breaking)
 
@@ -120,6 +126,12 @@ multinomial, Cox), never `.test_statistics`/`.z_statistics`/`.t_statistics`.
 - **Result accessors aligned with their renamed parameters**:
   `OrdinalSolution.method`→`.link`, `MultinomialSolution.class_names`→
   `.category_names`, `LeveneSolution.center`→`.location`.
+- **`.n_iter` added to `LMMSolution` and `GLMMSolution`** (Phase 8 audit). The
+  constitution requires every iterative fit to expose both `.converged` and
+  `.n_iter`; the mixed-model solutions had `.converged` only. Both now expose
+  `.n_iter` (number of optimizer iterations).
+- **`OrdinalSolution.__repr__` now labels the link function `link=`** (was
+  `method=`), matching the renamed `.link` accessor and the `link=` parameter.
 - **multivariate `PCASolution`/`FactorSolution` now follow the standard
   "Solution wraps `Result[Params]`" envelope** used by the rest of the library.
   The computed data fields moved into new frozen `PCAParams`/`FactorParams`
@@ -179,6 +191,13 @@ multinomial, Cox), never `.test_statistics`/`.z_statistics`/`.t_statistics`.
   The internal PIRLS failure in `mixed` now raises `NumericalError` (was
   `RuntimeError`); GPU-unavailable correctly stays `RuntimeError`.
 - Amendment **A4** records the exception taxonomy and the `ValueError` subclassing.
+- **GPU-unavailable error messages unified** (Phase 8 audit). The
+  defensive "no GPU" guards inside the `descriptive`, `hypothesis`, and
+  `montecarlo` GPU backends now raise the single canonical `NO_GPU_MSG` from
+  `core.compute.backend` (was three slightly different ad-hoc strings); the
+  `mvnmle` EM device dispatcher's "unknown backend" guard now uses the canonical
+  `unknown_backend_message(...)` phrasing. User-visible only on the error path;
+  no behavior change otherwise.
 
 #### Documentation consolidation
 
@@ -197,6 +216,12 @@ multinomial, Cox), never `.test_statistics`/`.z_statistics`/`.t_statistics`.
 - **Version stamps refreshed** in `docs/DESIGN.md` and `docs/ROADMAP.md` (now
   4.0 / June 2026) with a one-line pointer noting 4.0 is the API-consistency
   release governed by `CONVENTIONS.md`.
+- **Two non-pystatistics docs relocated out of the repo.** `docs/Forge.md`
+  (GPU-host hardware/setup notes) and `docs/PYSTATSBIO_CONTEXT.md` (context for
+  the sibling `pystatsbio` package) described machine setup and a sibling
+  project, not the pystatistics public API, so they were moved to a Dev-level
+  `reference-docs/` area and removed from this repo. `docs/conf.py` no longer
+  lists them in its Sphinx exclude set.
 
 #### CUDA verification
 

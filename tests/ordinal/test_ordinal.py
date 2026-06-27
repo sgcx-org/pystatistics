@@ -517,10 +517,10 @@ class TestOrdinalParams:
             level_names=('low', 'high'),
             n_iter=10,
             converged=True,
-            method='logistic',
+            link='logistic',
         )
         with pytest.raises(AttributeError):
-            params.method = 'probit'  # type: ignore[misc]
+            params.link = 'probit'  # type: ignore[misc]
 
 
 # =========================================================================

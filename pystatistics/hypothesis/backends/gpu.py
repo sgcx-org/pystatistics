@@ -17,6 +17,7 @@ import numpy as np
 
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
+from pystatistics.core.compute.backend import NO_GPU_MSG
 from pystatistics.hypothesis._common import HTestParams
 from pystatistics.hypothesis.design import HypothesisDesign
 
@@ -43,7 +44,7 @@ class GPUHypothesisBackend:
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 self._device = 'mps'
             else:
-                raise RuntimeError("No GPU available (need CUDA or MPS)")
+                raise RuntimeError(NO_GPU_MSG)
         else:
             self._device = device
 

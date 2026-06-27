@@ -207,7 +207,7 @@ class OrdinalSolution(SolutionReprMixin):
     @property
     def link(self) -> str:
         """Link function name ('logistic', 'probit', or 'cloglog')."""
-        return self._result.params.method
+        return self._result.params.link
 
     # -- Metadata accessors ----------------------------------------------------
 
@@ -298,7 +298,7 @@ class OrdinalSolution(SolutionReprMixin):
         """Compact string representation."""
         p = self._result.params
         return (
-            f"OrdinalSolution(method={p.method!r}, "
+            f"OrdinalSolution(link={p.link!r}, "
             f"n_obs={p.n_obs}, n_levels={p.n_levels}, "
             f"deviance={p.deviance:.2f}, aic={p.aic:.2f})"
         )

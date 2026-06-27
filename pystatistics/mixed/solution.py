@@ -142,6 +142,10 @@ class LMMSolution(SolutionReprMixin):
     def converged(self) -> bool:
         return self.params.converged
 
+    @property
+    def n_iter(self) -> int:
+        return self.params.n_iter
+
     # --- Model comparison ---
 
     def compare(self, other: 'LMMSolution') -> str:
@@ -308,7 +312,7 @@ class GLMMSolution(SolutionReprMixin):
     @property
     def z_values(self) -> NDArray:
         """Wald z-statistics for fixed effects."""
-        return self.params.t_values
+        return self.params.z_values
 
     @property
     def p_values(self) -> NDArray:
@@ -386,6 +390,10 @@ class GLMMSolution(SolutionReprMixin):
     def converged(self) -> bool:
         return self.params.converged
 
+    @property
+    def n_iter(self) -> int:
+        return self.params.n_iter
+
     # --- Summary ---
 
     def summary(self) -> str:
@@ -435,7 +443,7 @@ class GLMMSolution(SolutionReprMixin):
             lines.append(
                 f" {name:>15s} {params.coefficients[i]:10.4f} "
                 f"{params.se[i]:10.4f} "
-                f"{params.t_values[i]:10.3f} {p_str:>10s} {stars}"
+                f"{params.z_values[i]:10.3f} {p_str:>10s} {stars}"
             )
 
         lines.append("---")

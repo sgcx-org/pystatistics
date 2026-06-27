@@ -27,8 +27,7 @@ autodoc_typehints = 'description'
 
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store',
-                    'DESIGN.md', 'ROADMAP.md', 'Forge.md',
-                    'PYSTATSBIO_CONTEXT.md']
+                    'DESIGN.md', 'ROADMAP.md']
 
 # -- Options for HTML output -------------------------------------------------
 

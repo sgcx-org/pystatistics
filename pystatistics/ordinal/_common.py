@@ -49,7 +49,7 @@ class OrdinalParams:
         Number of optimizer iterations completed.
     converged : bool
         Whether the optimizer converged within tolerance.
-    method : str
+    link : str
         Link function name used ('logistic', 'probit', or 'cloglog').
     """
 
@@ -64,4 +64,4 @@ class OrdinalParams:
     level_names: tuple[str, ...]
     n_iter: int
     converged: bool
-    method: str
+    link: str

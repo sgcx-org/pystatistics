@@ -10,7 +10,7 @@ from typing import Literal
 import numpy as np
 
 from pystatistics.core.compute.device import select_device
-from pystatistics.core.compute.backend import resolve_backend
+from pystatistics.core.compute.backend import resolve_backend, unknown_backend_message
 from pystatistics.mvnmle.design import MVNDesign
 from pystatistics.mvnmle.solution import MVNSolution
 from pystatistics.mvnmle.backends.cpu import CPUMLEBackend
@@ -400,7 +400,9 @@ def _get_em_device(
         return device.device_type
 
     else:
-        raise ValidationError(f"Unknown backend: {backend_choice!r}")
+        raise ValidationError(
+            unknown_backend_message(backend_choice, ('auto', 'cpu', 'gpu'))
+        )
 
 
 def _fast_cpu_backend(implicit: bool):

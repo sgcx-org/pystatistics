@@ -11,6 +11,7 @@ Skipped if no GPU (CUDA or MPS) is available.
 from __future__ import annotations
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.compute.backend import NO_GPU_MSG
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,7 +30,7 @@ def _select_device():
         return torch.device('cuda'), torch
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         return torch.device('mps'), torch
-    raise RuntimeError("No GPU available (need CUDA or MPS)")
+    raise RuntimeError(NO_GPU_MSG)
 
 
 class GPUBootstrapBackend:

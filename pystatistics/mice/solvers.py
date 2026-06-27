@@ -82,7 +82,7 @@ def mice(
     Examples
     --------
     >>> from pystatistics.mice import mice
-    >>> imp = mice(data, m=5, method='pmm', seed=0)
+    >>> imp = mice(data, n_imputations=5, method='pmm', seed=0)
     >>> datasets = imp.completed_datasets()
     """
     if (not isinstance(n_imputations, int) or isinstance(n_imputations, bool)

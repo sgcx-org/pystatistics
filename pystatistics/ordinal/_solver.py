@@ -550,7 +550,7 @@ def polr(
         >>> cum_p2 = 1 / (1 + np.exp(-(1 - eta)))
         >>> u = rng.uniform(size=n)
         >>> y = np.where(u < cum_p1, 0, np.where(u < cum_p2, 1, 2))
-        >>> sol = polr(y, X, method='logistic', names=['x1', 'x2'])
+        >>> sol = polr(y, X, link='logistic', names=['x1', 'x2'])
         >>> print(sol.summary())
     """
     # Convention (see CONVENTIONS.md): numpy input defaults
@@ -691,7 +691,7 @@ def polr(
         level_names=tuple(lvl_names),
         n_iter=n_iter,
         converged=converged,
-        method=link.lower(),
+        link=link.lower(),
     )
 
     result = Result(

@@ -20,6 +20,18 @@ class TestGLMMBinomial:
         assert result.converged
         assert len(result.coefficients) == 2
 
+    def test_n_iter_exposed(self, glmm_binomial):
+        """GLMMSolution exposes .n_iter (every iterative fit must, per the
+        constitution's uniform-accessor rule)."""
+        d = glmm_binomial
+        result = glmm(
+            d['y'], d['X'],
+            groups={'group': d['group']},
+            family='binomial',
+        )
+        assert isinstance(result.n_iter, int)
+        assert result.n_iter >= 1
+
     def test_family_info(self, glmm_binomial):
         """Family and link recorded correctly."""
         d = glmm_binomial

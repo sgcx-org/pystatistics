@@ -92,7 +92,7 @@ class GLMMParams:
     coefficients: NDArray
     coefficient_names: tuple[str, ...]
     se: NDArray
-    t_values: NDArray                  # β̂ / se (Wald z-statistics for GLMM)
+    z_values: NDArray                  # β̂ / se (Wald z-statistics for GLMM)
     p_values: NDArray                  # from normal distribution (GLMM uses z, not t)
 
     # Random effects

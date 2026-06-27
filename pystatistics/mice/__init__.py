@@ -9,8 +9,8 @@ them with Rubin's rules. R-pegged: numeric defaults follow R's ``mice`` package
 Public API:
 
     >>> from pystatistics.mice import mice, pool
-    >>> imp = mice(data, m=5, method='pmm', seed=0)
-    >>> completed = imp.completed_datasets()      # list of m arrays
+    >>> imp = mice(data, n_imputations=5, method='pmm', seed=0)
+    >>> completed = imp.completed_datasets()      # list of n_imputations arrays
 
 Supports numeric columns (``pmm``/``norm``) and categorical columns — binary
 (``logreg``), unordered (``polyreg``), and ordered (``polr``) factors — on both

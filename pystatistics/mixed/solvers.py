@@ -386,7 +386,7 @@ def glmm(
         coefficients=pirls.pls.beta,
         coefficient_names=tuple(coef_names),
         se=se,
-        t_values=z_vals,
+        z_values=z_vals,
         p_values=p_vals,
         var_components=tuple(var_comps),
         log_likelihood=ll,

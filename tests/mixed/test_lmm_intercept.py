@@ -17,6 +17,15 @@ class TestLMMRandomIntercept:
         assert result.converged
         assert len(result.coefficients) == 2
 
+    def test_n_iter_exposed(self, random_intercept_simple):
+        """LMMSolution exposes .n_iter (every iterative fit must, per the
+        constitution's uniform-accessor rule)."""
+        d = random_intercept_simple
+        result = lmm(d['y'], d['X'], groups={'group': d['group']})
+
+        assert isinstance(result.n_iter, int)
+        assert result.n_iter >= 1
+
     def test_fixed_effects_close_to_truth(self, random_intercept_simple):
         """Fixed effects recover true values within reasonable tolerance."""
         d = random_intercept_simple

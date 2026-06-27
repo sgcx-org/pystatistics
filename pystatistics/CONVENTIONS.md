@@ -397,3 +397,31 @@ rooted at `PyStatisticsError`), never a bare builtin. The mapping:
 `except ValueError` (the numpy/scipy habit) still catches every validation
 failure. A module must not raise a bare `ValueError` for input validation —
 raise `ValidationError`, which *is* a `ValueError`.
+
+### A5 — Scope of the naming law: the public surface, plus reserved names everywhere
+
+The naming law (S0–S6) and the 4.0 migration table govern the **public API
+surface**: public parameter names, public result-accessor names, public option
+*values*, and any string a user can see (including a `__repr__` label). Purely
+internal identifiers — module-private dataclass fields in `_common.py`, solver
+locals, backend-class attributes — are implementation details and are **not**
+required to track the migration table. (This is why `BackendTarget.use_fp64`
+is legal even though `use_fp64` is banned as a *public* parameter: precision
+still needs an internal representation; only the public spelling is constrained.)
+
+**Exception — reserved names are protected library-wide, because S0 is
+absolute.** The taxonomy selectors (`backend`, `family`, `link`, `method`,
+`solver`, `na_action`) and the reserved Wald-statistic accessors (`t_values`,
+`z_values`, per A3) bind to exactly one concept *everywhere*, internal code
+included. A private field must not repurpose a reserved name for a different
+concept: an internal field named `method` that actually holds a *link*, or a
+field named `t_values` that actually holds a Wald *z*-statistic, is a latent S0
+collision and is renamed to the concept it holds. (Resolved in 4.0:
+`OrdinalParams.method` → `link`; `GLMMParams.t_values` → `z_values`.
+`LMMParams.t_values` is unchanged — it genuinely holds Student-t statistics.)
+
+Non-reserved legacy spellings on private fields (e.g.
+`MultinomialParams.class_names`, `OrdinalParams.level_names`, which the public
+accessor already exposes as `category_names`) collide with nothing and are
+tolerated as internal detail; migrating them is encouraged for tidiness but not
+mandatory, and is not done where it would only churn private plumbing.

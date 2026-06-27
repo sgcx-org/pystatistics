@@ -10,6 +10,7 @@ FP32 by default. Spearman/Kendall fall back to CPU (scipy-dependent).
 from __future__ import annotations
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.compute.backend import NO_GPU_MSG
 
 from typing import Any
 import numpy as np
@@ -68,9 +69,7 @@ class GPUDescriptiveBackend:
                 self.dtype = torch.float32
                 self.device_name = 'Apple Silicon GPU (MPS)'
             else:
-                raise RuntimeError(
-                    "No GPU available. Use backend='cpu' instead."
-                )
+                raise RuntimeError(NO_GPU_MSG)
 
     @property
     def name(self) -> str:
