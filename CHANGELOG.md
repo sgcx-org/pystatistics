@@ -1,5 +1,44 @@
 # Changelog
 
+## 4.2.0
+
+Performance and GPU-robustness improvements, plus small API additions. **Fully
+backward compatible** — nothing was renamed or removed.
+
+### Performance
+
+- **Cox proportional hazards (`coxph`) is dramatically faster on larger
+  datasets.** The partial-likelihood and concordance computations were rewritten
+  from quadratic to log-linear time: a fit that took ~10 s at 8,000 observations
+  now takes ~30 ms, and runtime grows roughly linearly with sample size —
+  competitive with R's `survival::coxph`. Every reported value (coefficients,
+  hazard ratios, standard errors, z-values, p-values, partial log-likelihood,
+  concordance) is unchanged to the last bit.
+
+### GPU
+
+- **GPU generalized linear models no longer reject correct single-precision
+  fits.** A float32 GPU GLM fit (`backend='gpu'`) that had genuinely converged
+  could be refused for not meeting a tolerance only reachable in double precision
+  — most often on Apple Silicon — which also made `discrete_time(backend='gpu')`
+  intermittently unusable. Convergence is now judged by whether the fit has
+  reached a true optimum at single-precision accuracy. A genuinely unreliable fit
+  still fails loud and spells out the explicit options; PyStatistics never
+  silently falls back to the CPU or to a different precision.
+- **`discrete_time` accepts `backend='gpu_fp64'`** — the exact double-precision
+  GPU path (CUDA only), in addition to `'cpu'`, `'gpu'`, and `'auto'`.
+
+### API additions
+
+- **`KMSolution.conf_int`** (the survival confidence band as an `(m, 2)`
+  `[lower, upper]` array) and **`KMSolution.standard_errors`** (the Greenwood
+  standard error), matching the result-accessor names used elsewhere in the
+  library. The existing `.se`, `.ci_lower`, and `.ci_upper` remain.
+- **`NotImplementedFeatureError`**, raised for recognized-but-unimplemented
+  features (such as stratified Kaplan-Meier and Cox models). It is both a
+  `PyStatisticsError` and a builtin `NotImplementedError`, so existing handlers
+  for either keep working.
+
 ## 4.1.0
 
 Adds confidence intervals to the coefficient models. **This release is fully
