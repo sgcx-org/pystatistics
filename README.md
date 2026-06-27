@@ -334,7 +334,7 @@ from pystatistics.mice import mice, pool
 # data is an (n, p) array with np.nan marking missing values.
 # Predictive mean matching (R default) for numeric columns; seed is required
 # so the imputation is fully reproducible.
-imp = mice(data, m=5, maxit=5, method='pmm', seed=0)
+imp = mice(data, n_imputations=5, max_iter=5, method='pmm', seed=0)
 completed = imp.completed_datasets()        # list of 5 completed (n, p) arrays
 
 # Fit your analysis on each completed dataset, then combine with Rubin's rules:
@@ -365,6 +365,34 @@ pip install pystatistics[dev]
 ---
 
 ## What's New
+
+### 4.0.0 — the consistency release (breaking)
+
+A library-wide pass so every module names parameters, selects its backend,
+returns results, and raises errors the same way. **Breaking:** several
+parameters, option values, and result classes were renamed and the old
+spellings removed (no alias). **No statistical or numerical behavior changed** —
+every number is exactly as before. The full rules live in
+`pystatistics/CONVENTIONS.md`; the [changelog](CHANGELOG.md) has the complete
+rename table. Highlights:
+
+- `backend=` now means only *where and at what precision* a fit runs: `'cpu'`
+  (double), `'gpu'` (single), `'gpu_fp64'` (CUDA double), `'auto'`. The separate
+  `use_fp64=` flag is gone — pass `backend='gpu_fp64'` for double-precision GPU.
+  On linear regression, choose the numerical routine with the new `solver=`
+  (`'qr'`/`'svd'`) instead of an algorithm-encoding backend string.
+- Parameters unified under one naming law: e.g. `mice(m=, maxit=)` →
+  `mice(n_imputations=, max_iter=)`, `polr(method=, ridge=)` → `polr(link=,
+  l2=)`, `t_test(mu=, var_equal=)` → `t_test(pop_mean=, equal_var=)`,
+  `boot(R=, sim=, stype=)` → `boot(n_resamples=, method=, statistic_type=)`.
+  Option values lose their dots too: `alternative="two-sided"` (was
+  `"two.sided"`).
+- Every fit returns a `…Solution` with uniform accessors (`.coefficients`,
+  `.standard_errors`, `.z_values`/`.t_values`, `.p_values`, `.converged`,
+  `.n_iter`, `.backend_name`) and a Jupyter HTML summary.
+- Invalid input raises `ValidationError` (which is also a `ValueError`, so
+  existing `except ValueError` code keeps working); non-convergence raises
+  `ConvergenceError`; an unavailable GPU raises `RuntimeError`.
 
 ### 3.20.0 — Ridge regression, and double-precision GPU fits
 

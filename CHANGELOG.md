@@ -1,5 +1,95 @@
 # Changelog
 
+## 4.0.0 — the consistency release
+
+A library-wide pass that makes PyStatistics read as one coherent library: every
+module now names its parameters, selects its backend, returns its results, and
+raises its errors the same way. **This release contains breaking interface
+changes** — several parameters, option values, and result classes were renamed,
+and the old spellings were removed outright (there is no compatibility alias).
+**No statistical or numerical behavior changed** — the math, and every number
+PyStatistics produces, are exactly as before. The new rules are documented in
+`pystatistics/CONVENTIONS.md`.
+
+### Backend and precision
+
+- **`backend=` now means *where and at what precision* a fit runs — nothing
+  else.** It takes `'cpu'` (double precision), `'gpu'` (single precision, CUDA
+  or Apple Silicon), `'gpu_fp64'` (double precision, CUDA only), or `'auto'`.
+  Algorithm-encoding backend strings on linear regression (`'cpu_qr'`,
+  `'cpu_svd'`, `'gpu_qr'`) are removed; choose the numerical routine with the
+  new `solver=` argument instead (`solver='qr'` (default) or `solver='svd'`).
+- **`use_fp64=` is removed everywhere.** To run a GPU fit in double precision,
+  pass `backend='gpu_fp64'` (CUDA only; Apple Silicon has no float64 and raises
+  a clear error). Precision now lives entirely in the backend string:
+  `cpu`=double, `gpu`=single, `gpu_fp64`=double. Affects `pca`, `multinom`,
+  `polr`, `mice`, GAM, and the timeseries ARIMA fits.
+- **`backend='auto'` never selects an Apple Silicon (MPS) GPU.** `auto` picks a
+  GPU only on CUDA, otherwise CPU. Apple Silicon is still available with an
+  explicit `backend='gpu'`.
+- **Modules that have no double-precision GPU path now say so.** `describe`/`cor`
+  and the hypothesis and Monte-Carlo routines accept only `{'cpu','gpu','auto'}`
+  and reject `backend='gpu_fp64'` with a clear message, instead of silently
+  accepting it.
+
+### Parameter renames (breaking)
+
+| Function | Old | New |
+|---|---|---|
+| `mice` | `maxit`, `m` | `max_iter`, `n_imputations` |
+| `polr` | `method` (link), `ridge`, `level_names` | `link`, `l2`, `category_names` |
+| `multinom` | `class_names` | `category_names` |
+| `pca` | `method` | `solver` |
+| `mlest` | `algorithm`, inner `method` | `method`, `solver` |
+| `little_mcar_test` | `algorithm` | `method` |
+| `levene_test` | `center` | `location` |
+| `t_test` | `mu`, `var_equal` | `pop_mean`, `equal_var` |
+| `wilcox_test` | `mu` | `null_value` |
+| `boot` | `R`, `sim`, `stype` | `n_resamples`, `method`, `statistic_type` |
+| `boot_ci` | `conf`, `type` | `conf_level`, `ci_type` |
+| `permutation_test` | `R` | `n_resamples` |
+| `cor`/`describe`/`cov`/`var` | `use` | `na_action` |
+| `quantile` | `type` | `quantile_type` |
+
+- **Option values are cleaned up too.** `alternative="two.sided"` is now
+  `"two-sided"` (every test). The missing-data policy values
+  `"complete.obs"`/`"pairwise.complete.obs"` are now `"complete"`/`"pairwise"`.
+  `boot`'s `statistic_type` takes `"index"`/`"frequency"`/`"weight"` (were the
+  single letters `"i"`/`"f"`/`"w"`).
+
+### Results
+
+- **Every fit now returns a `…Solution` object.** Renamed: `PCAResult` →
+  `PCASolution`, `FactorResult` → `FactorSolution`, `ARIMAResult` →
+  `ARIMASolution`, `ETSResult` → `ETSSolution`, `ACFResult` → `ACFSolution`,
+  `StationarityResult` → `StationaritySolution`, `AutoARIMAResult` →
+  `AutoARIMASolution`, `DecompositionResult` → `DecompositionSolution`,
+  `PooledResult` → `PooledSolution`, `MCARTestResult` → `MCARTestSolution`,
+  and the ARMA-batch result likewise.
+- **Result accessors are uniform across the library.** The coefficient
+  Wald-statistic accessor is now `.t_values` on models with a t reference
+  (linear models, LMM) and `.z_values` on models with a normal reference (GLM,
+  GLMM, ordinal, multinomial, Cox); the old `.t_statistics` / `.test_statistics`
+  / `.z_statistics` names are removed. Mixed models expose `.standard_errors`
+  (was `.se`). Accessors follow their renamed parameters
+  (`OrdinalSolution.link`, `MultinomialSolution.category_names`,
+  `LeveneSolution.location`). Every iterative fit now exposes both `.converged`
+  and `.n_iter`. The timeseries and multivariate results gained the standard
+  `.backend_name` / `.timing` / `.warnings` / `.info` metadata the rest of the
+  library already had.
+- **Consistent Jupyter display.** Every Solution renders an HTML summary in a
+  notebook, and `pool()` and the ARMA-batch result gained a `summary()`.
+
+### Errors
+
+- **Validation failures raise `ValidationError`, which is also a `ValueError`.**
+  No routine raises a bare `ValueError` for bad input anymore, so
+  `except PyStatisticsError` catches everything PyStatistics raises — while
+  existing `except ValueError` code keeps working, because `ValidationError`
+  subclasses it. Non-convergence raises `ConvergenceError`; a GPU requested when
+  none is available (or `gpu_fp64` on Apple Silicon) raises `RuntimeError`, with
+  one canonical message per failure mode across all modules.
+
 ## 3.20.0
 
 - **Ridge (L2-penalized) regression.** New `fit(..., l2=lambda)` and a `ridge(X, y,
