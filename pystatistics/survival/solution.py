@@ -60,6 +60,11 @@ class KMSolution(SolutionReprMixin):
         return self._result.params.se
 
     @property
+    def standard_errors(self):
+        """Greenwood standard error of S(t) (uniform-accessor alias of ``se``)."""
+        return self._result.params.se
+
+    @property
     def ci_lower(self):
         """Lower confidence bound for S(t)."""
         return self._result.params.ci_lower
@@ -68,6 +73,17 @@ class KMSolution(SolutionReprMixin):
     def ci_upper(self):
         """Upper confidence bound for S(t)."""
         return self._result.params.ci_upper
+
+    @property
+    def conf_int(self):
+        """Confidence band for S(t) at each event time, shape (m, 2).
+
+        Columns are ``[lower, upper]`` — the uniform-accessor form of
+        ``ci_lower`` / ``ci_upper`` (which remain available).
+        """
+        import numpy as np
+        return np.column_stack([self._result.params.ci_lower,
+                                self._result.params.ci_upper])
 
     @property
     def conf_level(self) -> float:

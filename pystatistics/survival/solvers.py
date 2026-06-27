@@ -12,7 +12,9 @@ the appropriate backend, and wraps the Result in a Solution.
 
 from __future__ import annotations
 
-from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.exceptions import (
+    NotImplementedFeatureError, ValidationError,
+)
 
 from typing import Literal
 
@@ -75,7 +77,7 @@ def kaplan_meier(
         )
 
     if design.strata is not None:
-        raise NotImplementedError(
+        raise NotImplementedFeatureError(
             "Stratified Kaplan-Meier is not yet implemented"
         )
 
@@ -251,7 +253,7 @@ def coxph(
         )
 
     if strata is not None:
-        raise NotImplementedError(
+        raise NotImplementedFeatureError(
             "Stratified Cox PH is not yet implemented"
         )
 

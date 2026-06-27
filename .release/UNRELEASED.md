@@ -9,6 +9,21 @@
 
 ## Changes
 
+- **`KMSolution` gains the uniform `.standard_errors` and `.conf_int`
+  accessors** (additive). `.standard_errors` is the Greenwood SE (alias of the
+  existing `.se`); `.conf_int` is the `(m, 2)` `[lower, upper]` survival band
+  (the column-stacked form of the existing `.ci_lower` / `.ci_upper`). The legacy
+  accessors remain. This brings Kaplan-Meier in line with the library-wide
+  result-accessor names without removing anything.
+
+- **New `NotImplementedFeatureError` exception** for recognized-but-unimplemented
+  features. It subclasses both `PyStatisticsError` (so `except PyStatisticsError`
+  catches it) and the builtin `NotImplementedError` (so existing
+  `except NotImplementedError` keeps working) — the same dual-inheritance pattern
+  as `ValidationError`/`ValueError`. Stratified Kaplan-Meier and stratified Cox PH
+  now raise it instead of a bare `NotImplementedError`, routing every survival
+  error through the `core.exceptions` hierarchy.
+
 - **Performance: Cox PH (`coxph`) is now O(n log n) instead of O(n²).** Rewrote
   the three hot paths in `survival/_cox.py` with no change to results
   (coefficients, hazard ratios, standard errors, z-values, p-values, partial

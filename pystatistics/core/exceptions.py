@@ -117,9 +117,9 @@ class ConvergenceError(PyStatisticsError):
     """
     
     def __init__(
-        self, 
-        message: str, 
-        iterations: int, 
+        self,
+        message: str,
+        iterations: int,
         final_change: float | None = None,
         reason: str | None = None,
         threshold: float | None = None
@@ -129,3 +129,18 @@ class ConvergenceError(PyStatisticsError):
         self.final_change = final_change
         self.reason = reason
         self.threshold = threshold
+
+
+class NotImplementedFeatureError(PyStatisticsError, NotImplementedError):
+    """
+    A valid request targets a feature that is recognized but not yet implemented.
+
+    Distinct from :class:`ValidationError` (the request is *not* invalid — e.g.
+    a stratified fit is a legitimate ask) and from a generic bare
+    ``NotImplementedError``. Subclasses both :class:`PyStatisticsError` (so the
+    whole library's errors can be caught uniformly) and the builtin
+    :class:`NotImplementedError` (so callers who write ``except
+    NotImplementedError`` keep working). The request genuinely *is* a
+    not-implemented case.
+    """
+    pass
