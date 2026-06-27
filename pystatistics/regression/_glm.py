@@ -59,6 +59,9 @@ class GLMSolution(SolutionReprMixin):
     # Optional variable names (set by fit() via names= kwarg)
     _names: tuple[str, ...] | None = None
 
+    # Confidence level for conf_int (set by fit() via conf_level= kwarg).
+    _conf_level: float = 0.95
+
     # Cached computations
     _standard_errors: NDArray[np.floating[Any]] | None = None
     _test_statistics: NDArray[np.floating[Any]] | None = None
@@ -258,6 +261,33 @@ class GLMSolution(SolutionReprMixin):
 
         self._p_values = np.where(np.isfinite(stat), pv, np.nan)
         return self._p_values
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray[np.floating[Any]]:
+        """Wald confidence intervals for the coefficients, shape (p, 2).
+
+        ``coef ± q * se`` on the link scale, matching the reference distribution
+        used for the p-values: the normal quantile for fixed-dispersion families
+        (binomial/Poisson), the Student-t quantile at ``df_residual`` for
+        estimated-dispersion families (Gaussian/Gamma). ``exp(conf_int)`` gives
+        odds/rate-ratio intervals for log-link families.
+        """
+        from scipy import stats as sp_stats
+
+        if self._uses_z_test:
+            q = sp_stats.norm.ppf((1.0 + self._conf_level) / 2.0)
+        else:
+            df = self.df_residual
+            q = (sp_stats.t.ppf((1.0 + self._conf_level) / 2.0, df=df)
+                 if df > 0 else np.nan)
+        coef = self.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - q * se, coef + q * se])
 
     @property
     def info(self) -> dict[str, Any]:

@@ -368,6 +368,7 @@ def multinom(
     tol: float = 1e-8,
     max_iter: int = 200,
     backend: str | None = None,
+    conf_level: float = 0.95,
 ) -> MultinomialSolution:
     """Fit a multinomial logistic regression model.
 
@@ -426,6 +427,9 @@ def multinom(
         >>> result.summary()
     """
     t0 = time.perf_counter()
+
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
 
     # Convention shared with pca() and applied to all GPU-capable
     # backends in pystatistics (see README "Design Philosophy"):
@@ -615,4 +619,4 @@ def multinom(
         backend_name=backend_name,
     )
 
-    return MultinomialSolution(result)
+    return MultinomialSolution(result, conf_level)

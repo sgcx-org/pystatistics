@@ -47,6 +47,9 @@ class LinearSolution(SolutionReprMixin):
     # Optional variable names (set by fit() via names= kwarg)
     _names: tuple[str, ...] | None = None
 
+    # Confidence level for conf_int (set by fit() via conf_level= kwarg).
+    _conf_level: float = 0.95
+
     # Cached computations
     _standard_errors: NDArray[np.floating[Any]] | None = None
     _t_statistics: NDArray[np.floating[Any]] | None = None
@@ -218,6 +221,28 @@ class LinearSolution(SolutionReprMixin):
         pv = 2.0 * stats.t.sf(np.abs(t), df=df)
         self._p_values = np.where(np.isfinite(t), pv, np.nan)
         return self._p_values
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray[np.floating[Any]]:
+        """Wald confidence intervals for the coefficients, shape (p, 2).
+
+        ``coef ± t * se`` using the Student-t quantile at ``df_residual``
+        (the finite-sample reference for OLS, matching R's ``confint.lm``).
+        Penalized (ridge) fits have NaN standard errors, so their intervals
+        are NaN — a biased estimator has no valid Wald interval.
+        """
+        from scipy import stats
+
+        df = self.df_residual
+        q = stats.t.ppf((1.0 + self._conf_level) / 2.0, df=df) if df > 0 else np.nan
+        coef = self.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - q * se, coef + q * se])
 
     @property
     def rank(self) -> int:

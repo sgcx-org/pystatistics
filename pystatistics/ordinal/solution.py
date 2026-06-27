@@ -41,6 +41,8 @@ class OrdinalSolution(SolutionReprMixin):
     _result: Result[OrdinalParams]
     _names: list[str]
     _level_names: list[str]
+    # Confidence level for conf_int (set by polr() via conf_level= kwarg).
+    _conf_level: float = 0.95
 
     # -- Coefficient accessors ------------------------------------------------
 
@@ -157,6 +159,25 @@ class OrdinalSolution(SolutionReprMixin):
         """
         z = self.z_values
         return 2.0 * norm.sf(np.abs(z))
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray[np.floating[Any]]:
+        """Wald confidence intervals for the slope coefficients, shape (p, 2).
+
+        ``beta ± z * SE(beta)`` with the normal quantile for ``conf_level``
+        (proportional-odds inference is asymptotic-normal). ``exp(conf_int)``
+        gives odds-ratio intervals. Thresholds are not included (see
+        ``thresholds`` / ``threshold_standard_errors``).
+        """
+        z = norm.ppf((1.0 + self._conf_level) / 2.0)
+        coef = self._result.params.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - z * se, coef + z * se])
 
     @property
     def threshold_z_values(self) -> NDArray[np.floating[Any]]:

@@ -489,6 +489,7 @@ def polr(
     max_iter: int = 200,
     l2: float = 0.0,
     backend: str | None = None,
+    conf_level: float = 0.95,
 ) -> OrdinalSolution:
     """
     Fit a proportional odds (cumulative link) model.
@@ -553,6 +554,9 @@ def polr(
         >>> sol = polr(y, X, link='logistic', names=['x1', 'x2'])
         >>> print(sol.summary())
     """
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
+
     # Convention (see CONVENTIONS.md): numpy input defaults
     # to CPU, GPU torch.Tensor input defaults to GPU. Explicit
     # backend='cpu' with a GPU tensor raises (Rule 1: no silent
@@ -710,4 +714,5 @@ def polr(
         _result=result,
         _names=col_names,
         _level_names=lvl_names,
+        _conf_level=conf_level,
     )

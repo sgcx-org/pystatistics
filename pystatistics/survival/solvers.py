@@ -190,6 +190,7 @@ def coxph(
     ties: Literal["efron", "breslow"] = "efron",
     tol: float = 1e-9,
     max_iter: int = 20,
+    conf_level: float = 0.95,
 ) -> CoxSolution:
     """Cox proportional hazards model.
 
@@ -219,6 +220,10 @@ def coxph(
         Convergence tolerance for Newton-Raphson.
     max_iter : int
         Maximum Newton-Raphson iterations.
+    conf_level : float
+        Confidence level for ``.conf_int`` (default 0.95). Wald intervals on the
+        coefficient (log-hazard-ratio) scale; ``exp(.conf_int)`` gives hazard-
+        ratio intervals.
 
     Returns
     -------
@@ -240,6 +245,11 @@ def coxph(
             f"ties must be 'efron' or 'breslow', got '{ties}'"
         )
 
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(
+            f"conf_level must be in (0, 1), got {conf_level}"
+        )
+
     if strata is not None:
         raise NotImplementedError(
             "Stratified Cox PH is not yet implemented"
@@ -253,6 +263,7 @@ def coxph(
         ties=ties,
         tol=tol,
         max_iter=max_iter,
+        conf_level=conf_level,
     )
 
     timer.stop()

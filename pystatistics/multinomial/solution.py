@@ -33,16 +33,19 @@ class MultinomialSolution(SolutionReprMixin):
         _result: The underlying Result[MultinomialParams] object.
     """
 
-    __slots__ = ("_result",)
+    __slots__ = ("_result", "_conf_level")
 
-    def __init__(self, _result: Result[MultinomialParams]) -> None:
+    def __init__(self, _result: Result[MultinomialParams],
+                 _conf_level: float = 0.95) -> None:
         """Initialize from a Result[MultinomialParams].
 
         Args:
             _result: The fitted model result. Must contain a
                 MultinomialParams payload.
+            _conf_level: Confidence level for ``conf_int`` (default 0.95).
         """
         self._result = _result
+        self._conf_level = _conf_level
 
     # -- Coefficient access --
 
@@ -119,6 +122,25 @@ class MultinomialSolution(SolutionReprMixin):
         Computed from the z-values using the standard normal distribution.
         """
         return 2.0 * stats.norm.sf(np.abs(self.z_values))
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray[np.floating[Any]]:
+        """Wald confidence intervals, shape (J-1, p, 2).
+
+        ``coef ± z * se`` per (non-reference class, predictor), with the normal
+        quantile for ``conf_level`` (multinomial inference is asymptotic-normal).
+        The trailing axis is [lower, upper]; ``exp(conf_int)`` gives
+        relative-risk-ratio intervals.
+        """
+        z = stats.norm.ppf((1.0 + self._conf_level) / 2.0)
+        coef = self.coefficient_matrix
+        se = self.standard_errors
+        return np.stack([coef - z * se, coef + z * se], axis=-1)
 
     # -- Predictions --
 

@@ -38,6 +38,7 @@ def fit(
     max_iter: int = 25,
     names: list[str] | None = None,
     l2: float = 0.0,
+    conf_level: float = 0.95,
 ) -> Union[LinearSolution, GLMSolution]:
     """
     Fit a linear or generalized linear model.
@@ -117,6 +118,9 @@ def fit(
     else:
         resolved_names = _resolve_names(names, design.p)
 
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
+
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:
         if solver is not None:
@@ -124,9 +128,11 @@ def fit(
                 "solver= applies only to linear models (family=None); GLMs are "
                 "fit by IRLS. Remove solver=, or drop family= for an OLS fit."
             )
-        return _fit_glm(design, family, backend, tol, max_iter, resolved_names, force, l2)
+        sol = _fit_glm(design, family, backend, tol, max_iter, resolved_names, force, l2)
     else:
-        return _fit_lm(design, backend, force, resolved_names, l2, solver)
+        sol = _fit_lm(design, backend, force, resolved_names, l2, solver)
+    sol._conf_level = conf_level   # uniform .conf_int level (internal field; A5)
+    return sol
 
 
 def ridge(

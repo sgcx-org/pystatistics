@@ -71,6 +71,7 @@ class CoxParams:
     n_iter: int                  # Newton-Raphson iterations
     converged: bool
     ties: str                    # "efron" or "breslow"
+    conf_level: float = 0.95     # confidence level for .conf_int (Wald)
 
 
 @dataclass(frozen=True)

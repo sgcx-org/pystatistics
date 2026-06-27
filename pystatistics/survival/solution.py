@@ -319,6 +319,27 @@ class CoxSolution(SolutionReprMixin):
         return self._result.params.ties
 
     @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._result.params.conf_level
+
+    @property
+    def conf_int(self):
+        """Wald confidence intervals for the coefficients, shape (p, 2).
+
+        ``coef ± z * se`` on the coefficient (log-hazard-ratio) scale, where
+        ``z`` is the normal quantile for ``conf_level`` (Cox inference is
+        asymptotic-normal). ``exp(conf_int)`` gives hazard-ratio intervals.
+        """
+        import numpy as np
+        from scipy import stats
+
+        z = stats.norm.ppf((1.0 + self.conf_level) / 2.0)
+        coef = self.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - z * se, coef + z * se])
+
+    @property
     def backend_name(self) -> str:
         return self._result.backend_name
 
@@ -362,19 +383,19 @@ class CoxSolution(SolutionReprMixin):
                 f"{self.p_values[i]:12.4g}"
             )
 
-        # HR confidence intervals (like R's summary.coxph)
+        # HR confidence intervals (like R's summary.coxph), at conf_level.
+        ci = np.exp(self.conf_int)                 # hazard-ratio scale
+        lvl = f"{self.conf_level:.2f}".lstrip("0")  # e.g. ".95"
         lines.append("")
         lines.append(
             f"  {'':{col_w}s}  {'exp(coef)':>10s}  {'exp(-coef)':>10s}  "
-            f"{'lower .95':>10s}  {'upper .95':>10s}"
+            f"{'lower ' + lvl:>10s}  {'upper ' + lvl:>10s}"
         )
         for i, name in enumerate(names):
-            ci_lower = np.exp(self.coefficients[i] - 1.96 * self.standard_errors[i])
-            ci_upper = np.exp(self.coefficients[i] + 1.96 * self.standard_errors[i])
             lines.append(
                 f"  {name:>{col_w}s}  {self.hazard_ratios[i]:10.4f}  "
                 f"{1.0 / self.hazard_ratios[i]:10.4f}  "
-                f"{ci_lower:10.4f}  {ci_upper:10.4f}"
+                f"{ci[i, 0]:10.4f}  {ci[i, 1]:10.4f}"
             )
 
         lines.append("")

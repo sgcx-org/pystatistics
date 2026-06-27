@@ -42,6 +42,7 @@ def cox_fit(
     ties: str = "efron",
     tol: float = 1e-9,
     max_iter: int = 20,
+    conf_level: float = 0.95,
 ) -> CoxParams:
     """Fit Cox proportional hazards model.
 
@@ -95,6 +96,7 @@ def cox_fit(
             n_iter=0,
             converged=True,
             ties=ties,
+            conf_level=conf_level,
         )
 
     # --- Newton-Raphson ---
@@ -188,6 +190,7 @@ def cox_fit(
         n_iter=n_iter,
         converged=converged,
         ties=ties,
+        conf_level=conf_level,
     )
 
 

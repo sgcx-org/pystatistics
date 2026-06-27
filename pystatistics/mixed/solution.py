@@ -48,8 +48,9 @@ class LMMSolution(SolutionReprMixin):
     and model comparison via likelihood ratio test.
     """
 
-    def __init__(self, _result: Result[LMMParams]):
+    def __init__(self, _result: Result[LMMParams], _conf_level: float = 0.95):
         self._result = _result
+        self._conf_level = _conf_level
 
     @property
     def params(self) -> LMMParams:
@@ -86,6 +87,27 @@ class LMMSolution(SolutionReprMixin):
     def df_satterthwaite(self) -> NDArray:
         """Satterthwaite denominator df for each fixed effect."""
         return self.params.df_satterthwaite
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray:
+        """Wald confidence intervals for the fixed effects, shape (p, 2).
+
+        ``β ± t * SE`` using the Student-t quantile at each coefficient's
+        Satterthwaite denominator df (the finite-sample reference LMM uses for
+        its p-values, matching lmerTest).
+        """
+        from scipy import stats
+        import numpy as np
+
+        q = stats.t.ppf((1.0 + self._conf_level) / 2.0, df=self.df_satterthwaite)
+        coef = self.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - q * se, coef + q * se])
 
     # --- Random effects ---
 
@@ -288,8 +310,9 @@ class GLMMSolution(SolutionReprMixin):
     Uses Wald z-statistics (not Satterthwaite t) for inference.
     """
 
-    def __init__(self, _result: Result[GLMMParams]):
+    def __init__(self, _result: Result[GLMMParams], _conf_level: float = 0.95):
         self._result = _result
+        self._conf_level = _conf_level
 
     @property
     def params(self) -> GLMMParams:
@@ -317,6 +340,26 @@ class GLMMSolution(SolutionReprMixin):
     @property
     def p_values(self) -> NDArray:
         return self.params.p_values
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self) -> NDArray:
+        """Wald confidence intervals for the fixed effects, shape (p, 2).
+
+        ``β ± z * SE`` with the normal quantile for ``conf_level`` (GLMM
+        inference is asymptotic-normal).
+        """
+        from scipy import stats
+        import numpy as np
+
+        z = stats.norm.ppf((1.0 + self._conf_level) / 2.0)
+        coef = self.coefficients
+        se = self.standard_errors
+        return np.column_stack([coef - z * se, coef + z * se])
 
     # --- Random effects ---
 

@@ -16,6 +16,7 @@ from scipy import stats
 
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
+from pystatistics.core.exceptions import ValidationError
 
 from pystatistics.mixed._common import (
     LMMParams, GLMMParams, VarCompSummary,
@@ -44,6 +45,7 @@ def lmm(
     tol: float = 1e-8,
     max_iter: int = 200,
     compute_satterthwaite: bool = True,
+    conf_level: float = 0.95,
 ) -> LMMSolution:
     """Fit a linear mixed model.
 
@@ -88,6 +90,8 @@ def lmm(
         # Crossed random effects
         >>> result = lmm(y, X, groups={'subject': subj, 'item': item})
     """
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
     timer = Timer()
     timer.start()
 
@@ -251,7 +255,7 @@ def lmm(
         warnings=tuple(warn_list),
     )
 
-    return LMMSolution(_result=result)
+    return LMMSolution(_result=result, _conf_level=conf_level)
 
 
 def glmm(
@@ -264,6 +268,7 @@ def glmm(
     random_data: dict[str, ArrayLike] | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
+    conf_level: float = 0.95,
 ) -> GLMMSolution:
     """Fit a generalized linear mixed model.
 
@@ -286,6 +291,9 @@ def glmm(
         GLMMSolution with fixed effects, random effects, and model fit.
     """
     from pystatistics.regression.families import resolve_family, Family
+
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
 
     timer = Timer()
     timer.start()
@@ -430,7 +438,7 @@ def glmm(
         warnings=tuple(warn_list),
     )
 
-    return GLMMSolution(_result=result)
+    return GLMMSolution(_result=result, _conf_level=conf_level)
 
 
 # =====================================================================
