@@ -38,7 +38,7 @@ def discrete_time_fit(
     event: NDArray,
     X: NDArray,
     intervals: NDArray | None = None,
-    backend: Literal["auto", "cpu", "gpu"] | None = None,
+    backend: Literal["auto", "cpu", "gpu", "gpu_fp64"] | None = None,
 ) -> DiscreteTimeParams:
     """Fit discrete-time survival model.
 

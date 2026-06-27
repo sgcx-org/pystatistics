@@ -28,6 +28,42 @@ from pystatistics.regression.families import Family
 from pystatistics.regression.solution import GLMParams
 
 
+# Acceptance threshold for a float32 GPU GLM fit, expressed as a RELATIVE Newton
+# decrement (λ² / (|deviance| + 0.1)). The Newton decrement λ² = Uᵀ(XᵀWX)⁻¹U is
+# ≈ twice the remaining deviance gap to the optimum, so this is the fraction of
+# the deviance still "on the table". A correct float32 fit that has reached the
+# float32 floor sits orders of magnitude below this; an ill-conditioned fit whose
+# float32 solve landed off the optimum sits far above it. Calibrated empirically
+# (well-conditioned binomial fits land ~1e-12; ill-conditioned log-link fits at
+# scale land ~1e-1 or diverge) — see tests/regression/test_gpu_fp32_acceptance.py.
+_FP32_REL_DECREMENT_TOL = 1e-6
+
+
+def _newton_decrement(X_np, y_np, wt_np, coef, link, family):
+    """Newton decrement λ² = Uᵀ(XᵀWX)⁻¹U at ``coef`` (float64, on the host).
+
+    The standard affine-invariant measure of distance to the optimum in
+    objective (deviance/2) units: ≈ 0 at a true optimum, large when the
+    coefficients sit off it. Used to decide whether a float32 GPU fit that
+    stopped at the float32 deviance floor actually reached the optimum (accept)
+    or merely stalled off it (fail loud). One O(n·p²) pass, evaluated once.
+
+    Returns ``inf`` if the float64 information matrix is itself singular.
+    """
+    eta = X_np @ coef
+    mu = link.linkinv(eta)
+    mu_eta = link.mu_eta(eta)            # dμ/dη
+    var = family.variance(mu)            # V(μ)
+    score = X_np.T @ (wt_np * mu_eta / var * (y_np - mu))          # U = ∂ℓ/∂β
+    w = np.maximum(wt_np * (mu_eta ** 2) / var, 1e-30)             # IRLS weights
+    XtWX = X_np.T @ (w[:, None] * X_np)                            # observed info
+    try:
+        step = np.linalg.solve(XtWX, score)
+    except np.linalg.LinAlgError:
+        return float("inf")
+    return float(score @ step)
+
+
 class GPUIRLSBackend:
     """GPU backend using IRLS with torch.linalg.lstsq inner solve.
 
@@ -172,7 +208,13 @@ class GPUIRLSBackend:
         # a genuinely bad, ill-conditioned fit) keeps the strict tolerance and fails
         # loud. float64 (CUDA) keeps the strict tolerance — it can reach it.
         eff_tol = tol
-        if penalty is not None and self.dtype == torch.float32:
+        if self.dtype == torch.float32:
+            # The float32 deviance cannot fall below a √n·eps round-off floor, so
+            # the strict float64 tol is unreachable in float32. Stop iterating at
+            # the float32 floor on EVERY float32 path (not just ridge). Whether the
+            # stopped fit is accepted is then decided by a stationarity check after
+            # the loop — NOT by demanding an fp64 tolerance (A6: a correct float32
+            # fit at the float32 floor must not be falsely refused).
             fp32_floor = float(np.sqrt(n)) * float(torch.finfo(torch.float32).eps)
             eff_tol = max(tol, 2.0 * fp32_floor)
 
@@ -265,36 +307,50 @@ class GPUIRLSBackend:
 
                 dev_old = dev_new
 
+        # --- float32 acceptance gate: stationarity, not an fp64 tolerance -----
+        # A6: a float32 fit that reached a stationary point at the float32 floor
+        # IS converged and must not be refused for failing to meet an unreachable
+        # float64 tolerance. We decide via the relative Newton decrement at the
+        # final coefficients (float64, host) rather than the deviance-change flag:
+        # a correct fit sits far below the threshold; an ill-conditioned fit whose
+        # float32 solve stalled off the optimum sits far above it (and still fails
+        # loud — A6's other half: no silent wrong answers). float64 paths already
+        # reach the strict tol and keep their deviance-based `converged` flag.
+        rel_decrement = None
+        if self.dtype == torch.float32 and not solve_failed:
+            coef_np = coef_gpu.detach().cpu().numpy().astype(np.float64)
+            decrement = _newton_decrement(X_np, y_np, wt_np, coef_np, link, family)
+            rel_decrement = decrement / (abs(dev_new) + 0.1)
+            converged = bool(rel_decrement < _FP32_REL_DECREMENT_TOL)
+
         # A broken inner solve leaves no usable coefficients, so it always raises
-        # (force cannot salvage it). Plain non-convergence raises unless force=True.
+        # (force cannot salvage it). A non-stationary float32 fit (or an
+        # unconverged float64 fit) raises unless force=True. PyStatistics does NOT
+        # silently fall back to CPU here (A6) — it names the explicit options.
         if solve_failed or (not converged and not force):
-            # The float32 GPU IRLS did not reach the convergence tolerance, or the
-            # inner solve broke down. This happens for log-link families
-            # (Poisson/Gamma) at large sample sizes, where the float32 Cholesky on
-            # the normal equations XᵀWX is not stable enough — most often on Apple
-            # Silicon (MPS), which has no float64. The non-converged float32
-            # coefficients are NOT a usable fit. Fail loud and lay out the honest
-            # options, rather than silently returning wrong numbers, silently
-            # switching to the CPU, or papering over it with numerical tricks.
-            # (This mirrors the GPU OLS backend's ill-conditioning message.)
-            reason = ("the float32 Cholesky inner solve broke down (XᵀWX not "
-                      "positive-definite in float32)"
-                      if solve_failed
-                      else f"IRLS did not converge within {max_iter} iterations in "
-                           "float32")
+            if solve_failed:
+                reason = ("the float32 inner solve broke down (XᵀWX not "
+                          "positive-definite in float32)")
+            elif self.dtype == torch.float32:
+                reason = ("the float32 fit did not reach a stationary point "
+                          f"(relative Newton decrement {rel_decrement:.2e} exceeds "
+                          f"the float32 acceptance threshold "
+                          f"{_FP32_REL_DECREMENT_TOL:.0e})")
+            else:
+                reason = f"IRLS did not converge within {max_iter} iterations"
             raise NumericalError(
-                f"GPU GLM did not produce a reliable fit: {reason}. This is "
-                f"expected for log-link families (Poisson/Gamma) at large sample "
-                f"sizes, where float32 Cholesky on the normal equations is "
-                f"unstable (especially on Apple Silicon / MPS, which has no "
-                f"float64).\n"
-                f"Options:\n"
-                f"  - Use backend='cpu' for a correct double-precision fit "
-                f"(slower)\n"
-                f"  - Use a ridge-penalized fit (a different, better-conditioned "
+                f"GPU GLM did not produce a reliable fit: {reason}. This happens "
+                f"for ill-conditioned designs at large n in float32 — typically a "
+                f"log-link family (Poisson/Gamma) — where the float32 solve cannot "
+                f"locate the optimum (most often on Apple Silicon / MPS, which has "
+                f"no float64). PyStatistics does not silently substitute a CPU or "
+                f"lower-precision result; choose explicitly:\n"
+                f"  - backend='cpu' for a correct double-precision fit (slower)\n"
+                f"  - backend='gpu_fp64' on CUDA for an exact GPU fit\n"
+                f"  - a ridge-penalized fit (a different, better-conditioned "
                 f"estimator)\n"
-                f"  - Pass force=True to return the float32 GPU fit anyway "
-                f"(fast, but may be inaccurate / unstable)"
+                f"  - force=True to return the float32 fit anyway (fast, but may "
+                f"be inaccurate / unstable)"
             )
 
         if not converged:
