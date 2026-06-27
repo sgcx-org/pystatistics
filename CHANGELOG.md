@@ -1,5 +1,35 @@
 # Changelog
 
+## 4.1.0
+
+Adds confidence intervals to the coefficient models. **This release is fully
+backward compatible** — nothing was renamed or removed, and no existing result
+changes; everything below is new.
+
+### Added
+
+- **`.conf_int` on the coefficient models**, returning Wald confidence intervals
+  for the estimated coefficients as a `(p, 2)` array of `[lower, upper]` bounds
+  (`(classes - 1, p, 2)` for `multinom`). Available on linear and generalized
+  linear models (`fit`), Cox proportional hazards (`coxph`), multinomial logistic
+  regression (`multinom`), proportional-odds ordinal regression (`polr`), and
+  linear and generalized linear mixed models (`lmm`, `glmm`). Each interval uses
+  the model's own reference distribution — a Student-t quantile for ordinary
+  least squares and linear mixed models, a normal quantile elsewhere.
+  Exponentiating the interval gives hazard-ratio, odds-ratio, or rate-ratio
+  bounds where applicable.
+- **`conf_level=` argument** (default `0.95`) on `fit`, `coxph`, `multinom`,
+  `polr`, `lmm`, and `glmm`, setting the confidence level for `.conf_int`. Each
+  result also reports it as `.conf_level`.
+
+### Notes
+
+- Ordinary-least-squares intervals agree with R's `confint()` to floating-point
+  round-off; the generalized-linear-model and Cox intervals agree with the
+  corresponding Wald intervals.
+- Penalized (ridge) regression reports no standard errors, so its `.conf_int` is
+  undefined (returns NaN) — a penalized estimator has no valid Wald interval.
+
 ## 4.0.0 — the consistency release
 
 A library-wide pass that makes PyStatistics read as one coherent library: every
