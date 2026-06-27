@@ -93,7 +93,7 @@ class TestLMMInterceptREML:
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.se, r_se, rtol=1e-3)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=1e-3)
 
     def test_satterthwaite_df(self):
         r_df = np.array(self.ref['df'])
@@ -251,7 +251,7 @@ class TestLMMSlopeREML:
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.se, r_se, rtol=1e-3)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=1e-3)
 
     def test_satterthwaite_df(self):
         r_df = np.array(self.ref['df'])
@@ -343,7 +343,7 @@ class TestLMMCrossedREML:
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.se, r_se, rtol=1e-3)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=1e-3)
 
     def test_variance_subject(self):
         vc = self.result.var_components
@@ -537,7 +537,7 @@ class TestGLMMBinomial:
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.se, r_se, rtol=0.06)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=0.06)
 
     def test_z_values(self):
         r_z = np.array(self.ref['z_value'])
@@ -619,7 +619,7 @@ class TestGLMMPoisson:
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.se, r_se, rtol=0.06)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=0.06)
 
     def test_z_values(self):
         r_z = np.array(self.ref['z_value'])

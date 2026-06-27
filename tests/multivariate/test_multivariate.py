@@ -7,7 +7,7 @@ Covers PCA, factor analysis, and rotation methods.
 import numpy as np
 import pytest
 
-from pystatistics.multivariate import pca, factor_analysis, PCAResult, FactorResult
+from pystatistics.multivariate import pca, factor_analysis, PCASolution, FactorSolution
 from pystatistics.multivariate._rotation import varimax, promax
 from pystatistics.core.exceptions import ValidationError, ConvergenceError
 
@@ -181,7 +181,7 @@ class TestPCA:
             pca(X, scale=True)
 
     def test_result_is_frozen(self, iris_like_data):
-        """PCAResult is frozen dataclass."""
+        """PCASolution is frozen dataclass."""
         result = pca(iris_like_data)
         with pytest.raises(AttributeError):
             result.sdev = np.zeros(4)  # type: ignore[misc]
@@ -206,7 +206,7 @@ class TestPCA:
         """Accepts list-of-lists input."""
         X = [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
         result = pca(X)
-        assert isinstance(result, PCAResult)
+        assert isinstance(result, PCASolution)
 
     def test_n_obs_n_vars(self, iris_like_data):
         """n_obs and n_vars are set correctly."""
@@ -244,7 +244,7 @@ class TestPCAGPU:
         def no_gpu(*_a, **_k):
             return None
         monkeypatch.setattr(dev_mod, "detect_gpu", no_gpu)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             pca(iris_like_data, backend="gpu")
 
     def test_invalid_backend_raises(self, iris_like_data):
@@ -288,7 +288,7 @@ class TestPCAGPU:
         r_cpu = pca(iris_like_data, center=True, scale=True, backend="cpu")
         r_gpu = pca(
             iris_like_data, center=True, scale=True,
-            backend="gpu", use_fp64=True,
+            backend="gpu_fp64",
         )
         np.testing.assert_allclose(r_cpu.sdev, r_gpu.sdev, rtol=1e-12)
         # Rotation can sign-flip between implementations; compare |.|
@@ -315,7 +315,7 @@ class TestPCAGPU:
         r_cpu = pca(iris_like_data, center=True, scale=True, backend="cpu")
         r_gpu = pca(
             iris_like_data, center=True, scale=True,
-            backend="gpu", use_fp64=False,
+            backend="gpu",
         )
         np.testing.assert_allclose(
             r_cpu.sdev, r_gpu.sdev,
@@ -344,7 +344,7 @@ class TestPCAGPU:
     def test_invalid_method_raises(self, iris_like_data):
         """method must be in {'svd', 'gram', 'auto'}."""
         with pytest.raises(ValidationError, match="method"):
-            pca(iris_like_data, backend="gpu", method="magic")
+            pca(iris_like_data, backend="gpu", solver="magic")
 
     def test_gram_matches_svd_well_conditioned(self):
         """Gram path matches SVD path at GPU_FP32 tier on tall-skinny
@@ -366,8 +366,8 @@ class TestPCAGPU:
             pytest.skip("no GPU available")
         rng = np.random.default_rng(0)
         X = rng.standard_normal((5000, 20))
-        r_svd = pca(X, backend="gpu", method="svd")
-        r_gram = pca(X, backend="gpu", method="gram")
+        r_svd = pca(X, backend="gpu", solver="svd")
+        r_gram = pca(X, backend="gpu", solver="gram")
         np.testing.assert_allclose(
             r_svd.sdev, r_gram.sdev,
             rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
@@ -393,7 +393,7 @@ class TestPCAGPU:
         # Duplicate a column to make cond(X) ≈ ∞.
         X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
         with pytest.raises(NumericalError, match="cond"):
-            pca(X, backend="gpu", method="gram")
+            pca(X, backend="gpu", solver="gram")
 
     def test_gram_force_bypasses_condition_check(self):
         """force=True bypasses the condition gate — the fit completes
@@ -404,20 +404,20 @@ class TestPCAGPU:
         rng = np.random.default_rng(2)
         X = rng.standard_normal((1000, 20))
         X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
-        r = pca(X, backend="gpu", method="gram", force=True)
+        r = pca(X, backend="gpu", solver="gram", force=True)
         assert r.sdev.shape == (20,)
 
     def test_auto_falls_back_to_svd_on_ill_conditioned(self):
-        """method='auto' must silently fall back to SVD when Gram's
+        """solver='auto' must silently fall back to SVD when Gram's
         condition check fails — that is the explicit contract of
-        'auto' (unlike method='gram' which raises)."""
+        'auto' (unlike solver='gram' which raises)."""
         if not self._gpu_available():
             pytest.skip("no GPU available")
         rng = np.random.default_rng(3)
         X = rng.standard_normal((1000, 20))
         X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
-        r_auto = pca(X, backend="gpu", method="auto")
-        r_svd = pca(X, backend="gpu", method="svd")
+        r_auto = pca(X, backend="gpu", solver="auto")
+        r_svd = pca(X, backend="gpu", solver="svd")
         # auto should have fallen back to SVD, so results are identical
         # (same code path, same data).
         np.testing.assert_allclose(r_auto.sdev, r_svd.sdev, rtol=1e-14)
@@ -522,7 +522,7 @@ class TestFactorAnalysis:
             factor_analysis(factor_data, n_factors=2, rotation="oblimin")
 
     def test_result_is_frozen(self, factor_data):
-        """FactorResult is frozen dataclass."""
+        """FactorSolution is frozen dataclass."""
         result = factor_analysis(factor_data, n_factors=2)
         with pytest.raises(AttributeError):
             result.loadings = np.zeros((6, 2))  # type: ignore[misc]
@@ -623,9 +623,9 @@ class TestRotation:
 
 
 class TestPCADeviceResident:
-    """Tests for device-resident PCAResult (1.9.0 feature).
+    """Tests for device-resident PCASolution (1.9.0 feature).
 
-    A PCAResult with ``.device != 'cpu'`` holds its numeric fields as
+    A PCASolution with ``.device != 'cpu'`` holds its numeric fields as
     ``torch.Tensor`` instances on the fit's device. This is the
     opt-in path that skips the D2H copy of the scores matrix —
     useful in multi-step GPU pipelines where PCA output feeds
@@ -653,7 +653,7 @@ class TestPCADeviceResident:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         X = np.random.RandomState(0).randn(200, 5).astype(np.float32)
-        r = pca(X, backend="gpu", use_fp64=False)
+        r = pca(X, backend="gpu")
         assert r.device == "cpu"
         assert isinstance(r.x, np.ndarray)
         assert isinstance(r.sdev, np.ndarray)
@@ -664,7 +664,7 @@ class TestPCADeviceResident:
             pytest.skip("no GPU available")
         import torch
         X = np.random.RandomState(0).randn(200, 5).astype(np.float32)
-        r = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        r = pca(X, backend="gpu", device_resident=True)
         assert r.device != "cpu"
         assert isinstance(r.x, torch.Tensor)
         assert isinstance(r.sdev, torch.Tensor)
@@ -673,12 +673,12 @@ class TestPCADeviceResident:
 
     def test_to_numpy_matches_default_path(self):
         """``result.to_numpy()`` on a device-resident fit returns the
-        same PCAResult values as the default numpy-return path."""
+        same PCASolution values as the default numpy-return path."""
         if not self._gpu_available():
             pytest.skip("no GPU available")
         X = np.random.RandomState(0).randn(500, 10).astype(np.float32)
-        r_np = pca(X, backend="gpu", use_fp64=False)
-        r_dr = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        r_np = pca(X, backend="gpu")
+        r_dr = pca(X, backend="gpu", device_resident=True)
         r_dr_cpu = r_dr.to_numpy()
         np.testing.assert_array_equal(r_np.sdev, r_dr_cpu.sdev)
         np.testing.assert_array_equal(r_np.rotation, r_dr_cpu.rotation)
@@ -706,8 +706,8 @@ class TestPCADeviceResident:
             pytest.skip("no GPU available")
         import torch
         X = np.random.RandomState(0).randn(300, 8).astype(np.float32)
-        r_np = pca(X, backend="gpu", use_fp64=False)
-        r_dr = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        r_np = pca(X, backend="gpu")
+        r_dr = pca(X, backend="gpu", device_resident=True)
         assert isinstance(r_np.explained_variance_ratio, np.ndarray)
         assert isinstance(r_dr.explained_variance_ratio, torch.Tensor)
         # Numeric content matches.
@@ -723,7 +723,7 @@ class TestPCADeviceResident:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         X = np.random.RandomState(0).randn(200, 6).astype(np.float32)
-        r = pca(X, backend="gpu", use_fp64=False, device_resident=True)
+        r = pca(X, backend="gpu", device_resident=True)
         s = r.summary()
         assert "Importance of components" in s
         assert "PC1" in s

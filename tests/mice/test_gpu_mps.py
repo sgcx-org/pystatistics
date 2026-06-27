@@ -3,7 +3,8 @@
 The MPS path shares the batched sweep with the CUDA path, diverging only in the
 PMM donor search's insertion-rank op (``_gpu_methods._insertion_rank``: a
 combined-sort merge-rank on MPS, ``searchsorted`` on CUDA). It runs FP32 only —
-MPS has no float64 — so ``use_fp64=True`` is rejected at the dispatch boundary.
+MPS has no float64 — so ``backend='gpu_fp64'`` is rejected at the dispatch
+boundary (requires CUDA).
 
 As with the CUDA suite, the MPS path is validated against the trusted CPU
 implementation (itself validated against R), distributionally at the MPS/FP32
@@ -48,41 +49,42 @@ def miss():
 
 class TestMpsBasics:
     def test_runs_on_mps(self, miss):
-        sol = mice(miss, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         assert "gpu" in sol.backend_name
         assert sol.info["device"] == "mps"
         assert sol.info["precision"] == "fp32"
 
     def test_completed_no_nan(self, miss):
-        sol = mice(miss, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         for d in sol.completed_datasets():
             assert not np.isnan(d).any()
             assert d.shape == miss.shape
 
     def test_observed_preserved(self, miss):
-        sol = mice(miss, m=3, maxit=4, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=3, max_iter=4, seed=0, backend="gpu")
         observed = ~np.isnan(miss)
         for d in sol.completed_datasets():
             np.testing.assert_allclose(d[observed], miss[observed], rtol=1e-5, atol=1e-5)
 
 
 class TestMpsFp64Rejected:
-    def test_use_fp64_rejected_on_mps(self, miss):
-        # MPS has no float64 — the request must fail loud, not silently downgrade.
-        with pytest.raises(ValueError, match="float64|MPS|use_fp64"):
-            mice(miss, m=2, maxit=3, seed=0, backend="gpu", use_fp64=True)
+    def test_gpu_fp64_rejected_on_mps(self, miss):
+        # MPS has no float64 — backend='gpu_fp64' must fail loud (requires CUDA),
+        # not silently downgrade.
+        with pytest.raises(RuntimeError, match="requires CUDA"):
+            mice(miss, n_imputations=2, max_iter=3, seed=0, backend="gpu_fp64")
 
 
 class TestMpsReproducibility:
     def test_same_seed_reproducible(self, miss):
-        a = mice(miss, m=4, maxit=5, method="pmm", seed=11, backend="gpu")
-        b = mice(miss, m=4, maxit=5, method="pmm", seed=11, backend="gpu")
+        a = mice(miss, n_imputations=4, max_iter=5, method="pmm", seed=11, backend="gpu")
+        b = mice(miss, n_imputations=4, max_iter=5, method="pmm", seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_allclose(da, db, rtol=1e-5, atol=1e-6)
 
     def test_different_seed_differs(self, miss):
-        a = mice(miss, m=4, maxit=5, method="norm", seed=1, backend="gpu")
-        b = mice(miss, m=4, maxit=5, method="norm", seed=2, backend="gpu")
+        a = mice(miss, n_imputations=4, max_iter=5, method="norm", seed=1, backend="gpu")
+        b = mice(miss, n_imputations=4, max_iter=5, method="norm", seed=2, backend="gpu")
         assert any(
             not np.allclose(da, db)
             for da, db in zip(a.completed_datasets(), b.completed_datasets())
@@ -93,7 +95,7 @@ class TestMpsPmmDonorProperty:
     def test_fp32_imputes_near_observed(self, miss):
         # Every PMM imputed value is a copy of an observed value (the donor
         # search is exact), to FP32 rounding — the hard correctness invariant.
-        sol = mice(miss, m=5, maxit=5, method="pmm", seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=5, max_iter=5, method="pmm", seed=0, backend="gpu")
         for j in sol.incomplete_columns:
             observed = miss[~np.isnan(miss[:, j]), j]
             imp = sol.imputations(j).ravel()
@@ -105,8 +107,8 @@ class TestMpsPmmDonorProperty:
 class TestMpsMatchesCpu:
     def test_imputed_distribution_matches_cpu(self, miss, method):
         m = 30
-        cpu = mice(miss, m=m, maxit=10, method=method, seed=100, backend="cpu")
-        gpu = mice(miss, m=m, maxit=10, method=method, seed=100, backend="gpu")
+        cpu = mice(miss, n_imputations=m, max_iter=10, method=method, seed=100, backend="cpu")
+        gpu = mice(miss, n_imputations=m, max_iter=10, method=method, seed=100, backend="gpu")
         for j in gpu.incomplete_columns:
             cc = cpu.imputations(j).ravel()
             cg = gpu.imputations(j).ravel()
@@ -127,8 +129,8 @@ class TestMpsMatchesCpu:
             return pool(np.array(est), np.array(var), dfcom=len(miss) - 3)
 
         m = 30
-        cpu = pooled(mice(miss, m=m, maxit=10, method=method, seed=7, backend="cpu"))
-        gpu = pooled(mice(miss, m=m, maxit=10, method=method, seed=7, backend="gpu"))
+        cpu = pooled(mice(miss, n_imputations=m, max_iter=10, method=method, seed=7, backend="cpu"))
+        gpu = pooled(mice(miss, n_imputations=m, max_iter=10, method=method, seed=7, backend="gpu"))
         np.testing.assert_allclose(
             np.asarray(gpu.estimate), np.asarray(cpu.estimate), atol=0.1
         )
@@ -154,7 +156,7 @@ class TestMpsDegenerate:
         mask[:, 0] = False
         X[mask] = np.nan
         try:
-            sol = mice(X, m=4, maxit=5, method="pmm", seed=0, backend="gpu")
+            sol = mice(X, n_imputations=4, max_iter=5, method="pmm", seed=0, backend="gpu")
         except ValidationError:
             return  # acceptable: failed loud rather than returning garbage
         for d in sol.completed_datasets():
@@ -186,8 +188,8 @@ class TestMpsCategoricalPredictors:
     def test_categorical_predictor_matches_cpu(self):
         d = self._mixed_design()
         assert d.has_categorical
-        cpu = mice(d, m=30, maxit=10, seed=1, backend="cpu")
-        gpu = mice(d, m=30, maxit=10, seed=1, backend="gpu")
+        cpu = mice(d, n_imputations=30, max_iter=10, seed=1, backend="cpu")
+        gpu = mice(d, n_imputations=30, max_iter=10, seed=1, backend="gpu")
         assert gpu.info["device"] == "mps"
         # Matching CPU (which dummy-encodes the categorical) confirms the GPU
         # uses the categorical predictor correctly rather than ignoring it.
@@ -212,7 +214,7 @@ class TestMpsCategoricalPredictors:
         X[rng.random(n) < 0.2, 0] = np.nan
         d = MICEDesign.from_array(X, method="pmm")
         with pytest.raises(ValidationError, match="no GPU implementation"):
-            mice(d, m=4, maxit=3, seed=0, backend="gpu")
+            mice(d, n_imputations=4, max_iter=3, seed=0, backend="gpu")
 
 
 class TestMpsLogregBinaryTarget:
@@ -243,26 +245,26 @@ class TestMpsLogregBinaryTarget:
     def test_runs_on_mps_with_logreg(self):
         d = self._binary_design()
         assert d.method_for(0) == "logreg"
-        sol = mice(d, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(d, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         assert sol.info["device"] == "mps"
 
     def test_imputed_values_are_valid_codes(self):
         # Arbitrary codes (not 0/1) exercise the batched code<->index mapping.
         d = self._binary_design(codes=(2.0, 5.0), seed=1)
-        sol = mice(d, m=10, maxit=8, seed=3, backend="gpu")
+        sol = mice(d, n_imputations=10, max_iter=8, seed=3, backend="gpu")
         allowed = set(d.levels_for(0).tolist())
         assert set(np.unique(sol.imputations(0)).tolist()).issubset(allowed)
 
     def test_completed_no_nan(self):
         d = self._binary_design()
-        for dset in mice(d, m=5, maxit=6, seed=2, backend="gpu").completed_datasets():
+        for dset in mice(d, n_imputations=5, max_iter=6, seed=2, backend="gpu").completed_datasets():
             assert not np.isnan(dset).any()
 
     def test_proportion_matches_cpu(self):
         d = self._binary_design()
         m = 40
-        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
-        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        cpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="cpu")
+        gpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="gpu")
         # Imputed-category proportion of the binary target: independent RNG
         # streams, so distributional (not bit-for-bit) agreement.
         c1 = cpu.imputations(0).ravel().mean()
@@ -274,8 +276,8 @@ class TestMpsLogregBinaryTarget:
         # track CPU — confirms the mixed sweep (logreg + pmm) stays consistent.
         d = self._binary_design()
         m = 40
-        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
-        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        cpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="cpu")
+        gpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="gpu")
         c = cpu.imputations(2).ravel()
         g = gpu.imputations(2).ravel()
         assert abs(c.mean() - g.mean()) < 0.15
@@ -283,8 +285,8 @@ class TestMpsLogregBinaryTarget:
 
     def test_same_seed_reproducible(self):
         d = self._binary_design()
-        a = mice(d, m=6, maxit=6, seed=11, backend="gpu")
-        b = mice(d, m=6, maxit=6, seed=11, backend="gpu")
+        a = mice(d, n_imputations=6, max_iter=6, seed=11, backend="gpu")
+        b = mice(d, n_imputations=6, max_iter=6, seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_array_equal(da, db)
 
@@ -317,26 +319,26 @@ class TestMpsPolyregNominalTarget:
     def test_runs_on_mps_with_polyreg(self):
         d = self._nominal_design()
         assert d.method_for(0) == "polyreg"
-        sol = mice(d, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(d, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         assert sol.info["device"] == "mps"
 
     def test_imputed_values_are_valid_codes(self):
         # Arbitrary, non-consecutive codes exercise the batched code<->index map.
         d = self._nominal_design(K=4, codes=[10.0, 20.0, 30.0, 40.0], seed=1)
-        sol = mice(d, m=10, maxit=8, seed=3, backend="gpu")
+        sol = mice(d, n_imputations=10, max_iter=8, seed=3, backend="gpu")
         allowed = set(d.levels_for(0).tolist())
         assert set(np.unique(sol.imputations(0)).tolist()).issubset(allowed)
 
     def test_completed_no_nan(self):
         d = self._nominal_design()
-        for dset in mice(d, m=5, maxit=6, seed=2, backend="gpu").completed_datasets():
+        for dset in mice(d, n_imputations=5, max_iter=6, seed=2, backend="gpu").completed_datasets():
             assert not np.isnan(dset).any()
 
     def test_category_proportions_match_cpu(self):
         d = self._nominal_design()
         m = 40
-        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
-        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        cpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="cpu")
+        gpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="gpu")
         levels = d.levels_for(0)
         ci = cpu.imputations(0).ravel()
         gi = gpu.imputations(0).ravel()
@@ -347,8 +349,8 @@ class TestMpsPolyregNominalTarget:
 
     def test_same_seed_reproducible(self):
         d = self._nominal_design()
-        a = mice(d, m=6, maxit=6, seed=11, backend="gpu")
-        b = mice(d, m=6, maxit=6, seed=11, backend="gpu")
+        a = mice(d, n_imputations=6, max_iter=6, seed=11, backend="gpu")
+        b = mice(d, n_imputations=6, max_iter=6, seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_array_equal(da, db)
 
@@ -356,7 +358,7 @@ class TestMpsPolyregNominalTarget:
         # K=3 (smallest multinomial) alongside the K=4 default — guards the
         # block-Hessian assembly across class counts.
         d = self._nominal_design(K=3, seed=4)
-        sol = mice(d, m=8, maxit=8, seed=1, backend="gpu")
+        sol = mice(d, n_imputations=8, max_iter=8, seed=1, backend="gpu")
         allowed = set(d.levels_for(0).tolist())
         assert set(np.unique(sol.imputations(0)).tolist()).issubset(allowed)
         for dset in sol.completed_datasets():
@@ -393,26 +395,26 @@ class TestMpsPolrOrderedTarget:
     def test_runs_on_mps_with_polr(self):
         d = self._ordered_design()
         assert d.method_for(0) == "polr"
-        sol = mice(d, m=4, maxit=4, seed=0, backend="gpu")
+        sol = mice(d, n_imputations=4, max_iter=4, seed=0, backend="gpu")
         assert sol.info["device"] == "mps"
 
     def test_imputed_values_are_valid_codes(self):
         # Non-0-based ordered codes exercise the batched code<->index mapping.
         d = self._ordered_design(K=4, codes=[3.0, 6.0, 9.0, 12.0], seed=1)
-        sol = mice(d, m=8, maxit=6, seed=3, backend="gpu")
+        sol = mice(d, n_imputations=8, max_iter=6, seed=3, backend="gpu")
         allowed = set(d.levels_for(0).tolist())
         assert set(np.unique(sol.imputations(0)).tolist()).issubset(allowed)
 
     def test_completed_no_nan(self):
         d = self._ordered_design()
-        for dset in mice(d, m=4, maxit=5, seed=2, backend="gpu").completed_datasets():
+        for dset in mice(d, n_imputations=4, max_iter=5, seed=2, backend="gpu").completed_datasets():
             assert not np.isnan(dset).any()
 
     def test_category_proportions_match_cpu(self):
         d = self._ordered_design()
         m = 30
-        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
-        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        cpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="cpu")
+        gpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="gpu")
         levels = d.levels_for(0)
         ci = cpu.imputations(0).ravel()
         gi = gpu.imputations(0).ravel()
@@ -426,13 +428,13 @@ class TestMpsPolrOrderedTarget:
         # Ordered structure should be reflected: the imputed marginal should not
         # collapse to a single level (a sanity check that the model uses X).
         d = self._ordered_design()
-        sol = mice(d, m=10, maxit=8, seed=4, backend="gpu")
+        sol = mice(d, n_imputations=10, max_iter=8, seed=4, backend="gpu")
         assert len(np.unique(sol.imputations(0))) >= 3
 
     def test_same_seed_reproducible(self):
         d = self._ordered_design()
-        a = mice(d, m=5, maxit=5, seed=11, backend="gpu")
-        b = mice(d, m=5, maxit=5, seed=11, backend="gpu")
+        a = mice(d, n_imputations=5, max_iter=5, seed=11, backend="gpu")
+        b = mice(d, n_imputations=5, max_iter=5, seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_array_equal(da, db)
 
@@ -457,7 +459,7 @@ class TestMpsCategoricalMatchesR:
         design = MICEDesign.from_array(matrix, column_kinds=kinds)
         meta = ref["meta"]
         sol = mice(
-            design, m=meta["m"], maxit=meta["maxit"], seed=20260614, backend="gpu"
+            design, n_imputations=meta["m"], max_iter=meta["maxit"], seed=20260614, backend="gpu"
         )
         return ref, design, sol
 
@@ -480,7 +482,7 @@ class TestMpsScales:
     def test_large_n_matches_cpu_distribution(self):
         complete = datasets.make_gaussian_complete(8000, seed=2)
         miss = datasets.make_mcar(complete, 0.2, seed=3)
-        cpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="cpu")
-        gpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="gpu")
+        cpu = mice(miss, n_imputations=20, max_iter=8, method="pmm", seed=5, backend="cpu")
+        gpu = mice(miss, n_imputations=20, max_iter=8, method="pmm", seed=5, backend="gpu")
         for j in gpu.incomplete_columns:
             assert abs(gpu.imputations(j).mean() - cpu.imputations(j).mean()) < 0.1

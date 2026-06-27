@@ -144,7 +144,7 @@ def check_consistent_length(
         DimensionError: If arrays have inconsistent lengths
     """
     if len(arrays) != len(names):
-        raise ValueError(
+        raise ValidationError(
             f"Number of arrays ({len(arrays)}) must match number of names ({len(names)})"
         )
     

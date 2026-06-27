@@ -115,7 +115,7 @@ def test_unconverged_mle_raises_not_silently_returned(monkeypatch):
     monkeypatch.setattr(solvers, "mlest", non_converged_mlest)
 
     with pytest.raises(RuntimeError, match="did not converge"):
-        little_mcar_test(X, algorithm="direct")
+        little_mcar_test(X, method="direct")
 
 
 def test_many_patterns_does_not_hang():

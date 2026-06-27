@@ -137,7 +137,7 @@ class TestGpuDatasourceIntegration:
         gds = ds.to(_gpu_device())
 
         r_cpu = pca(X, backend="cpu")
-        r_gpu = pca(gds["X"], method="gram")
+        r_gpu = pca(gds["X"], solver="gram")
         np.testing.assert_allclose(
             r_cpu.sdev, r_gpu.sdev,
             rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,

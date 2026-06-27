@@ -84,7 +84,7 @@ def _separated_ordinal(seed: int, n: int = 4000, K: int = 4):
 
 def _fit(y, X):
     """polr fit with the exact MICE slope ridge."""
-    return polr(y, X, ridge=_slope_ridge(X.astype(np.float64)))
+    return polr(y, X, l2=_slope_ridge(X.astype(np.float64)))
 
 
 def _predicted_marginal(fit, X, K):

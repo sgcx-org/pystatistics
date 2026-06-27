@@ -37,23 +37,23 @@ class TestEMAppleDataset:
     """Validate EM on apple dataset against R norm::em.norm() reference."""
 
     def test_convergence(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.converged
 
     def test_mean_estimates_match_r(self, apple_em_ref):
-        result = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
+        result = mlest(datasets.apple, method='em', tol=1e-8, max_iter=10000)
         expected_mu = np.array(apple_em_ref['muhat'])
         np.testing.assert_allclose(result.muhat, expected_mu, rtol=1e-4,
                                    err_msg="EM means differ from R norm::em.norm()")
 
     def test_covariance_estimates_match_r(self, apple_em_ref):
-        result = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
+        result = mlest(datasets.apple, method='em', tol=1e-8, max_iter=10000)
         expected_sigma = np.array(apple_em_ref['sigmahat'])
         np.testing.assert_allclose(result.sigmahat, expected_sigma, rtol=1e-4,
                                    err_msg="EM covariance differs from R norm::em.norm()")
 
     def test_covariance_symmetric(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         np.testing.assert_allclose(
             result.sigmahat, result.sigmahat.T,
             atol=1e-14,
@@ -61,7 +61,7 @@ class TestEMAppleDataset:
         )
 
     def test_covariance_positive_definite(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         eigenvals = np.linalg.eigvalsh(result.sigmahat)
         assert np.all(eigenvals > 0), f"Not PD: min eigenvalue = {eigenvals.min()}"
 
@@ -70,19 +70,19 @@ class TestEMMissvalsDataset:
     """Validate EM on missvals dataset against R norm::em.norm() reference."""
 
     def test_mean_estimates_match_r(self, missvals_em_ref):
-        result = mlest(datasets.missvals, algorithm='em', tol=1e-8, max_iter=100000)
+        result = mlest(datasets.missvals, method='em', tol=1e-8, max_iter=100000)
         expected_mu = np.array(missvals_em_ref['muhat'])
         np.testing.assert_allclose(result.muhat, expected_mu, rtol=1e-3,
                                    err_msg="EM means differ from R norm::em.norm()")
 
     def test_covariance_estimates_match_r(self, missvals_em_ref):
-        result = mlest(datasets.missvals, algorithm='em', tol=1e-8, max_iter=100000)
+        result = mlest(datasets.missvals, method='em', tol=1e-8, max_iter=100000)
         expected_sigma = np.array(missvals_em_ref['sigmahat'])
         np.testing.assert_allclose(result.sigmahat, expected_sigma, rtol=1e-3,
                                    err_msg="EM covariance differs from R norm::em.norm()")
 
     def test_covariance_symmetric(self):
-        result = mlest(datasets.missvals, algorithm='em')
+        result = mlest(datasets.missvals, method='em')
         np.testing.assert_allclose(
             result.sigmahat, result.sigmahat.T,
             atol=1e-14,
@@ -90,12 +90,12 @@ class TestEMMissvalsDataset:
         )
 
     def test_covariance_positive_definite(self):
-        result = mlest(datasets.missvals, algorithm='em')
+        result = mlest(datasets.missvals, method='em')
         eigenvals = np.linalg.eigvalsh(result.sigmahat)
         assert np.all(eigenvals > 0), f"Not PD: min eigenvalue = {eigenvals.min()}"
 
     def test_dimensions(self):
-        result = mlest(datasets.missvals, algorithm='em')
+        result = mlest(datasets.missvals, method='em')
         assert result.muhat.shape == (5,)
         assert result.sigmahat.shape == (5, 5)
 
@@ -113,24 +113,24 @@ class TestEMMatchesDirect:
     """
 
     def test_apple_loglik_agrees(self):
-        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+        em = mlest(datasets.apple, method='em', backend='cpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
+        direct = mlest(datasets.apple, method='direct', backend='cpu')
         assert abs(em.loglik - direct.loglik) < 1e-6, (
             f"EM loglik {em.loglik} differs from direct {direct.loglik} "
             f"by {abs(em.loglik - direct.loglik)}"
         )
 
     def test_apple_means_agree(self):
-        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+        em = mlest(datasets.apple, method='em', backend='cpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
+        direct = mlest(datasets.apple, method='direct', backend='cpu')
         np.testing.assert_allclose(em.muhat, direct.muhat, rtol=1e-4)
 
     def test_apple_covariance_agrees(self):
-        em = mlest(datasets.apple, algorithm='em', backend='cpu',
+        em = mlest(datasets.apple, method='em', backend='cpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='cpu')
+        direct = mlest(datasets.apple, method='direct', backend='cpu')
         np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=1e-4)
 
     # --- missvals dataset ---
@@ -152,7 +152,7 @@ class TestEMMatchesDirect:
         with open(ref_path) as f:
             ref = json.load(f)
 
-        em = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        em = mlest(datasets.missvals, method='em', backend='cpu',
                    tol=1e-8, max_iter=100000)
         assert em.converged
         assert abs(em.loglik - ref['loglik']) < 1e-6
@@ -170,7 +170,7 @@ class TestEMEdgeCases:
         """Complete data should converge very quickly."""
         rng = np.random.default_rng(42)
         data = rng.multivariate_normal([0, 0], [[1, 0.5], [0.5, 1]], size=50)
-        result = mlest(data, algorithm='em')
+        result = mlest(data, method='em')
         assert result.converged
         # With no missing data, sample statistics are exact — EM should
         # converge in very few iterations
@@ -188,7 +188,7 @@ class TestEMEdgeCases:
             if mask[:, j].all():
                 mask[0, j] = False
         data[mask] = np.nan
-        result = mlest(data, algorithm='em', max_iter=5000)
+        result = mlest(data, method='em', max_iter=5000)
         assert np.all(np.isfinite(result.muhat))
         assert np.all(np.isfinite(result.sigmahat))
 
@@ -198,7 +198,7 @@ class TestEMEdgeCases:
         data = rng.multivariate_normal([0, 0, 0], np.eye(3), size=30)
         data[15:, 2] = np.nan
         data[20:, 1] = np.nan
-        result = mlest(data, algorithm='em')
+        result = mlest(data, method='em')
         assert np.all(np.isfinite(result.muhat))
 
     def test_two_variables(self):
@@ -206,13 +206,13 @@ class TestEMEdgeCases:
         rng = np.random.default_rng(42)
         data = rng.multivariate_normal([0, 0], [[1, 0.5], [0.5, 1]], size=20)
         data[15:, 1] = np.nan
-        result = mlest(data, algorithm='em')
+        result = mlest(data, method='em')
         assert result.muhat.shape == (2,)
 
     def test_reproducibility(self):
         """EM is deterministic — same input should give identical output."""
-        r1 = mlest(datasets.apple, algorithm='em')
-        r2 = mlest(datasets.apple, algorithm='em')
+        r1 = mlest(datasets.apple, method='em')
+        r2 = mlest(datasets.apple, method='em')
         np.testing.assert_allclose(r1.muhat, r2.muhat, atol=1e-14)
         np.testing.assert_allclose(r1.sigmahat, r2.sigmahat, atol=1e-14)
         assert abs(r1.loglik - r2.loglik) < 1e-14
@@ -226,21 +226,21 @@ class TestEMSolutionInterface:
     """Test that EM results work with the full MVNSolution interface."""
 
     def test_aic_bic(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         p = 2
         k = p + p * (p + 1) // 2
         expected_aic = -2 * result.loglik + 2 * k
         assert abs(result.aic - expected_aic) < 1e-10
 
     def test_summary_string(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         summary = result.summary()
         assert "MVN MLE Results" in summary
         assert "Converged: True" in summary
         assert "Log-likelihood" in summary
 
     def test_to_dict(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         d = result.to_dict()
         assert 'muhat' in d
         assert 'sigmahat' in d
@@ -248,17 +248,17 @@ class TestEMSolutionInterface:
         assert 'converged' in d
 
     def test_timing(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.timing is not None
         assert 'total_seconds' in result.timing
         assert result.timing['total_seconds'] > 0
 
     def test_backend_name(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.backend_name.endswith('_em')
 
     def test_gradient_norm_is_none(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.gradient_norm is None
 
 
@@ -274,30 +274,30 @@ class TestAlgorithmParameter:
         assert '_em' not in result.backend_name
 
     def test_explicit_direct(self):
-        result = mlest(datasets.apple, algorithm='direct')
+        result = mlest(datasets.apple, method='direct')
         assert result.converged
         assert '_em' not in result.backend_name
 
     def test_explicit_em(self):
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.backend_name.endswith('_em')
 
     def test_invalid_algorithm_raises(self):
-        with pytest.raises(ValueError, match="Unknown algorithm"):
-            mlest(datasets.apple, algorithm='bogus')
+        with pytest.raises(ValueError, match="Unknown method"):
+            mlest(datasets.apple, method='bogus')
 
     def test_em_default_tolerance(self):
         # EM with default tol (1e-4) should converge on apple
-        result = mlest(datasets.apple, algorithm='em')
+        result = mlest(datasets.apple, method='em')
         assert result.converged
 
     def test_custom_tol_and_max_iter(self):
-        result = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=5000)
+        result = mlest(datasets.apple, method='em', tol=1e-8, max_iter=5000)
         assert result.converged
 
     def test_em_with_design(self):
         """EM should accept MVNDesign objects."""
         design = MVNDesign.from_array(datasets.apple)
-        result = mlest(design, algorithm='em')
+        result = mlest(design, method='em')
         assert isinstance(result, MVNSolution)
         assert result.converged

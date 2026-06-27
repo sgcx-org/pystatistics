@@ -7,12 +7,12 @@ When family is None (default), the existing LM path is used → LinearSolution.
 When family is provided, the IRLS path is used → GLMSolution.
 """
 
-import warnings
 from typing import Literal, Union
 import numpy as np
 from numpy.typing import ArrayLike
 
-from pystatistics.core.compute.device import select_device
+from pystatistics.core.compute.backend import resolve_backend
+from pystatistics.core.exceptions import ValidationError
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import (
     LinearSolution, LinearParams, GLMSolution, GLMParams,
@@ -20,7 +20,10 @@ from pystatistics.regression.solution import (
 from pystatistics.regression.backends.cpu import CPUQRBackend
 
 
-BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64', 'cpu_qr', 'cpu_svd', 'gpu_qr']
+# backend = (device, precision); solver = the numerical routine (LM only).
+# See pystatistics/CONVENTIONS.md.
+BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64']
+SolverChoice = Literal['qr', 'svd']
 
 
 def fit(
@@ -29,6 +32,7 @@ def fit(
     *,
     family: 'str | Family | None' = None,
     backend: BackendChoice | None = None,
+    solver: SolverChoice | None = None,
     force: bool = False,
     tol: float = 1e-8,
     max_iter: int = 25,
@@ -51,10 +55,13 @@ def fit(
         y: Response vector (required if X_or_design is array)
         family: GLM family specification. None for OLS, or a string
             ('gaussian', 'binomial', 'poisson') or Family instance.
-        backend: Compute backend. Default None → 'cpu' (the R-reference
-            path, validated for regulated-industry use). Explicit values:
-            'cpu', 'gpu', 'cpu_qr', 'cpu_svd', 'gpu_qr', or 'auto' to
-            prefer GPU when available and fall back to CPU.
+        backend: Compute backend = (device, precision). Default None → 'cpu'
+            (the R-reference path, validated for regulated-industry use).
+            Values: 'cpu' (float64), 'gpu' (float32, CUDA or MPS), 'gpu_fp64'
+            (float64, CUDA only), or 'auto' (GPU-fp32 if CUDA present, else CPU).
+        solver: Numerical routine for the linear-model fit (family=None only):
+            'qr' (default) or 'svd'. Not configurable on the GPU backend (which
+            uses Cholesky on the normal equations) and not applicable to GLMs.
         force: If True, proceed with the GPU float32 Cholesky path even when it
             is unreliable — for OLS, on ill-conditioned designs; for GLM, when
             IRLS does not converge in float32 (returns the possibly-inaccurate
@@ -100,7 +107,7 @@ def fit(
         design = X_or_design
     else:
         if y is None:
-            raise ValueError("y required when passing arrays")
+            raise ValidationError("y required when passing arrays")
         design = Design.from_arrays(np.asarray(X_or_design), np.asarray(y))
 
     # Resolve names: a Design built from a term spec carries its own column
@@ -112,9 +119,14 @@ def fit(
 
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:
+        if solver is not None:
+            raise ValidationError(
+                "solver= applies only to linear models (family=None); GLMs are "
+                "fit by IRLS. Remove solver=, or drop family= for an OLS fit."
+            )
         return _fit_glm(design, family, backend, tol, max_iter, resolved_names, force, l2)
     else:
-        return _fit_lm(design, backend, force, resolved_names, l2)
+        return _fit_lm(design, backend, force, resolved_names, l2, solver)
 
 
 def ridge(
@@ -140,7 +152,7 @@ def ridge(
     alongside this once the coordinate-descent solver exists.)
     """
     if lam < 0:
-        raise ValueError(f"ridge penalty lam must be non-negative, got {lam}")
+        raise ValidationError(f"ridge penalty lam must be non-negative, got {lam}")
     return fit(X_or_design, y, family=family, backend=backend, tol=tol,
                max_iter=max_iter, names=names, l2=lam)
 
@@ -161,7 +173,7 @@ def _resolve_names(
         return tuple(names)
     if len(names) == p - 1:
         return ("(Intercept)",) + tuple(names)
-    raise ValueError(
+    raise ValidationError(
         f"names must have {p} or {p - 1} elements to match X with "
         f"{p} columns, got {len(names)}"
     )
@@ -173,12 +185,18 @@ def _fit_lm(
     force: bool,
     names: tuple[str, ...] | None,
     l2: float = 0.0,
+    solver: SolverChoice | None = None,
 ) -> LinearSolution:
     """Fit ordinary least squares, or ridge when l2 > 0."""
     if l2 > 0:
+        if solver is not None:
+            raise ValidationError(
+                "solver= is not applicable to ridge fits (l2 > 0), which use a "
+                "backward-stable augmented solve. Remove solver=."
+            )
         return _fit_lm_ridge(design, l2, names)
 
-    backend_impl = _get_lm_backend(backend, design)
+    backend_impl = _get_lm_backend(backend, solver, design)
 
     # Solve — pass force to GPU backends, CPU ignores it
     if hasattr(backend_impl, 'solve') and 'force' in backend_impl.solve.__code__.co_varnames:
@@ -494,95 +512,41 @@ def _fit_nb(
 # Backend selection
 # =====================================================================
 
-def _get_lm_backend(choice: BackendChoice, design: Design):
-    """Select LM backend based on user choice and hardware availability."""
-    if choice == 'auto':
-        device = select_device('auto')
-        if device.device_type == 'cuda':
-            try:
-                from pystatistics.regression.backends.gpu import GPUQRBackend
-                return GPUQRBackend(device='cuda')
-            except ImportError:
-                warnings.warn(
-                    "CUDA detected but PyTorch not available. "
-                    "Falling back to CPU backend.",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                return CPUQRBackend()
-        # auto + MPS -> CPU (MPS is FP32-only, not reliable for auto)
-        # auto + CPU -> CPU
-        return CPUQRBackend()
+def _get_lm_backend(choice: BackendChoice, solver: SolverChoice | None, design: Design):
+    """Select the LM backend from the resolved (device, precision) target.
 
-    elif choice in ('cpu', 'cpu_qr'):
-        return CPUQRBackend()
+    ``backend`` decides the device + precision (via the canonical resolver);
+    ``solver`` decides the numerical routine on the CPU path. The GPU path uses
+    Cholesky on the normal equations and is not solver-configurable.
+    """
+    target = resolve_backend(choice, supports_fp64=True)
 
-    elif choice == 'cpu_svd':
-        raise NotImplementedError("CPU SVD backend not yet implemented")
+    if target.device_type == 'cpu':
+        if solver in (None, 'qr'):
+            return CPUQRBackend()
+        if solver == 'svd':
+            raise NotImplementedError("CPU SVD solver not yet implemented")
+        raise ValidationError(
+            f"Unknown solver {solver!r}. Valid options: 'qr', 'svd'."
+        )
 
-    elif choice in ('gpu', 'gpu_qr'):
-        device = select_device('gpu')  # raises RuntimeError if no GPU
-        from pystatistics.regression.backends.gpu import GPUQRBackend
-        return GPUQRBackend(device=device.device_type)
-
-    elif choice == 'gpu_fp64':
-        # float64 GPU OLS — CUDA only (GPUQRBackend raises on MPS, which has no
-        # float64). A correctness path, not a speed path.
-        device = select_device('gpu')
-        from pystatistics.regression.backends.gpu import GPUQRBackend
-        return GPUQRBackend(device=device.device_type, use_fp64=True)
-
-    else:
-        raise ValueError(f"Unknown backend: {choice!r}")
+    if solver is not None:
+        raise ValidationError(
+            "solver= is not configurable on the GPU backend, which uses "
+            "Cholesky on the normal equations. Omit solver=, or use "
+            "backend='cpu' for QR/SVD."
+        )
+    from pystatistics.regression.backends.gpu import GPUQRBackend
+    return GPUQRBackend(device=target.device_type, use_fp64=target.use_fp64)
 
 
 def _get_glm_backend(choice: BackendChoice):
-    """Select GLM backend based on user choice and hardware availability."""
+    """Select the GLM (IRLS) backend from the resolved (device, precision) target."""
     from pystatistics.regression.backends.cpu_glm import CPUIRLSBackend
 
-    if choice == 'auto':
-        device = select_device('auto')
-        if device.device_type == 'cuda':
-            try:
-                from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
-                return GPUIRLSBackend(device='cuda')
-            except ImportError:
-                warnings.warn(
-                    "CUDA detected but GPU GLM backend not available. "
-                    "Falling back to CPU IRLS.",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                return CPUIRLSBackend()
-        # auto + MPS -> CPU (MPS not auto-selected)
-        # auto + CPU -> CPU
+    target = resolve_backend(choice, supports_fp64=True)
+    if target.device_type == 'cpu':
         return CPUIRLSBackend()
 
-    elif choice in ('cpu', 'cpu_qr'):
-        return CPUIRLSBackend()
-
-    elif choice in ('gpu', 'gpu_qr'):
-        device = select_device('gpu')  # raises RuntimeError if no GPU
-        try:
-            from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
-            return GPUIRLSBackend(device=device.device_type)
-        except ImportError:
-            raise ImportError(
-                "GPU GLM backend requires PyTorch. "
-                "Install with: pip install torch"
-            )
-
-    elif choice == 'gpu_fp64':
-        # float64 GPU — CUDA only (the backend raises a clear error on MPS).
-        device = select_device('gpu')
-        try:
-            from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
-            return GPUIRLSBackend(device=device.device_type, use_fp64=True)
-        except ImportError:
-            raise ImportError(
-                "GPU GLM backend requires PyTorch. "
-                "Install with: pip install torch"
-            )
-
-    else:
-        raise ValueError(f"Unknown backend: {choice!r}")
+    from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
+    return GPUIRLSBackend(device=target.device_type, use_fp64=target.use_fp64)

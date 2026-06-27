@@ -33,7 +33,7 @@ from pystatistics.ordinal._information import (
 def reference_data():
     """4-level ordinal data with three predictors (seed 7, n=800).
 
-    The matching ``MASS::polr(y ~ x1 + x2 + x3, method='logistic')`` fit gives
+    The matching ``MASS::polr(y ~ x1 + x2 + x3, link='logistic')`` fit gives
     the coefficient and threshold standard errors recorded in
     ``test_threshold_se_matches_mass`` below.
     """
@@ -115,8 +115,8 @@ class TestVcovNatural:
     def test_threshold_se_matches_mass(self, reference_data):
         """Natural-coordinate threshold SEs match MASS::polr() exactly."""
         y, X = reference_data
-        sol = polr(y, X, method="logistic")
-        # Reference from R: MASS::polr(y ~ x1+x2+x3, method='logistic',
+        sol = polr(y, X, link="logistic")
+        # Reference from R: MASS::polr(y ~ x1+x2+x3, link='logistic',
         # Hess=TRUE) on the same seeded data.
         mass_coef_se = np.array([0.0800, 0.0721, 0.0709])
         mass_thresh_se = np.array([0.0835, 0.0801, 0.0933])

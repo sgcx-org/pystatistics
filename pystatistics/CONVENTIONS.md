@@ -1,0 +1,399 @@
+# PyStatistics Conventions (the Constitution)
+
+This document is the single source of truth for the PyStatistics **public API**:
+how parameters are named, what they mean, how backends and precision are
+selected, what fit functions return, and which errors they raise.
+
+It is **binding**. New modules and new code conform to it. When this document
+and any other doc, habit, or upstream reference (including R) disagree, **this
+document wins**. It supersedes and absorbs the former `GPU_BACKEND_CONVENTION.md`.
+
+Authors of new modules: read this first, then mirror the reference modules
+(`regression`, `multivariate`, `multinomial`).
+
+---
+
+## 0. Governing philosophy
+
+PyStatistics guarantees **statistical and numerical parity with R** (and, where
+relevant, scipy) — its results are correct against a trusted reference. It does
+**not** guarantee, or aim for, **API parity**. R is a reference implementation
+for the *math*, not a constitution for the *interface*.
+
+The goal is **not** to make R users feel at home. The goal is for PyStatistics
+to feel like one coherent library written by one author, that happens to produce
+R-equivalent numbers. The API should read as PyStatistics — not as a collection
+of R package dialects translated into Python.
+
+R argument names are prior art, not authority:
+
+1. A concept defined library-wide uses its **constitutional name** everywhere.
+2. If R happens to use the same name and it does not conflict, keeping it is fine.
+3. If R uses a different name for a concept PyStatistics has standardized, the
+   PyStatistics name wins — rename it.
+4. A name genuinely local to one procedure may keep its conventional spelling
+   **only if** it is clear and does not collide (see Rule S0).
+
+---
+
+## Naming law
+
+### S0 — Semantic Consistency (the primary rule)
+
+**One name, one meaning.** If two parameters share a name, they mean the same
+thing. If two parameters mean the same thing, they share a name. A name binds to
+a concept **library-wide** — never "this spelling, locally redefined."
+
+S0 outranks every other rule. A name can be constitutional, scipy-aligned, and
+R-conventional and still be **illegal** if it collides semantically with the same
+name used elsewhere. When a collision exists, at least one side must be renamed
+so the shared name keeps exactly one meaning.
+
+Consequences baked into this document: `backend=` is *always* an execution
+target, never an algorithm; `method=` is *always* a statistical choice, never a
+numerical or device choice; `center` is the data-centering flag, so Levene's
+location estimator is `location`, not `center`.
+
+### S1 — Descriptive `snake_case`; no single-letter public parameters
+
+Public parameters are descriptive `snake_case`. Single-letter parameters are
+banned (`m`, `R` are out). **Sole exception:** the canonical data arrays `x`,
+`y`, and the design matrix `X`, which are universally conventional.
+
+### S2 — No dotted string values
+
+String-valued options use no `.` separators (R lexical artifact). Use a hyphen
+or a plain word: `"two-sided"`, not `"two.sided"`; `"complete"`, not
+`"complete.obs"`.
+
+### S3 — Never shadow Python builtins
+
+No parameter may be named `type`, `id`, `input`, `list`, etc. Use a qualified
+name (`ci_type`).
+
+### S4 — One constitutional name per library-wide concept
+
+See the registry below. These names are reserved and mean exactly one thing.
+
+### S5 — `method` vs `solver` vs `link` are distinct
+
+The selector taxonomy (below) assigns each kind of choice its own name. `method`
+is the **statistical** choice; `solver` is the **numerical** routine; `link` is
+the link function; `backend` is the execution target; `family` is the
+distribution.
+
+### S6 — Tie-breaker: prefer the Python ecosystem
+
+When de-R-ifying a name that has no PyStatistics prior art and no constitutional
+entry, prefer the dominant Python spelling (scipy/numpy/sklearn) over R. S6 is
+only a tie-breaker; it never overrides S0–S4. (Example: `equal_var` follows
+scipy. Counter-example: the one-sample null mean is `pop_mean`, not scipy's
+`popmean`, because S1 snake_case outranks the S6 tie-break.)
+
+---
+
+## Selector taxonomy (each name = exactly one concept)
+
+| Name | Means | Never means |
+|---|---|---|
+| `backend` | execution target: device **and** precision | an algorithm |
+| `family` | error / response distribution | anything else |
+| `link` | link function (a model specification) | a numerical routine |
+| `method` | the **statistical** choice — which estimator / statistic / principle (changes the statistical meaning of the result) | a numerical or device choice |
+| `solver` | the **numerical** routine producing the same statistical result (differs only in speed / stability) | a statistical choice |
+| `na_action` | missing-data policy | anything else |
+
+A user who learns this table can predict every module: `method` = which
+statistic, `solver` = which numerical routine, `backend` = where it runs,
+`link` / `family` = the model.
+
+---
+
+## Constitutional concept registry
+
+| Concept | Canonical name | Notes |
+|---|---|---|
+| convergence tolerance | `tol` | per-procedure default allowed |
+| max iterations | `max_iter` | |
+| compute backend | `backend` | values: `cpu` · `gpu` · `gpu_fp64` · `auto` |
+| numerical escape hatch | `force` | "proceed despite a numerical-safety guard" |
+| predictor / column labels | `names` | |
+| response-category labels | `category_names` | replaces `level_names` / `class_names` |
+| GLM family | `family` | |
+| link function | `link` | when exposed outside `family` |
+| L2 / ridge penalty | `l2` | |
+| RNG seed | `seed` | |
+| confidence level | `conf_level` | |
+| count of stochastic replicates | `n_<thing>` | `n_resamples`, `n_imputations` |
+| statistical variant | `method` | see taxonomy |
+| numerical routine | `solver` | see taxonomy |
+| missing-data policy | `na_action` | values: `everything` · `complete` · `pairwise` |
+| test alternative | `alternative` | values: `two-sided` · `less` · `greater` |
+
+Anything not listed and genuinely local-and-clear (`order`, `seasonal`,
+`include_mean`, `center`, `scale`, `paired`, `strata`, `ties`, `reml`,
+`ss_type`, `quantile_type`, `correction`, `conf_type`, …) keeps its conventional
+name.
+
+---
+
+## Backend & precision convention
+
+`backend=` jointly encodes **device and precision**. The combinations are a
+small, closed set — invalid states (CPU-fp32, MPS-fp64) are simply
+unrepresentable rather than guarded at runtime.
+
+| `backend=` | Device | Precision | Role |
+|---|---|---|---|
+| `'cpu'` | CPU | float64 | the reference path (R-parity, regulated-industry default) |
+| `'gpu'` | CUDA *or* MPS (auto) | float32 | the speed default |
+| `'gpu_fp64'` | **CUDA only** | float64 | correctness path; numerically exact (~1e-15 vs CPU) |
+| `'auto'` | CUDA-fp32 if present, else CPU | — | never auto-selects MPS |
+
+Rules:
+
+- **Default resolution.** `backend=None` resolves from input: a numpy array / CPU
+  source → `'cpu'`; a `torch.Tensor` already on a GPU → `'gpu'`. numpy defaults
+  to `cpu` because "unspecified" must mean the reference path.
+- **No public device strings.** `'cuda'` / `'mps'` are internal `device_type`
+  values, never public `backend=` values. The device under `'gpu'` is
+  auto-resolved.
+- **`gpu_fp64` is CUDA-only.** On MPS it raises (Metal has no float64) with the
+  one canonical message:
+
+  > `backend='gpu_fp64' requires CUDA: Apple Silicon (Metal/MPS) has no float64. Use backend='gpu' (float32) on Apple Silicon, or backend='cpu' for a double-precision fit.`
+
+- **Precision is in the string, not a flag.** There is **no** `use_fp64`
+  parameter. (Removed in 4.0.)
+- **Honest subsets.** A module exposes only the `backend` values it can honor.
+  Modules with no algorithmically warranted float64 GPU path
+  (`hypothesis`, `descriptive`, `montecarlo`) list `{'cpu','gpu','auto'}` and
+  raise on `'gpu_fp64'`. A module with no GPU path exposes no `backend=` at all.
+- **When to add a GPU backend at all.** Only when the computation maps to a GPU
+  win (large dense linear algebra, big-N likelihoods, batched fits,
+  frequency-domain transforms) — measured CPU time > ~100 ms with > 80% in a
+  cuBLAS/cuSOLVER/cuFFT-mappable kernel. Do not add a GPU backend just because a
+  module is public; offering a slower path that can't be honored violates S0 and
+  fail-fast.
+- **FP32 tolerance floor.** When running float32, floor `tol` at 1e-5 (FP32
+  gradient precision is ~1e-7; tighter tolerances stall on the noise floor).
+- **Test tolerances** against CPU use the published `GPU_FP32` tier from
+  `core.compute.tolerances`, not ad-hoc numbers.
+
+### When to add a GPU backend — and when not to
+
+A GPU backend exists because the underlying computation is a good fit for GPU
+hardware, **not** because a module is public and therefore "deserves" one.
+Adding a backend that doesn't make algorithmic sense is worse than having none:
+it invites users onto a slower path, adds a maintenance surface, and forces
+convention compliance for no benefit.
+
+**Reasonable targets:** large dense linear algebra (QR / SVD / Cholesky),
+per-iteration gradient evaluations on large design matrices, big-N likelihood
+evaluations, batched independent fits, frequency-domain transforms.
+
+**Not reasonable targets — do not add a GPU backend for these:**
+
+- Many-small-fits workflows where per-call launch overhead dominates compute
+  (e.g. ANOVA SS, which fits a chain of tiny regressions — the CPU LAPACK call
+  is microseconds, the GPU kernel launch is milliseconds).
+- Inherently sequential algorithms without exploitable parallelism (most EM
+  variants below a certain dataset size, Cox PH partial likelihood).
+- Algorithms already bounded by PCIe / device-to-host transfer, where compute
+  is cheap enough that copying costs more than the kernel.
+- Algorithms where the existing scipy / LAPACK implementation is already within
+  an order of magnitude of hardware peak — a 2× speedup is not worth the
+  convention-compliance + test + review cost.
+
+**Signal that GPU makes sense:** measured CPU time > ~100 ms on a representative
+input, with > 80 % of that time in a compute kernel that maps to
+cuBLAS / cuSOLVER / cuFFT. Below that threshold, launch + transfer overhead eats
+the win.
+
+If a public module has **no** `backends/gpu*.py`, that is a deliberate statement
+— like `anova`, `timeseries.ets`, `survival.coxph`,
+`multivariate.factor_analysis`, and the acf / stationarity families. The public
+API correspondingly does not expose a `backend=` parameter, which is the correct
+state: offering a `backend='gpu'` you can't honor violates S0 and fail-fast.
+
+### Testing GPU backends
+
+Every GPU backend ships a `Test<Module>GPU` class mirroring the reference
+modules, covering at least:
+
+- `test_invalid_backend_raises` (bad backend string → `ValidationError`);
+- `test_gpu_unavailable_raises_explicitly` (monkeypatched `detect_gpu`,
+  `backend='gpu'` must raise `RuntimeError`);
+- `test_auto_backend_falls_back_to_cpu_when_no_gpu` (monkeypatched,
+  `backend='auto'` must succeed on the CPU path);
+- `test_gpu_fp64_matches_cpu_<property>` (CUDA only, skip on MPS);
+- `test_gpu_fp32_matches_cpu_at_tier` (asserts the `GPU_FP32` tolerance tier
+  from `core.compute.tolerances`, never ad-hoc numbers);
+- `test_gpu_tensor_with_cpu_backend_raises` (explicit `backend='cpu'` on a GPU
+  tensor must raise — no silent migration).
+
+The FP32 tolerance floor (`tol` floored at 1e-5) applies to assertions too: a
+fit that explicitly ran in float32 cannot be held to float64 convergence.
+
+---
+
+## Result objects
+
+- **Suffix.** Every public fit returns a `…Solution` (not `…Result`).
+- **Envelope.** Every Solution wraps the core `Result[Params]`, so
+  `.backend_name`, `.timing`, `.warnings`, and `.info` exist library-wide
+  (including timeseries and multivariate, which previously returned bare
+  dataclasses).
+- **Uniform accessors** (present whenever meaningful):
+
+  | Concept | Accessor |
+  |---|---|
+  | coefficients (array) | `.coefficients` |
+  | coefficients (labeled dict) | `.coef` |
+  | standard errors | `.standard_errors` |
+  | fitted values | `.fitted_values` |
+  | residuals | `.residuals` (GLM-style variants: `.residuals_deviance`, `.residuals_pearson`, `.residuals_working`, `.residuals_response`) |
+  | test statistics | `.z_values` (z-test) / `.t_values` (t-test) — never `.test_statistics` |
+  | p-values | `.p_values` |
+  | confidence interval | `.conf_int` |
+  | convergence | `.converged`, `.n_iter` (on every iterative fit) |
+  | backend used | `.backend_name` |
+
+- **Display.** Every Solution implements `.summary()` (R-style printed report),
+  `__repr__()`, and `_repr_html_()` (Jupyter).
+
+---
+
+## Errors & validation
+
+- **Input validation** goes through `core.validation` helpers (`check_array`,
+  `check_finite`, `check_2d`, `check_consistent_length`, …). No module rolls its
+  own.
+- **Exception types** come from `core.exceptions`, never bare
+  `ValueError`/`RuntimeError`:
+
+  | Condition | Exception | Canonical message shape |
+  |---|---|---|
+  | unknown / unsupported `backend` | `ValidationError` | `Unknown backend {value!r}. Valid options: …` |
+  | GPU requested, none available | `RuntimeError` | `No GPU available (need CUDA or MPS). Use backend='cpu', or install PyTorch with CUDA/MPS support.` |
+  | `gpu_fp64` on MPS | `RuntimeError` | the canonical CUDA-required message above |
+  | iterative non-convergence | `ConvergenceError` | include `iterations`, `final_change`, `reason` |
+  | invalid input (shape / non-finite / bad arg) | `ValidationError` (or `DimensionError`) | descriptive, fail-loud |
+
+- **Fail loud, no silent defaults.** An explicit request that cannot be honored
+  (e.g. `backend='cpu'` with a GPU tensor) raises; it never silently migrates.
+
+---
+
+## Determinism
+
+- Stochastic procedures take `seed: int`. The RNG is constructed from it
+  explicitly (`numpy.random.default_rng(seed)` on CPU; `torch.manual_seed` on
+  GPU) — no global RNG state.
+- GPU RNG is not bit-identical to CPU; replicates are statistically equivalent,
+  not bitwise-equal. Document this per function.
+
+---
+
+## 4.0 migration table (old → new → reason)
+
+| Old | Module | → 4.0 | Reason |
+|---|---|---|---|
+| `maxit` | mice | `max_iter` | S4: library-wide max-iterations name. |
+| `m` | mice | `n_imputations` | S1: no single-letter params. |
+| `R` | boot | `n_resamples` | S1: no single-letter params. |
+| `sim` | boot | `method` | S5: selects the statistical bootstrap variant. |
+| `stype` | boot | `statistic_type` (values `index`/`frequency`/`weight`) | S1: de-abbreviate cryptic name + values. |
+| `use` | cor, describe | `na_action` (values `everything`/`complete`/`pairwise`) | S4 + S2: missing-data policy; de-dot values. |
+| `mu` | t_test | `pop_mean` | S1 + S6 (snake_case over scipy `popmean`). |
+| `var_equal` | t_test, var_test | `equal_var` | S6: scipy spelling. |
+| `conf` | boot_ci | `conf_level` | S4: library-wide confidence level. |
+| `type` | boot_ci | `ci_type` | S3: shadows a builtin. |
+| `ridge` | polr | `l2` | S4: library-wide L2 penalty. |
+| `method` (link) | polr | `link` | S0/S5: link function is a model spec, not a `method`. |
+| `method` (svd/gram) | pca | `solver` | S0/S5: numerical routine, not a statistical choice. |
+| `algorithm` | mvnmle | `method` | S5: estimation method (direct/em/monotone). |
+| `method` (optimizer) | mvnmle | `solver` | S0/S5: inner numerical optimizer. |
+| `center` (median/mean) | levene_test | `location` | S0: collides with pca `center: bool`. |
+| `level_names` / `class_names` | ordinal / multinomial | `category_names` | S4: one name for response-category labels. |
+| values `"two.sided"` | hypothesis, timeseries | `"two-sided"` | S2: de-dot. |
+| `use_fp64=True` | mice, ordinal, multinomial, multivariate, mvnmle, gam, timeseries | `backend='gpu_fp64'` | precision lives in the backend string. |
+| `…Result` | multivariate, timeseries | `…Solution` | uniform result suffix. |
+| `.se` | mixed | `.standard_errors` | uniform accessor. |
+
+These are breaking interface changes. They ship together as **4.0**, the
+consistency release. No deprecation shim — the old names/flags are removed.
+Statistical results are unchanged.
+
+---
+
+## Amendments
+
+This constitution is **self-amending**. When a naming or API question arises
+that the rules above do not unambiguously answer, the resolution is recorded
+here as a numbered amendment so that every future occurrence has a single,
+binding answer rather than a fresh one-off judgement. Only a genuinely unique
+situation (one that cannot recur) is exempt from being generalised into an
+amendment. Amendments have the same force as the rules above.
+
+### A1 — Option *values* obey the naming law, not just parameter names
+
+S1 (descriptive `snake_case`, no single-letter identifiers) and S2 (no dotted
+string values) apply to the **string values** an option accepts, not only to the
+parameter name. Option values are descriptive lowercase words:
+
+- No cryptic abbreviations or single-letter codes: `statistic_type` takes
+  `'index'` / `'frequency'` / `'weight'`, never `'i'` / `'f'` / `'w'`.
+- No dotted separators: `'two-sided'`, `'complete'`, not `'two.sided'`,
+  `'complete.obs'`.
+- Multi-word values use a hyphen (`'two-sided'`, `'log-log'`); prefer the
+  dominant Python-ecosystem spelling on a tie (S6).
+
+### A2 — Name a test's null value for the quantity it constrains
+
+The value a hypothesis test compares the data against is named for *what that
+parameter is*, never reusing the Greek-letter shorthand `mu`:
+
+- `pop_mean` when it is specifically a **population mean** (e.g. one-sample
+  `t_test`).
+- `null_value` for a **generic or non-mean null** — a location shift
+  (`wilcox_test`), a proportion, a ratio, etc. This matches the library-wide
+  `.null_value` result accessor.
+
+Two tests share `pop_mean` only if both constrain a population mean; otherwise
+the generic case is `null_value`. (S0 holds: the names differ because the
+quantities differ.)
+
+### A3 — Wald statistic accessor: `.t_values` vs `.z_values`
+
+The coefficient Wald statistic (estimate / standard error) on a result object
+is exposed under exactly one of two names, chosen by the reference distribution
+the fit uses for its p-values:
+
+- `.t_values` when the reference is Student-t (finite-sample): linear models
+  and mixed-model LMM.
+- `.z_values` when the reference is normal / asymptotic: GLM, GLMM, ordinal,
+  multinomial, and Cox proportional hazards.
+
+`.test_statistics`, `.z_statistics`, `.t_statistics` are not used. A class
+exposes only the one name matching its distribution; it never exposes both. GLM
+standardises on `.z_values` for all families (the Wald statistic value is
+identical regardless; the t-vs-z choice for gaussian/gamma p-values is handled
+inside the p-value computation, not the statistic accessor).
+
+### A4 — Exception types, and `ValidationError` is also a `ValueError`
+
+Every error a module raises comes from the `core.exceptions` hierarchy (all
+rooted at `PyStatisticsError`), never a bare builtin. The mapping:
+
+- invalid argument / shape / non-finite input → `ValidationError` (or its
+  subclass `DimensionError` for shape/dimension mismatches);
+- iterative non-convergence → `ConvergenceError`;
+- GPU requested but unavailable / `gpu_fp64` on MPS → `RuntimeError` (an
+  environment failure, not a value error — this is the one builtin that stays).
+
+`ValidationError` subclasses **both** `PyStatisticsError` and the builtin
+`ValueError`. So `except PyStatisticsError` catches all library errors, and
+`except ValueError` (the numpy/scipy habit) still catches every validation
+failure. A module must not raise a bare `ValueError` for input validation —
+raise `ValidationError`, which *is* a `ValueError`.

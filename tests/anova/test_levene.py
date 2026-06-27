@@ -60,19 +60,19 @@ class TestLeveneCenterOptions:
         y = np.array([1.0, 2.0, 3.0, 4.0])
         group = np.array(['A', 'A', 'B', 'B'])
         result = levene_test(y, group)
-        assert result.center == 'median'
+        assert result.location == 'median'
 
     def test_mean_center(self):
         y = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         group = np.array(['A', 'A', 'A', 'B', 'B', 'B'])
-        result = levene_test(y, group, center='mean')
-        assert result.center == 'mean'
+        result = levene_test(y, group, location='mean')
+        assert result.location == 'mean'
 
     def test_invalid_center_raises(self):
         y = np.array([1.0, 2.0, 3.0])
         group = np.array(['A', 'B', 'C'])
         with pytest.raises(ValueError, match="center"):
-            levene_test(y, group, center='mode')
+            levene_test(y, group, location='mode')
 
 
 class TestLeveneOutput:
@@ -105,7 +105,7 @@ class TestLeveneOutput:
         rng = np.random.default_rng(42)
         y = np.concatenate([rng.normal(0, 1, 20), rng.normal(0, 1, 20)])
         group = np.array(['A'] * 20 + ['B'] * 20)
-        result = levene_test(y, group, center='mean')
+        result = levene_test(y, group, location='mean')
         text = result.summary()
         assert 'Levene' in text
 

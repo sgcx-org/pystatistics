@@ -353,13 +353,13 @@ def anova_posthoc(
         if len(params.group_means) == 1:
             factor = list(params.group_means.keys())[0]
         else:
-            raise ValueError(
+            raise ValidationError(
                 "Multiple factors present. Specify factor= explicitly. "
                 f"Available: {list(params.group_means.keys())}"
             )
 
     if factor not in params.group_means:
-        raise ValueError(
+        raise ValidationError(
             f"Factor {factor!r} not found. "
             f"Available: {list(params.group_means.keys())}"
         )
@@ -372,7 +372,7 @@ def anova_posthoc(
     group_arr = anova_result._result.info.get(f'_factor_{factor}')
 
     if y_arr is None or group_arr is None:
-        raise ValueError(
+        raise ValidationError(
             "Post-hoc tests require original data arrays. "
             "This should have been stored in the ANOVA result."
         )
@@ -389,13 +389,13 @@ def anova_posthoc(
         )
     elif method == 'dunnett':
         if control is None:
-            raise ValueError("Dunnett test requires control= parameter")
+            raise ValidationError("Dunnett test requires control= parameter")
         posthoc_params = dunnett_test(
             y_arr, group_arr, mse, df_error, control,
             factor=factor, conf_level=conf_level,
         )
     else:
-        raise ValueError(
+        raise ValidationError(
             f"Unknown method {method!r}. Use 'tukey', 'bonferroni', or 'dunnett'."
         )
 
@@ -415,19 +415,20 @@ def levene_test(
     y: Any,
     group: Any,
     *,
-    center: str = 'median',
+    location: str = 'median',
 ) -> LeveneSolution:
     """
     Levene's test for homogeneity of variances.
 
     Tests the null hypothesis that all groups have equal variances.
-    With center='median' (default), this is the Brown-Forsythe variant
+    With location='median' (default), this is the Brown-Forsythe variant
     which is more robust to non-normality.
 
     Args:
         y: Response variable (1D numeric array-like)
         group: Group labels (1D array-like, same length as y)
-        center: 'median' (Brown-Forsythe, default) or 'mean' (original Levene)
+        location: Location estimator subtracted before the test —
+            'median' (Brown-Forsythe, default) or 'mean' (original Levene)
 
     Returns:
         LeveneSolution with F statistic, p-value, and group variances
@@ -443,13 +444,13 @@ def levene_test(
     y_arr = design.y
     group_arr = design.factors['group']
 
-    levene_params = levene_test_impl(y_arr, group_arr, center=center)
+    levene_params = levene_test_impl(y_arr, group_arr, center=location)
 
     elapsed = time.perf_counter() - t0
 
     result = Result(
         params=levene_params,
-        info={'center': center},
+        info={'location': location},
         timing={'total_seconds': elapsed},
         backend_name='cpu',
     )
@@ -475,4 +476,4 @@ def _compute_ss(
     elif ss_type == 3:
         return compute_ss_type3(y, mm)
     else:
-        raise ValueError(f"ss_type must be 1, 2, or 3, got {ss_type}")
+        raise ValidationError(f"ss_type must be 1, 2, or 3, got {ss_type}")

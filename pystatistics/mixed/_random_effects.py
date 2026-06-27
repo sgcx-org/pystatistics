@@ -14,6 +14,8 @@ of the lower-triangular Cholesky factor of the *relative* covariance matrix
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
@@ -74,7 +76,7 @@ def parse_random_effects(
     for group_name in groups:
         group_raw = np.asarray(groups[group_name])
         if group_raw.shape[0] != n:
-            raise ValueError(
+            raise ValidationError(
                 f"Group '{group_name}' has {group_raw.shape[0]} elements, "
                 f"expected {n}"
             )
@@ -144,14 +146,14 @@ def _build_z_block(
         else:
             # Slope: indicator × variable value
             if term not in random_data:
-                raise ValueError(
+                raise ValidationError(
                     f"Random slope term '{term}' requires data in "
                     f"random_data dict, but '{term}' was not found. "
                     f"Available: {list(random_data.keys())}"
                 )
             var_data = np.asarray(random_data[term], dtype=np.float64)
             if var_data.shape[0] != n:
-                raise ValueError(
+                raise ValidationError(
                     f"Random data '{term}' has {var_data.shape[0]} elements, "
                     f"expected {n}"
                 )
@@ -174,7 +176,7 @@ def build_z_matrix(specs: list[RandomEffectSpec]) -> NDArray:
         Full Z matrix of shape (n, total_q).
     """
     if not specs:
-        raise ValueError("At least one random effect specification required")
+        raise ValidationError("At least one random effect specification required")
     blocks = [spec.Z_block for spec in specs]
     return np.hstack(blocks)
 

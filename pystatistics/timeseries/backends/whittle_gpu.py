@@ -53,10 +53,8 @@ class WhittleGPULikelihood:
         import torch
 
         if device == "mps" and use_fp64:
-            raise RuntimeError(
-                "GPU Whittle: MPS does not support FP64. "
-                "Use use_fp64=False or backend='cpu'."
-            )
+            from pystatistics.core.compute.backend import FP64_REQUIRES_CUDA_MSG
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
 
         self._torch = torch
         self._device = torch.device(device)

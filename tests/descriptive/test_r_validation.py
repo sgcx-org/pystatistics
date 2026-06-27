@@ -128,10 +128,10 @@ class TestRValidation:
         data, r, meta = _load_fixture(fixture_name)
 
         if r['has_nan']:
-            result = describe(data, use='complete.obs', backend='cpu')
+            result = describe(data, na_action='complete', backend='cpu')
             expected = _r_to_array(r['mean_complete'])
         else:
-            result = describe(data, use='everything', backend='cpu')
+            result = describe(data, na_action='everything', backend='cpu')
             expected = _r_to_array(r['mean_everything'])
 
         _assert_allclose_with_nan(result.mean, expected, **_get_tolerances(fixture_name))
@@ -141,10 +141,10 @@ class TestRValidation:
         data, r, meta = _load_fixture(fixture_name)
 
         if r['has_nan']:
-            result = describe(data, use='complete.obs', backend='cpu')
+            result = describe(data, na_action='complete', backend='cpu')
             expected = _r_to_array(r['var_complete'])
         else:
-            result = describe(data, use='everything', backend='cpu')
+            result = describe(data, na_action='everything', backend='cpu')
             expected = _r_to_array(r['var_everything'])
 
         _assert_allclose_with_nan(result.variance, expected, **_get_tolerances(fixture_name))
@@ -154,10 +154,10 @@ class TestRValidation:
         data, r, meta = _load_fixture(fixture_name)
 
         if r['has_nan']:
-            result = describe(data, use='complete.obs', backend='cpu')
+            result = describe(data, na_action='complete', backend='cpu')
             expected = _r_to_array(r['sd_complete'])
         else:
-            result = describe(data, use='everything', backend='cpu')
+            result = describe(data, na_action='everything', backend='cpu')
             expected = _r_to_array(r['sd_everything'])
 
         _assert_allclose_with_nan(result.sd, expected, **_get_tolerances(fixture_name))
@@ -168,10 +168,10 @@ class TestRValidation:
         p = meta['p']
 
         if r['has_nan']:
-            result = cov(data, use='complete.obs', backend='cpu')
+            result = cov(data, na_action='complete', backend='cpu')
             expected = _r_to_array(r['cov_complete']).reshape(p, p, order='F')
         else:
-            result = cov(data, use='everything', backend='cpu')
+            result = cov(data, na_action='everything', backend='cpu')
             expected = _r_to_array(r['cov_everything']).reshape(p, p, order='F')
 
         _assert_allclose_with_nan(
@@ -184,10 +184,10 @@ class TestRValidation:
         p = meta['p']
 
         if r['has_nan']:
-            result = cor(data, method='pearson', use='pairwise.complete.obs', backend='cpu')
+            result = cor(data, method='pearson', na_action='pairwise', backend='cpu')
             key = 'cor_pearson_pairwise'
         else:
-            result = cor(data, method='pearson', use='everything', backend='cpu')
+            result = cor(data, method='pearson', na_action='everything', backend='cpu')
             key = 'cor_pearson_everything'
 
         expected = _r_to_array(r[key]).reshape(p, p, order='F')
@@ -210,7 +210,7 @@ class TestRValidation:
 
         result = cor(
             data, method='spearman',
-            use='pairwise.complete.obs' if r['has_nan'] else 'everything',
+            na_action='pairwise' if r['has_nan'] else 'everything',
             backend='cpu',
         )
         expected = _r_to_array(r[key]).reshape(p, p, order='F')
@@ -233,7 +233,7 @@ class TestRValidation:
 
         result = cor(
             data, method='kendall',
-            use='pairwise.complete.obs' if r['has_nan'] else 'everything',
+            na_action='pairwise' if r['has_nan'] else 'everything',
             backend='cpu',
         )
         expected = _r_to_array(r[key]).reshape(p, p, order='F')
@@ -256,9 +256,9 @@ class TestRValidation:
             pytest.skip(f"No {key} in R results for {fixture_name}")
 
         if r['has_nan']:
-            result = quantile(data, type=qtype, use='complete.obs', backend='cpu')
+            result = quantile(data, quantile_type=qtype, na_action='complete', backend='cpu')
         else:
-            result = quantile(data, type=qtype, use='everything', backend='cpu')
+            result = quantile(data, quantile_type=qtype, na_action='everything', backend='cpu')
 
         # R: apply(data, 2, quantile) gives 5 probs x p cols, flattened column-major
         expected = _r_to_array(r[key]).reshape(5, p, order='F')
@@ -270,9 +270,9 @@ class TestRValidation:
         p = meta['p']
 
         if r['has_nan']:
-            result = summary(data, use='complete.obs', backend='cpu')
+            result = summary(data, na_action='complete', backend='cpu')
         else:
-            result = summary(data, use='everything', backend='cpu')
+            result = summary(data, na_action='everything', backend='cpu')
 
         # R: apply(data, 2, summary) gives 6 rows x p cols, flattened column-major
         expected = _r_to_array(r['summary']).reshape(6, p, order='F')
@@ -286,9 +286,9 @@ class TestRValidation:
             pytest.skip("No skewness in R results")
 
         if r['has_nan']:
-            result = describe(data, use='complete.obs', backend='cpu')
+            result = describe(data, na_action='complete', backend='cpu')
         else:
-            result = describe(data, use='everything', backend='cpu')
+            result = describe(data, na_action='everything', backend='cpu')
 
         expected = _r_to_array(r['skewness'])
         _assert_allclose_with_nan(result.skewness, expected, **_get_tolerances(fixture_name))
@@ -301,9 +301,9 @@ class TestRValidation:
             pytest.skip("No kurtosis in R results")
 
         if r['has_nan']:
-            result = describe(data, use='complete.obs', backend='cpu')
+            result = describe(data, na_action='complete', backend='cpu')
         else:
-            result = describe(data, use='everything', backend='cpu')
+            result = describe(data, na_action='everything', backend='cpu')
 
         expected = _r_to_array(r['kurtosis'])
         _assert_allclose_with_nan(result.kurtosis, expected, **_get_tolerances(fixture_name))

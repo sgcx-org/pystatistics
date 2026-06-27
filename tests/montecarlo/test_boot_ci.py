@@ -34,8 +34,8 @@ class TestPercentileCI:
     def test_basic_percentile(self):
         """Percentile CI gives reasonable bounds."""
         data = np.arange(1.0, 101.0)
-        result = boot(data, mean_stat, R=2000, seed=42)
-        ci_result = boot_ci(result, type="perc")
+        result = boot(data, mean_stat, n_resamples=2000, seed=42)
+        ci_result = boot_ci(result, ci_type="perc")
 
         assert "perc" in ci_result.ci
         ci = ci_result.ci["perc"]
@@ -51,9 +51,9 @@ class TestPercentileCI:
         """Percentile CI uses correct quantiles."""
         # Construct a bootstrap with known distribution
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=10000, seed=42)
+        result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
-        ci_result = boot_ci(result, type="perc", conf=0.90)
+        ci_result = boot_ci(result, ci_type="perc", conf_level=0.90)
         ci = ci_result.ci["perc"]
 
         # The 5th and 95th percentiles of bootstrap replicates
@@ -70,8 +70,8 @@ class TestBasicCI:
     def test_basic_ci(self):
         """Basic CI gives reasonable bounds."""
         data = np.arange(1.0, 101.0)
-        result = boot(data, mean_stat, R=2000, seed=42)
-        ci_result = boot_ci(result, type="basic")
+        result = boot(data, mean_stat, n_resamples=2000, seed=42)
+        ci_result = boot_ci(result, ci_type="basic")
 
         assert "basic" in ci_result.ci
         ci = ci_result.ci["basic"]
@@ -81,9 +81,9 @@ class TestBasicCI:
     def test_basic_formula(self):
         """Basic CI uses correct pivot formula."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=10000, seed=42)
+        result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
-        ci_result = boot_ci(result, type="basic", conf=0.90)
+        ci_result = boot_ci(result, ci_type="basic", conf_level=0.90)
         ci = ci_result.ci["basic"]
 
         t0 = result.t0[0]
@@ -104,8 +104,8 @@ class TestNormalCI:
     def test_normal_ci(self):
         """Normal CI gives reasonable bounds."""
         data = np.arange(1.0, 101.0)
-        result = boot(data, mean_stat, R=2000, seed=42)
-        ci_result = boot_ci(result, type="normal")
+        result = boot(data, mean_stat, n_resamples=2000, seed=42)
+        ci_result = boot_ci(result, ci_type="normal")
 
         assert "normal" in ci_result.ci
         ci = ci_result.ci["normal"]
@@ -117,9 +117,9 @@ class TestNormalCI:
         from scipy import stats as sp_stats
 
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=10000, seed=42)
+        result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
-        ci_result = boot_ci(result, type="normal", conf=0.90)
+        ci_result = boot_ci(result, ci_type="normal", conf_level=0.90)
         ci = ci_result.ci["normal"]
 
         t0 = result.t0[0]
@@ -140,8 +140,8 @@ class TestBCaCI:
     def test_bca_ci(self):
         """BCa CI gives reasonable bounds."""
         data = np.arange(1.0, 51.0)
-        result = boot(data, mean_stat, R=2000, seed=42)
-        ci_result = boot_ci(result, type="bca")
+        result = boot(data, mean_stat, n_resamples=2000, seed=42)
+        ci_result = boot_ci(result, ci_type="bca")
 
         assert "bca" in ci_result.ci
         ci = ci_result.ci["bca"]
@@ -157,9 +157,9 @@ class TestBCaCI:
         rng = np.random.default_rng(42)
         data = rng.normal(0, 1, 100)
 
-        result = boot(data, mean_stat, R=5000, seed=42)
-        ci_perc = boot_ci(result, type="perc").ci["perc"]
-        ci_bca = boot_ci(result, type="bca").ci["bca"]
+        result = boot(data, mean_stat, n_resamples=5000, seed=42)
+        ci_perc = boot_ci(result, ci_type="perc").ci["perc"]
+        ci_bca = boot_ci(result, ci_type="bca").ci["bca"]
 
         # They should be close for symmetric data
         assert ci_bca[0, 0] == pytest.approx(ci_perc[0, 0], abs=0.3)
@@ -174,14 +174,14 @@ class TestStudentizedCI:
         data = np.arange(1.0, 51.0)
 
         # Use mean_var_stat to get per-replicate variance
-        result = boot(data, mean_var_stat, R=2000, seed=42)
+        result = boot(data, mean_var_stat, n_resamples=2000, seed=42)
 
         # Var estimates are in t[:, 1]
         var_t = result.t[:, 1]
         var_t0 = float(result.t0[1])
 
         ci_result = boot_ci(
-            result, type="stud", index=0,
+            result, ci_type="stud", index=0,
             var_t0=var_t0, var_t=var_t,
         )
 
@@ -195,10 +195,10 @@ class TestStudentizedCI:
     def test_studentized_requires_var_t(self):
         """Studentized CI raises without var_t."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
 
         with pytest.raises(ValueError, match="var_t"):
-            boot_ci(result, type="stud")
+            boot_ci(result, ci_type="stud")
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +206,13 @@ class TestStudentizedCI:
 # ---------------------------------------------------------------------------
 
 class TestAllCI:
-    """Tests for type='all'."""
+    """Tests for ci_type='all'."""
 
     def test_all_without_var_t(self):
-        """type='all' computes normal, basic, perc, bca (not stud)."""
+        """ci_type='all' computes normal, basic, perc, bca (not stud)."""
         data = np.arange(1.0, 21.0)
-        result = boot(data, mean_stat, R=500, seed=42)
-        ci_result = boot_ci(result, type="all")
+        result = boot(data, mean_stat, n_resamples=500, seed=42)
+        ci_result = boot_ci(result, ci_type="all")
 
         assert "normal" in ci_result.ci
         assert "basic" in ci_result.ci
@@ -221,12 +221,12 @@ class TestAllCI:
         assert "stud" not in ci_result.ci
 
     def test_all_with_var_t(self):
-        """type='all' includes stud when var_t provided."""
+        """ci_type='all' includes stud when var_t provided."""
         data = np.arange(1.0, 21.0)
-        result = boot(data, mean_var_stat, R=500, seed=42)
+        result = boot(data, mean_var_stat, n_resamples=500, seed=42)
 
         var_t = result.t[:, 1]
-        ci_result = boot_ci(result, type="all", var_t=var_t)
+        ci_result = boot_ci(result, ci_type="all", var_t=var_t)
 
         assert "stud" in ci_result.ci
 
@@ -241,11 +241,11 @@ class TestConfLevels:
     def test_wider_at_higher_conf(self):
         """Higher confidence level gives wider CI."""
         data = np.arange(1.0, 51.0)
-        result = boot(data, mean_stat, R=2000, seed=42)
+        result = boot(data, mean_stat, n_resamples=2000, seed=42)
 
-        ci_90 = boot_ci(result, type="perc", conf=0.90).ci["perc"]
-        ci_95 = boot_ci(result, type="perc", conf=0.95).ci["perc"]
-        ci_99 = boot_ci(result, type="perc", conf=0.99).ci["perc"]
+        ci_90 = boot_ci(result, ci_type="perc", conf_level=0.90).ci["perc"]
+        ci_95 = boot_ci(result, ci_type="perc", conf_level=0.95).ci["perc"]
+        ci_99 = boot_ci(result, ci_type="perc", conf_level=0.99).ci["perc"]
 
         width_90 = ci_90[0, 1] - ci_90[0, 0]
         width_95 = ci_95[0, 1] - ci_95[0, 0]
@@ -256,8 +256,8 @@ class TestConfLevels:
     def test_conf_level_stored(self):
         """Confidence level is stored in result."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=100, seed=42)
-        ci_result = boot_ci(result, type="perc", conf=0.90)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
+        ci_result = boot_ci(result, ci_type="perc", conf_level=0.90)
         assert ci_result.ci_conf_level == 0.90
 
 
@@ -271,8 +271,8 @@ class TestCISummary:
     def test_summary_shows_ci(self):
         """summary() includes CI information when available."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=100, seed=42)
-        ci_result = boot_ci(result, type="perc")
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
+        ci_result = boot_ci(result, ci_type="perc")
         s = ci_result.summary()
 
         assert "perc" in s

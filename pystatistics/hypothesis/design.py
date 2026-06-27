@@ -33,7 +33,7 @@ class HypothesisDesign:
 
     # Test configuration
     _mu: float = 0.0
-    _alternative: str = "two.sided"
+    _alternative: str = "two-sided"
     _conf_level: float = 0.95
     _var_equal: bool = False
     _paired: bool = False

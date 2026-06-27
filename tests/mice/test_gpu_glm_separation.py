@@ -118,9 +118,10 @@ class TestMixedSweepNoCollapse:
     @pytest.mark.parametrize("device", _accelerators())
     def test_no_column_collapses(self, device):
         X, kinds = _mixed_separated_problem(seed=0)
-        use_fp64 = device != "mps"  # MPS has no FP64
+        # MPS has no FP64; CUDA uses the double-precision path.
+        gpu_backend = "gpu" if device == "mps" else "gpu_fp64"
         design = MICEDesign.from_array(X, method="auto", column_kinds=kinds)
-        sol = mice(design, m=3, maxit=5, seed=0, backend="gpu", use_fp64=use_fp64)
+        sol = mice(design, n_imputations=3, max_iter=5, seed=0, backend=gpu_backend)
         for col in sol.incomplete_columns:
             imp = sol.imputations(col)
             assert np.isfinite(imp).all(), f"col {col} produced non-finite imputations"
@@ -142,7 +143,8 @@ class TestMixedSweepNoCollapse:
 
         def run(fp64):
             d = MICEDesign.from_array(X, method="auto", column_kinds=kinds)
-            return mice(d, m=4, maxit=5, seed=0, backend="gpu", use_fp64=fp64)
+            return mice(d, n_imputations=4, max_iter=5, seed=0,
+                        backend="gpu_fp64" if fp64 else "gpu")
 
         sol32, sol64 = run(False), run(True)
         for col in ordered:

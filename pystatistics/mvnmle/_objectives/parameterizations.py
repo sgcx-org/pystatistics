@@ -6,6 +6,7 @@ suited for different optimization algorithms and precision levels.
 """
 
 import numpy as np
+from pystatistics.core.exceptions import ValidationError
 from typing import Tuple
 from abc import ABC, abstractmethod
 
@@ -322,7 +323,7 @@ def get_parameterization(name: str, n_vars: int, **kwargs) -> CovarianceParamete
     elif name_lower in ['matrix_log', 'matrix-log', 'logm']:
         return MatrixLogParameterization(n_vars)
     else:
-        raise ValueError(f"Unknown parameterization: {name}")
+        raise ValidationError(f"Unknown parameterization: {name}")
 
 
 def convert_parameters(theta: np.ndarray, 

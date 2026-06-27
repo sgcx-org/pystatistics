@@ -1,10 +1,15 @@
 # PyStatistics Architecture Document
 
-**Software Version:** 1.0
-**Document Version:** 1.3
-**Date:** February 2026
+**Software Version:** 4.0
+**Document Version:** 1.4
+**Date:** June 2026
 **Author:** PyStatistics Team
 **Status:** Final Design Specification (updated to reflect completed modules)
+
+> 4.0 is the API-consistency release: parameter names, backend/precision
+> selection, result objects, and error types are governed by
+> `pystatistics/CONVENTIONS.md` (the binding constitution). This architecture
+> document describes structure; CONVENTIONS.md is authoritative on the API.
 
 ---
 

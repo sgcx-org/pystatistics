@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from pystatistics.core.exceptions import ValidationError
-from pystatistics.timeseries import decompose, stl, DecompositionResult
+from pystatistics.timeseries import decompose, stl, DecompositionSolution
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ class TestDecomposeEdgeCases:
         assert not np.any(np.isnan(result.trend[k: -k]))
 
     def test_result_is_frozen(self):
-        """DecompositionResult is a frozen dataclass."""
+        """DecompositionSolution is a frozen dataclass."""
         y = np.arange(24, dtype=float) + 1.0
         result = decompose(y, period=4)
         with pytest.raises(AttributeError):
@@ -368,7 +368,7 @@ class TestSTLEdgeCases:
         assert len(result.observed) == n
 
     def test_result_is_frozen(self):
-        """DecompositionResult from stl is frozen."""
+        """DecompositionSolution from stl is frozen."""
         y = np.arange(24, dtype=float) + 1.0
         result = stl(y, period=4)
         with pytest.raises(AttributeError):

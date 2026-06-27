@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-VALID_ALTERNATIVES = ("two.sided", "less", "greater")
+VALID_ALTERNATIVES = ("two-sided", "less", "greater")
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ class HTestParams:
     null_value : dict or None
         Hypothesized value under H0, e.g. {"difference in means": 0}.
     alternative : str
-        "two.sided", "less", or "greater".
+        "two-sided", "less", or "greater".
     method : str
         Human-readable method name, e.g. "Welch Two Sample t-test".
     data_name : str

@@ -234,7 +234,7 @@ class TestMixedIntegration:
         data, kinds = _make_mixed(400, 0)
         miss = datasets.make_mcar(data, 0.2, seed=1)
         design = MICEDesign.from_array(miss, column_kinds=kinds)
-        sol = mice(design, m=4, maxit=5, seed=7)
+        sol = mice(design, n_imputations=4, max_iter=5, seed=7)
         for d in sol.completed_datasets():
             assert not np.isnan(d).any()
             for j in (1, 2, 3):
@@ -251,8 +251,8 @@ class TestMixedIntegration:
         data, kinds = _make_mixed(300, 0)
         miss = datasets.make_mcar(data, 0.2, seed=1)
         design = MICEDesign.from_array(miss, column_kinds=kinds)
-        a = mice(design, m=3, maxit=4, seed=11)
-        b = mice(design, m=3, maxit=4, seed=11)
+        a = mice(design, n_imputations=3, max_iter=4, seed=11)
+        b = mice(design, n_imputations=3, max_iter=4, seed=11)
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_array_equal(da, db)
 
@@ -260,7 +260,7 @@ class TestMixedIntegration:
         data, kinds = _make_mixed(300, 0)
         miss = datasets.make_mcar(data, 0.2, seed=1)
         design = MICEDesign.from_array(miss, column_kinds=kinds)
-        sol = mice(design, m=2, maxit=3, seed=0)
+        sol = mice(design, n_imputations=2, max_iter=3, seed=0)
         observed = ~np.isnan(miss)
         for d in sol.completed_datasets():
             np.testing.assert_array_equal(d[observed], miss[observed])

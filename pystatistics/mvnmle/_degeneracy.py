@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.exceptions import SingularMatrixError
+from pystatistics.core.exceptions import SingularMatrixError, ValidationError
 
 # Smallest correlation-matrix eigenvalue treated as full-rank. Calibrated
 # empirically: rank-deficient fits floor at ~3e-6 (an exactly duplicated or
@@ -50,7 +50,7 @@ def correlation_min_eigenvalue(sigma: NDArray[np.floating]) -> float:
         range [0, p]. ``0.0`` for an already-degenerate ``sigma``.
     """
     if sigma.ndim != 2 or sigma.shape[0] != sigma.shape[1]:
-        raise ValueError(
+        raise ValidationError(
             f"sigma must be a square matrix, got shape {sigma.shape}"
         )
     if not np.all(np.isfinite(sigma)):

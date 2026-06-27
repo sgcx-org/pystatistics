@@ -71,7 +71,7 @@ class TestDirectGPU:
 
     def test_gpu_backend_runs(self):
         """GPU direct should produce a finite solution."""
-        result = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        result = mlest(datasets.apple, method='direct', backend='gpu')
         assert 'gpu' in result.backend_name
         assert np.all(np.isfinite(result.muhat))
         assert np.all(np.isfinite(result.sigmahat))
@@ -79,8 +79,8 @@ class TestDirectGPU:
 
     def test_gpu_matches_cpu_apple(self):
         """GPU direct should match CPU direct within FP32 tolerance."""
-        cpu = mlest(datasets.apple, algorithm='direct', backend='cpu')
-        gpu = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        cpu = mlest(datasets.apple, method='direct', backend='cpu')
+        gpu = mlest(datasets.apple, method='direct', backend='gpu')
 
         np.testing.assert_allclose(gpu.muhat, cpu.muhat, rtol=1e-2,
                                    err_msg="GPU direct means differ from CPU")
@@ -98,9 +98,9 @@ class TestDirectGPU:
         Both CUDA and MPS produce ~18% relative error on this problem due
         to the many near-flat directions in the FP32 L-BFGS-B landscape.
         """
-        cpu = mlest(datasets.missvals, algorithm='direct', backend='cpu',
+        cpu = mlest(datasets.missvals, method='direct', backend='cpu',
                     max_iter=500)
-        gpu = mlest(datasets.missvals, algorithm='direct', backend='gpu',
+        gpu = mlest(datasets.missvals, method='direct', backend='gpu',
                     max_iter=500)
 
         # FP32 BFGS on 5-variable missing data is imprecise on any GPU
@@ -108,7 +108,7 @@ class TestDirectGPU:
                                    err_msg="GPU direct means differ from CPU (missvals)")
 
     def test_gpu_covariance_symmetric(self):
-        result = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        result = mlest(datasets.apple, method='direct', backend='gpu')
         np.testing.assert_allclose(
             result.sigmahat, result.sigmahat.T,
             atol=1e-6,
@@ -116,19 +116,19 @@ class TestDirectGPU:
         )
 
     def test_gpu_covariance_positive_definite(self):
-        result = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        result = mlest(datasets.apple, method='direct', backend='gpu')
         eigenvals = np.linalg.eigvalsh(result.sigmahat)
         assert np.all(eigenvals > 0), f"Not PD: min eigenvalue = {eigenvals.min()}"
 
     def test_gpu_timing_populated(self):
-        result = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        result = mlest(datasets.apple, method='direct', backend='gpu')
         assert result.timing is not None
         assert 'total_seconds' in result.timing
         assert result.timing['total_seconds'] > 0
 
     def test_gpu_solution_interface(self):
         """Full MVNSolution interface works with GPU results."""
-        result = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        result = mlest(datasets.apple, method='direct', backend='gpu')
         assert isinstance(result, MVNSolution)
         assert isinstance(result.aic, float)
         assert isinstance(result.bic, float)
@@ -152,15 +152,15 @@ class TestEMGPU:
     """
 
     def test_em_gpu_backend_runs(self):
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         assert result.converged
         assert result.backend_name.endswith('_em')
 
     def test_em_gpu_matches_cpu_apple(self):
         """EM on GPU device should match EM on CPU."""
-        cpu = mlest(datasets.apple, algorithm='em', backend='cpu',
+        cpu = mlest(datasets.apple, method='em', backend='cpu',
                     tol=1e-8, max_iter=10000)
-        gpu = mlest(datasets.apple, algorithm='em', backend='gpu',
+        gpu = mlest(datasets.apple, method='em', backend='gpu',
                     tol=1e-8, max_iter=10000)
 
         np.testing.assert_allclose(gpu.muhat, cpu.muhat, rtol=1e-3,
@@ -174,9 +174,9 @@ class TestEMGPU:
 
     def test_em_gpu_matches_cpu_missvals(self):
         """EM on GPU device should match EM on CPU on missvals."""
-        cpu = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        cpu = mlest(datasets.missvals, method='em', backend='cpu',
                     tol=1e-8, max_iter=100000)
-        gpu = mlest(datasets.missvals, algorithm='em', backend='gpu',
+        gpu = mlest(datasets.missvals, method='em', backend='gpu',
                     tol=1e-8, max_iter=100000)
 
         np.testing.assert_allclose(gpu.muhat, cpu.muhat, rtol=5e-2,
@@ -185,7 +185,7 @@ class TestEMGPU:
                                    err_msg="EM GPU covariance differs from CPU (missvals)")
 
     def test_em_gpu_covariance_symmetric(self):
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         np.testing.assert_allclose(
             result.sigmahat, result.sigmahat.T,
             atol=1e-6,
@@ -193,19 +193,19 @@ class TestEMGPU:
         )
 
     def test_em_gpu_covariance_positive_definite(self):
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         eigenvals = np.linalg.eigvalsh(result.sigmahat)
         assert np.all(eigenvals > 0), f"Not PD: min eigenvalue = {eigenvals.min()}"
 
     def test_em_gpu_timing_populated(self):
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         assert result.timing is not None
         assert 'total_seconds' in result.timing
         assert result.timing['total_seconds'] > 0
 
     def test_em_gpu_solution_interface(self):
         """Full MVNSolution interface works with EM GPU results."""
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         assert isinstance(result, MVNSolution)
         assert isinstance(result.aic, float)
         assert isinstance(result.bic, float)
@@ -216,7 +216,7 @@ class TestEMGPU:
 
     def test_em_gpu_gradient_norm_is_none(self):
         """EM does not compute gradients, even on GPU."""
-        result = mlest(datasets.apple, algorithm='em', backend='gpu')
+        result = mlest(datasets.apple, method='em', backend='gpu')
         assert result.gradient_norm is None
 
 
@@ -229,9 +229,9 @@ class TestCrossAlgorithmGPU:
 
     def test_apple_loglik_agrees_gpu(self):
         """Both algorithms on GPU should reach the same MLE."""
-        em = mlest(datasets.apple, algorithm='em', backend='gpu',
+        em = mlest(datasets.apple, method='em', backend='gpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        direct = mlest(datasets.apple, method='direct', backend='gpu')
 
         # FP32 accumulation on GPU means wider tolerance than CPU comparison
         assert abs(em.loglik - direct.loglik) < 1.0, (
@@ -240,15 +240,15 @@ class TestCrossAlgorithmGPU:
         )
 
     def test_apple_means_agree_gpu(self):
-        em = mlest(datasets.apple, algorithm='em', backend='gpu',
+        em = mlest(datasets.apple, method='em', backend='gpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        direct = mlest(datasets.apple, method='direct', backend='gpu')
         np.testing.assert_allclose(em.muhat, direct.muhat, rtol=1e-2)
 
     def test_apple_covariance_agrees_gpu(self):
-        em = mlest(datasets.apple, algorithm='em', backend='gpu',
+        em = mlest(datasets.apple, method='em', backend='gpu',
                    tol=1e-8, max_iter=10000)
-        direct = mlest(datasets.apple, algorithm='direct', backend='gpu')
+        direct = mlest(datasets.apple, method='direct', backend='gpu')
         np.testing.assert_allclose(em.sigmahat, direct.sigmahat, rtol=5e-2)
 
 
@@ -263,7 +263,7 @@ class TestAutoBackendWithGPU:
 
     def test_auto_direct_selects_gpu_on_cuda(self):
         device = _gpu_device()
-        result = mlest(datasets.apple, algorithm='direct', backend='auto')
+        result = mlest(datasets.apple, method='direct', backend='auto')
         if device == 'cuda':
             assert 'gpu' in result.backend_name
         else:
@@ -272,13 +272,13 @@ class TestAutoBackendWithGPU:
 
     def test_auto_em_runs(self):
         """EM with auto backend should run and converge regardless of device."""
-        result = mlest(datasets.apple, algorithm='em', backend='auto')
+        result = mlest(datasets.apple, method='em', backend='auto')
         assert result.converged
         assert result.backend_name.endswith('_em')
 
     def test_auto_em_convergence_missvals(self):
         """EM with auto backend should converge on missvals."""
-        result = mlest(datasets.missvals, algorithm='em', backend='auto',
+        result = mlest(datasets.missvals, method='em', backend='auto',
                        tol=1e-6, max_iter=50000)
         assert result.converged
         assert np.all(np.isfinite(result.muhat))
@@ -296,7 +296,7 @@ class TestGPUEdgeCases:
         """Complete data (no missing) should produce valid results on GPU."""
         rng = np.random.default_rng(42)
         data = rng.multivariate_normal([0, 0], [[1, 0.5], [0.5, 1]], size=50)
-        result = mlest(data, algorithm='direct', backend='gpu')
+        result = mlest(data, method='direct', backend='gpu')
         # FP32 optimizer may not report convergence, but solution should be valid
         assert np.all(np.isfinite(result.muhat))
         assert np.all(np.isfinite(result.sigmahat))
@@ -306,7 +306,7 @@ class TestGPUEdgeCases:
         """Complete data EM on GPU should converge quickly."""
         rng = np.random.default_rng(42)
         data = rng.multivariate_normal([0, 0], [[1, 0.5], [0.5, 1]], size=50)
-        result = mlest(data, algorithm='em', backend='gpu')
+        result = mlest(data, method='em', backend='gpu')
         assert result.converged
         assert result.n_iter <= 5
 
@@ -322,15 +322,15 @@ class TestGPUEdgeCases:
             if mask[:, j].all():
                 mask[0, j] = False
         data[mask] = np.nan
-        result = mlest(data, algorithm='em', backend='gpu', max_iter=5000)
+        result = mlest(data, method='em', backend='gpu', max_iter=5000)
         assert np.all(np.isfinite(result.muhat))
         assert np.all(np.isfinite(result.sigmahat))
 
     def test_design_object_gpu(self):
         """MVNDesign objects should work with GPU backends."""
         design = MVNDesign.from_array(datasets.apple)
-        result_direct = mlest(design, algorithm='direct', backend='gpu')
-        result_em = mlest(design, algorithm='em', backend='gpu')
+        result_direct = mlest(design, method='direct', backend='gpu')
+        result_em = mlest(design, method='em', backend='gpu')
         assert isinstance(result_direct, MVNSolution)
         assert isinstance(result_em, MVNSolution)
         # EM should converge; direct may not on FP32 but solution should be valid
@@ -367,7 +367,7 @@ class TestLittleMCARGPU:
         # apple is 18x2 → n*v=36, far below the 1500 threshold.
         with _warnings.catch_warnings(record=True) as captured:
             _warnings.simplefilter("always")
-            mlest(datasets.apple, algorithm='em', backend='gpu')
+            mlest(datasets.apple, method='em', backend='gpu')
         assert any(
             "below the empirical GPU-worth-it threshold" in str(w.message)
             for w in captured
@@ -384,7 +384,7 @@ class TestLittleMCARGPU:
         from pystatistics.mvnmle import mlest
         with _warnings.catch_warnings(record=True) as captured:
             _warnings.simplefilter("always")
-            mlest(datasets.apple, algorithm='em', backend='auto')
+            mlest(datasets.apple, method='em', backend='auto')
         assert any(
             "dispatching EM to CPU" in str(w.message)
             and "below the empirical GPU-worth-it threshold" in str(w.message)
@@ -407,7 +407,7 @@ class TestLittleMCARGPU:
         from pystatistics.mvnmle import mlest
         with _warnings.catch_warnings(record=True) as captured:
             _warnings.simplefilter("always")
-            mlest(X, algorithm='em', backend='gpu')
+            mlest(X, method='em', backend='gpu')
         assert not any(
             "GPU-worth-it threshold" in str(w.message) for w in captured
         ), "backend='gpu' on large data should not emit size warnings."

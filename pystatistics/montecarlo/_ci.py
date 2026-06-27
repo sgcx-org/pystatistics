@@ -11,6 +11,8 @@ Implements all 5 methods from R's boot.ci():
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -62,7 +64,7 @@ def compute_ci(
             ci_dict["bca"] = _ci_bca(boot_out, alpha)
         elif ci_type == "stud":
             if var_t is None:
-                raise ValueError(
+                raise ValidationError(
                     "Studentized CI requires var_t "
                     "(per-replicate variance estimates)"
                 )
@@ -70,7 +72,7 @@ def compute_ci(
                 t0, t, alpha, var_t0, var_t, index,
             )
         else:
-            raise ValueError(f"Unknown CI type: {ci_type!r}")
+            raise ValidationError(f"Unknown CI type: {ci_type!r}")
 
     return ci_dict
 

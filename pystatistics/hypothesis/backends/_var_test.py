@@ -40,7 +40,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     f_stat = (var_x / var_y) / ratio
 
     # p-value
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         p_value = 2.0 * min(
             float(sp_stats.f.cdf(f_stat, df_x, df_y)),
             float(sp_stats.f.sf(f_stat, df_x, df_y)),
@@ -52,7 +52,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
 
     # Confidence interval for the ratio of variances
     alpha = 1.0 - conf_level
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         ci_lo = f_stat / float(sp_stats.f.ppf(1.0 - alpha / 2.0, df_x, df_y))
         ci_hi = f_stat / float(sp_stats.f.ppf(alpha / 2.0, df_x, df_y))
     elif alternative == "less":

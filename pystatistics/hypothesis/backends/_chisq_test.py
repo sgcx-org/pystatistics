@@ -87,7 +87,7 @@ def chisq_independence(design: HypothesisDesign) -> tuple[HTestParams, list[str]
         conf_level=0.95,
         estimate=None,
         null_value=None,
-        alternative="two.sided",
+        alternative="two-sided",
         method=method,
         data_name=design.data_name,
         extras={
@@ -147,7 +147,7 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         conf_level=0.95,
         estimate=None,
         null_value=None,
-        alternative="two.sided",
+        alternative="two-sided",
         method=method,
         data_name=design.data_name,
         extras={

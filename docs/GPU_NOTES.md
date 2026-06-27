@@ -1,3 +1,7 @@
+> Non-binding, hard-won engineering knowledge about GPU behavior across CUDA
+> and MPS. The **binding** API/backend rules live in
+> `pystatistics/CONVENTIONS.md`; this file is notes, not law.
+
 # GPU Backend Notes
 
 Hard-won knowledge about GPU behavior across CUDA and MPS backends.
@@ -188,3 +192,60 @@ All benchmarks measured on Forge (RTX 5070 Ti, CUDA 12.0) and Mainframe
 | 1,000 | 50,000 | 1.4s | 0.28s | **5x** |
 | 10,000 | 50,000 | 6.7s | 0.29s | **23x** |
 | 50,000 | 50,000 | 33s | 1.4s | **23x** |
+
+---
+
+## The MPS small-n floor (why MPS can't fully match CUDA there)
+
+Established while optimizing MICE (per-op MPS-vs-CUDA timing + controlled
+in-sweep runs). Two distinct causes, both defensible:
+
+1. **A few torch ops have pathologically slow MPS kernels** —
+   `solve_triangular` ~250x slower than CUDA, `searchsorted` ~1136x (n=20k),
+   `cholesky_solve` / `eigh` unimplemented. These ARE recoverable by
+   rebuilding from MPS-fast primitives (matmul / cholesky / sort): MICE
+   replaced `searchsorted`→merge-rank and `solve_triangular`→matmul-series
+   inverse, closing most of the *mid/large-n* gap to ~the raw FP32 silicon
+   ratio (~3-4x).
+2. **Per-op dispatch overhead is the small-n floor and is NOT recoverable.**
+   In a sequential per-step sweep (steps that cannot be re-batched), MPS pays
+   ~0.5-1ms of command-encode overhead *per op*, and — unlike CUDA — has no
+   graph-capture to amortize it. So at small n the sweep is dispatch-bound,
+   not compute-bound: a fast many-op method and a slow-single-kernel method
+   net out, and no linalg reformulation helps (the cost is launches, not
+   math). This is an intrinsic platform limitation; the honest answer to "why
+   is MPS's small-n speedup-over-CPU far below CUDA's" is this dispatch floor,
+   not silicon. The only lever left is reducing *op count per step* (fuse the
+   per-step gathers/scatter), which attacks the dispatch floor directly.
+
+### MPS dense factor-and-solve: fast vs slow/absent
+
+Apple MPS executes batched **matmul** and **cholesky** fast, but its small
+dense **factor-and-solve** kernels are slow or absent:
+
+| op | MPS status (torch 2.10/2.11, this repo's measurements) |
+|---|---|
+| `matmul`, `cholesky_ex`, `sort`, `cumsum`, `gather` | fast |
+| `solve_triangular` | slow (~4 ms for a 20×20 batch, **n-independent**) |
+| `linalg.solve`, `linalg.inv`, `pinv` | slow (~100-300× matmul) |
+| `cholesky_solve` | **unimplemented** (errors on MPS) |
+| `linalg.eigh` | **unimplemented** (errors on MPS) |
+| `searchsorted` | fine at small size, slow at scale |
+
+### The in-house remedy
+
+`pystatistics/mvnmle/_objectives/_batched_cholesky.py` solves the
+factor-and-solve gap with a matmul-only path:
+
+- `_tri_inv_blocked(torch, L)` — matmul-only block-recursive inverse of a
+  batched lower-triangular factor. No `solve_triangular` / `inv` kernel
+  touched.
+- `_use_blocked(L, method)` — device dispatch: matmul-inverse on MPS,
+  `solve_triangular` on CUDA/CPU (fast there). One shared path, one device
+  bridge.
+
+Several modules with `linalg.solve` / `cholesky_solve` / `eigh` / `inv` on an
+MPS hot path can be reformulated the same way (chol + matmul-inverse, or
+SVD-based PCA in place of `eigh`). Each such fix is its own task with R-fidelity
+plus FP32 re-validation on **both** MPS and CUDA, since the shared-primitive
+change touches both devices.

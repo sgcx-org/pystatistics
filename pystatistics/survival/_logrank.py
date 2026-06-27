@@ -24,6 +24,8 @@ References:
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
@@ -62,7 +64,7 @@ def logrank_test(
     n_groups = len(unique_groups)
 
     if n_groups < 2:
-        raise ValueError(
+        raise ValidationError(
             f"Need at least 2 groups for log-rank test, got {n_groups}"
         )
 

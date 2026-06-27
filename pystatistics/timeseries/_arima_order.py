@@ -16,20 +16,54 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.timeseries._differencing import diff, ndiffs
 
 
 # ---------------------------------------------------------------------------
-# Result dataclass
+# Result dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class AutoARIMAResult:
-    """Result from automatic ARIMA order selection.
+class AutoARIMAParams:
+    """Immutable parameter payload for automatic ARIMA order selection.
 
     Attributes
     ----------
-    best_model : ARIMAResult
+    best_model : ARIMASolution
+        The fitted model with the best information criterion.
+    best_order : tuple[int, int, int]
+        The (p, d, q) order of the best model.
+    best_seasonal : tuple[int, int, int, int] | None
+        The (P, D, Q, m) seasonal order, or ``None``.
+    best_aic : float
+        Value of the chosen information criterion for the best model.
+    models_fitted : int
+        Total number of models successfully evaluated.
+    search_results : list[tuple[tuple, float]]
+        ``(order, ic_value)`` pairs for every model tried (including
+        those that failed, recorded with ``inf``).
+    """
+
+    best_model: object  # ARIMASolution (forward reference)
+    best_order: tuple[int, int, int]
+    best_seasonal: tuple[int, int, int, int] | None
+    best_aic: float
+    models_fitted: int
+    search_results: list[tuple[tuple, float]]
+
+
+@dataclass
+class AutoARIMASolution(SolutionReprMixin):
+    """Result from automatic ARIMA order selection.
+
+    Wraps a :class:`Result` ``[AutoARIMAParams]`` envelope; every datum is
+    exposed via a read-only ``@property`` so the public attribute surface is
+    unchanged from the previous flat dataclass.
+
+    Attributes
+    ----------
+    best_model : ARIMASolution
         The fitted model with the best information criterion.
     best_order : tuple[int, int, int]
         The (p, d, q) order of the best model.
@@ -49,12 +83,47 @@ class AutoARIMAResult:
         Human-readable summary of the search.
     """
 
-    best_model: object  # ARIMAResult (forward reference)
-    best_order: tuple[int, int, int]
-    best_seasonal: tuple[int, int, int, int] | None
-    best_aic: float
-    models_fitted: int
-    search_results: list[tuple[tuple, float]]
+    _result: Result[AutoARIMAParams]
+
+    @property
+    def best_model(self) -> object:
+        return self._result.params.best_model
+
+    @property
+    def best_order(self) -> tuple[int, int, int]:
+        return self._result.params.best_order
+
+    @property
+    def best_seasonal(self) -> tuple[int, int, int, int] | None:
+        return self._result.params.best_seasonal
+
+    @property
+    def best_aic(self) -> float:
+        return self._result.params.best_aic
+
+    @property
+    def models_fitted(self) -> int:
+        return self._result.params.models_fitted
+
+    @property
+    def search_results(self) -> list[tuple[tuple, float]]:
+        return self._result.params.search_results
+
+    @property
+    def info(self) -> dict:
+        return self._result.info
+
+    @property
+    def timing(self) -> dict[str, float] | None:
+        return self._result.timing
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     def summary(self) -> str:
         """Return a human-readable summary of the search.
@@ -83,16 +152,17 @@ class AutoARIMAResult:
         return "\n".join(lines)
 
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _get_ic(result: object, ic: str) -> float:
-    """Extract the chosen information criterion from an ARIMAResult.
+    """Extract the chosen information criterion from an ARIMASolution.
 
     Parameters
     ----------
-    result : ARIMAResult
+    result : ARIMASolution
         Fitted model.
     ic : str
         One of ``'aic'``, ``'aicc'``, ``'bic'``.
@@ -141,7 +211,7 @@ def _try_fit(
 
     Returns
     -------
-    tuple[ARIMAResult | None, float]
+    tuple[ARIMASolution | None, float]
         Fitted model (or ``None``) and IC value (``inf`` on failure).
     """
     from pystatistics.timeseries._arima_fit import arima  # lazy import
@@ -417,7 +487,7 @@ def auto_arima(
     max_iter: int = 1000,
     method: str = "CSS-ML",
     backend: str | None = None,
-) -> AutoARIMAResult:
+) -> AutoARIMASolution:
     """Automatic ARIMA model selection.
 
     Simplified version of R's ``forecast::auto.arima()``.
@@ -462,7 +532,7 @@ def auto_arima(
 
     Returns
     -------
-    AutoARIMAResult
+    AutoARIMASolution
         Best model and search history.
 
     Raises
@@ -520,11 +590,24 @@ def auto_arima(
 
     models_fitted = sum(1 for _, v in search_results if v < math.inf)
 
-    return AutoARIMAResult(
-        best_model=best_result,
-        best_order=best_order,
-        best_seasonal=seasonal_order,
-        best_aic=best_ic_val,
-        models_fitted=models_fitted,
-        search_results=search_results,
+    return AutoARIMASolution(
+        _result=Result(
+            params=AutoARIMAParams(
+                best_model=best_result,
+                best_order=best_order,
+                best_seasonal=seasonal_order,
+                best_aic=best_ic_val,
+                models_fitted=models_fitted,
+                search_results=search_results,
+            ),
+            info={
+                "ic": ic,
+                "stepwise": stepwise,
+                "method": method,
+                "models_fitted": models_fitted,
+            },
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

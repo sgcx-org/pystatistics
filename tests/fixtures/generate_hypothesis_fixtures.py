@@ -36,7 +36,7 @@ def make_t_test_fixtures():
     _save("htest_t_onesample", {
         "test": "t.test",
         "data": {"x": x},
-        "params": {"mu": 5.0, "alternative": "two.sided", "conf.level": 0.95},
+        "params": {"mu": 5.0, "alternative": "two-sided", "conf.level": 0.95},
         "description": "One-sample t-test, mu=5",
     })
 
@@ -46,7 +46,7 @@ def make_t_test_fixtures():
     _save("htest_t_welch", {
         "test": "t.test",
         "data": {"x": x, "y": y},
-        "params": {"mu": 0, "var.equal": False, "alternative": "two.sided",
+        "params": {"mu": 0, "var.equal": False, "alternative": "two-sided",
                    "conf.level": 0.95},
         "description": "Two-sample Welch t-test",
     })
@@ -57,7 +57,7 @@ def make_t_test_fixtures():
     _save("htest_t_paired", {
         "test": "t.test",
         "data": {"x": x, "y": y},
-        "params": {"mu": 0, "paired": True, "alternative": "two.sided",
+        "params": {"mu": 0, "paired": True, "alternative": "two-sided",
                    "conf.level": 0.95},
         "description": "Paired t-test",
     })
@@ -68,7 +68,7 @@ def make_t_test_fixtures():
     _save("htest_t_pooled", {
         "test": "t.test",
         "data": {"x": x, "y": y},
-        "params": {"mu": 0, "var.equal": True, "alternative": "two.sided",
+        "params": {"mu": 0, "var.equal": True, "alternative": "two-sided",
                    "conf.level": 0.95},
         "description": "Two-sample pooled t-test (var.equal=TRUE)",
     })
@@ -115,7 +115,7 @@ def make_fisher_fixtures():
     _save("htest_fisher_2x2", {
         "test": "fisher.test",
         "data": {"table": [[1, 9], [11, 3]]},
-        "params": {"alternative": "two.sided", "conf.level": 0.95},
+        "params": {"alternative": "two-sided", "conf.level": 0.95},
         "description": "Fisher 2x2 test (Lady tea-tasting)",
     })
 
@@ -143,7 +143,7 @@ def make_wilcox_fixtures():
     _save("htest_wilcox_signed", {
         "test": "wilcox.test",
         "data": {"x": x},
-        "params": {"mu": 3.0, "alternative": "two.sided", "conf.int": True,
+        "params": {"mu": 3.0, "alternative": "two-sided", "conf.int": True,
                    "conf.level": 0.95},
         "description": "Wilcoxon signed-rank test, mu=3",
     })
@@ -154,7 +154,7 @@ def make_wilcox_fixtures():
     _save("htest_wilcox_ranksum", {
         "test": "wilcox.test",
         "data": {"x": x, "y": y},
-        "params": {"mu": 0, "alternative": "two.sided", "conf.int": True,
+        "params": {"mu": 0, "alternative": "two-sided", "conf.int": True,
                    "conf.level": 0.95, "exact": True},
         "description": "Wilcoxon rank-sum test (exact)",
     })
@@ -168,7 +168,7 @@ def make_ks_fixtures():
     _save("htest_ks_twosample", {
         "test": "ks.test",
         "data": {"x": x, "y": y},
-        "params": {"alternative": "two.sided"},
+        "params": {"alternative": "two-sided"},
         "description": "Two-sample KS test (shifted normal)",
     })
 
@@ -188,7 +188,7 @@ def make_prop_fixtures():
     _save("htest_prop_onesample", {
         "test": "prop.test",
         "data": {"x": [45], "n": [100]},
-        "params": {"p": 0.5, "alternative": "two.sided", "conf.level": 0.95,
+        "params": {"p": 0.5, "alternative": "two-sided", "conf.level": 0.95,
                    "correct": True},
         "description": "One-sample proportion test (45/100 vs 0.5)",
     })
@@ -197,7 +197,7 @@ def make_prop_fixtures():
     _save("htest_prop_twosample", {
         "test": "prop.test",
         "data": {"x": [30, 50], "n": [100, 120]},
-        "params": {"alternative": "two.sided", "conf.level": 0.95,
+        "params": {"alternative": "two-sided", "conf.level": 0.95,
                    "correct": True},
         "description": "Two-sample proportion test (equality)",
     })
@@ -211,7 +211,7 @@ def make_var_fixtures():
     _save("htest_var_basic", {
         "test": "var.test",
         "data": {"x": x, "y": y},
-        "params": {"ratio": 1.0, "alternative": "two.sided",
+        "params": {"ratio": 1.0, "alternative": "two-sided",
                    "conf.level": 0.95},
         "description": "F-test for equality of variances",
     })

@@ -92,7 +92,7 @@ class TestPearsonWithNaN:
 
     def test_everything_propagates(self):
         data = np.array([[1.0, np.nan], [3.0, 4.0], [5.0, 6.0]])
-        result = cor(data, method='pearson', use='everything', backend='cpu')
+        result = cor(data, method='pearson', na_action='everything', backend='cpu')
         # NaN in any element of a column propagates
         assert np.isnan(result.correlation_pearson[0, 1])
 
@@ -103,7 +103,7 @@ class TestPearsonWithNaN:
             [3.0, 30.0],
             [4.0, 40.0],
         ])
-        result = cor(data, method='pearson', use='complete.obs', backend='cpu')
+        result = cor(data, method='pearson', na_action='complete', backend='cpu')
         clean = np.array([[1.0, 10.0], [3.0, 30.0], [4.0, 40.0]])
         expected = np.corrcoef(clean, rowvar=False)
         np.testing.assert_allclose(result.correlation_pearson, expected, rtol=1e-10)
@@ -114,7 +114,7 @@ class TestPearsonWithNaN:
             [2.0, np.nan],
             [3.0, 30.0],
         ])
-        result = cor(data, method='pearson', use='pairwise.complete.obs', backend='cpu')
+        result = cor(data, method='pearson', na_action='pairwise', backend='cpu')
         C = result.correlation_pearson
         # Diagonal must be 1
         np.testing.assert_allclose(C[0, 0], 1.0)
@@ -194,7 +194,7 @@ class TestSpearmanWithNaN:
             [4, 40, np.nan],
             [5, 50, 500],
         ], dtype=np.float64)
-        result = cor(data, method='spearman', use='pairwise.complete.obs', backend='cpu')
+        result = cor(data, method='spearman', na_action='pairwise', backend='cpu')
         # All pairwise correlations are perfect (monotone) after NaN removal
         C = result.correlation_spearman
         for i in range(3):
@@ -271,7 +271,7 @@ class TestKendallWithNaN:
             [4, 40, np.nan],
             [5, 50, 500],
         ], dtype=np.float64)
-        result = cor(data, method='kendall', use='pairwise.complete.obs', backend='cpu')
+        result = cor(data, method='kendall', na_action='pairwise', backend='cpu')
         C = result.correlation_kendall
         for i in range(3):
             for j in range(3):

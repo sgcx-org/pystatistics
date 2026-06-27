@@ -10,7 +10,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.regression._formatting import significance_stars
 
 if TYPE_CHECKING:
@@ -45,7 +45,7 @@ class GLMParams:
 
 
 @dataclass
-class GLMSolution:
+class GLMSolution(SolutionReprMixin):
     """
     User-facing GLM results.
 
@@ -221,7 +221,7 @@ class GLMSolution:
         return self._result.params.family_name in ('binomial', 'poisson')
 
     @property
-    def test_statistics(self) -> NDArray[np.floating[Any]]:
+    def z_values(self) -> NDArray[np.floating[Any]]:
         """Wald test statistics (z for fixed dispersion, t for estimated)."""
         if self._test_statistics is not None:
             return self._test_statistics
@@ -245,7 +245,7 @@ class GLMSolution:
 
         from scipy import stats as sp_stats
 
-        stat = self.test_statistics
+        stat = self.z_values
 
         if self._uses_z_test:
             pv = 2.0 * sp_stats.norm.sf(np.abs(stat))
@@ -304,7 +304,7 @@ class GLMSolution:
 
         for name, coef, se, stat, pv in zip(
             names, self.coefficients, self.standard_errors,
-            self.test_statistics, self.p_values
+            self.z_values, self.p_values
         ):
             se_str = f"{se:12.6f}" if not np.isnan(se) else "         NA"
             stat_str = f"{stat:10.3f}" if not np.isnan(stat) else "        NA"

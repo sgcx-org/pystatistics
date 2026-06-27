@@ -7,6 +7,8 @@ Validates inputs at construction time — all downstream code trusts clean data.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -71,21 +73,21 @@ class SurvivalDesign:
         n = len(time)
 
         if n == 0:
-            raise ValueError("time must have at least one observation")
+            raise ValidationError("time must have at least one observation")
 
         if len(event) != n:
-            raise ValueError(
+            raise ValidationError(
                 f"time and event must have the same length: "
                 f"got {n} and {len(event)}"
             )
 
         if np.any(time < 0):
-            raise ValueError("time must be non-negative")
+            raise ValidationError("time must be non-negative")
 
         # Allow event to be 0/1 or True/False
         unique_events = np.unique(event[~np.isnan(event)])
         if not np.all(np.isin(unique_events, [0.0, 1.0])):
-            raise ValueError(
+            raise ValidationError(
                 f"event must contain only 0 and 1, "
                 f"got unique values: {unique_events}"
             )
@@ -98,11 +100,11 @@ class SurvivalDesign:
             if X_arr.ndim == 1:
                 X_arr = X_arr.reshape(-1, 1)
             if X_arr.ndim != 2:
-                raise ValueError(
+                raise ValidationError(
                     f"X must be 1D or 2D, got {X_arr.ndim}D"
                 )
             if X_arr.shape[0] != n:
-                raise ValueError(
+                raise ValidationError(
                     f"X must have {n} rows to match time, "
                     f"got {X_arr.shape[0]}"
                 )
@@ -111,7 +113,7 @@ class SurvivalDesign:
         if strata is not None:
             strata_arr = np.asarray(strata).ravel()
             if len(strata_arr) != n:
-                raise ValueError(
+                raise ValidationError(
                     f"strata must have {n} elements to match time, "
                     f"got {len(strata_arr)}"
                 )

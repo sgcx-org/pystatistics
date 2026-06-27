@@ -13,7 +13,8 @@ from scipy.stats import chi2
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.validation import check_2d, check_finite, check_array
-from pystatistics.multivariate._common import FactorResult
+from pystatistics.core.result import Result
+from pystatistics.multivariate._common import FactorSolution, FactorParams
 from pystatistics.multivariate._rotation import varimax, promax
 
 
@@ -225,7 +226,7 @@ def factor_analysis(
     names: list[str] | None = None,
     tol: float = 1e-8,
     max_iter: int = 1000,
-) -> FactorResult:
+) -> FactorSolution:
     """Maximum likelihood factor analysis.
 
     Matches R's ``stats::factanal()``.
@@ -252,7 +253,7 @@ def factor_analysis(
         max_iter: Maximum iterations.
 
     Returns:
-        FactorResult with loadings, uniquenesses, test statistics, etc.
+        FactorSolution with loadings, uniquenesses, test statistics, etc.
 
     Raises:
         ValidationError: If inputs are invalid.
@@ -370,7 +371,7 @@ def factor_analysis(
             chi_sq = float(effective_n * objective)
             p_value = float(chi2.sf(chi_sq, dof))
 
-    return FactorResult(
+    params = FactorParams(
         loadings=loadings_final,
         uniquenesses=uniquenesses,
         communalities=communalities_final,
@@ -387,4 +388,13 @@ def factor_analysis(
         converged=converged,
         n_iter=n_iter,
         objective=objective,
+    )
+    return FactorSolution(
+        _result=Result(
+            params=params,
+            info={"method": method, "rotation": rotation, "converged": converged},
+            timing=None,
+            backend_name="cpu_factanal",
+            warnings=(),
+        )
     )

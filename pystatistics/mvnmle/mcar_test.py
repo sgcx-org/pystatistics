@@ -14,12 +14,13 @@ from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 import warnings
 
-from pystatistics.core.exceptions import PyStatisticsError
+from pystatistics.core.exceptions import PyStatisticsError, ValidationError
+from pystatistics.core.result import SolutionReprMixin
 from pystatistics.mvnmle.patterns import PatternInfo, identify_missingness_patterns
 
 
 @dataclass
-class MCARTestResult:
+class MCARTestSolution(SolutionReprMixin):
     """Result of an MCAR test.
 
     Canonical result type for ``little_mcar_test`` (Little 1988, MLE
@@ -148,11 +149,11 @@ def regularized_inverse(matrix: np.ndarray,
 def little_mcar_test(data,
                      alpha: float = 0.05,
                      backend: str | None = None,
-                     algorithm: str = 'em',
+                     method: str = 'em',
                      regularize: bool = True,
                      condition_threshold: float = 1e12,
                      drop_all_missing_rows: bool = True,
-                     verbose: bool = False) -> MCARTestResult:
+                     verbose: bool = False) -> MCARTestSolution:
     """
     Little's test for Missing Completely at Random (MCAR).
 
@@ -168,14 +169,14 @@ def little_mcar_test(data,
         'gpu', or 'auto' to prefer GPU when available. The per-pattern
         test-statistic accumulation runs on CPU regardless — it's
         O(P × v³) for tiny v and is not the bottleneck.
-    algorithm : str, default 'em'
-        ML algorithm forwarded to mlest: 'em' (EM, default) or
+    method : str, default 'em'
+        ML method forwarded to mlest: 'em' (EM, default) or
         'direct' (BFGS). EM is the default because BFGS convergence
         scales poorly with the number of missingness patterns — on
         realistic tabular data (e.g. 13 vars × 107 patterns) BFGS
         can take 400+ seconds while EM finishes in under a second.
         Little's statistic depends only on the final ML estimates,
-        not on which algorithm produced them.
+        not on which method produced them.
     regularize : bool, default True
         When an observed-variable covariance submatrix is
         ill-conditioned (common on real tabular data — iris, wine,
@@ -198,7 +199,7 @@ def little_mcar_test(data,
 
     Returns
     -------
-    MCARTestResult
+    MCARTestSolution
     """
     import warnings
 
@@ -212,7 +213,7 @@ def little_mcar_test(data,
         data_array = np.asarray(data, dtype=float)
 
     if data_array.ndim != 2:
-        raise ValueError("Data must be 2-dimensional")
+        raise ValidationError("Data must be 2-dimensional")
 
     # Drop all-missing rows (they contribute nothing) before validation.
     # The underlying MVNDesign.from_array would otherwise reject them
@@ -242,7 +243,7 @@ def little_mcar_test(data,
         ml_result = mlest(
             data_array,
             backend=backend,
-            algorithm=algorithm,
+            method=method,
             regularize=regularize,
             verbose=False,
         )
@@ -258,7 +259,7 @@ def little_mcar_test(data,
 
     # Rule 1: do not quietly hand the caller a statistic built on top
     # of unconverged ML estimates. If BFGS ran out of iterations (the
-    # common failure mode for `algorithm='direct'` on data with many
+    # common failure mode for `method='direct'` on data with many
     # missingness patterns — see mcar_test release notes), the muhat /
     # sigmahat returned are whatever the optimizer's last iterate
     # happened to be, and the chi-square contribution computed against
@@ -266,7 +267,7 @@ def little_mcar_test(data,
     if not ml_result.converged:
         n_patterns_hint = len(identify_missingness_patterns(data_array))
         raise RuntimeError(
-            f"ML estimation did not converge (algorithm={algorithm!r}, "
+            f"ML estimation did not converge (method={method!r}, "
             f"n_iter={ml_result.n_iter}, loglik={ml_result.loglik:.4f}). "
             f"The chi-square statistic built on non-MLE estimates is "
             f"not Little's statistic.\n"
@@ -274,10 +275,10 @@ def little_mcar_test(data,
             f"{data_array.shape[1]} cols, {n_patterns_hint} missingness "
             f"patterns.\n"
             f"Options:\n"
-            f"  - Use algorithm='em' (the default for this function — "
+            f"  - Use method='em' (the default for this function — "
             f"robust on data with many patterns).\n"
             f"  - Raise max_iter if you specifically need BFGS "
-            f"(algorithm='direct').\n"
+            f"(method='direct').\n"
             f"  - Inspect ml_result manually by calling mlest(...) "
             f"directly to see intermediate state."
         )
@@ -323,7 +324,7 @@ def little_mcar_test(data,
 
     # Handle edge cases
     if len(patterns) == 1 and patterns[0].n_observed == n_vars:
-        return MCARTestResult(
+        return MCARTestSolution(
             statistic=0.0,
             df=0,
             p_value=1.0,
@@ -338,13 +339,13 @@ def little_mcar_test(data,
         )
 
     if df <= 0:
-        raise ValueError(f"Invalid degrees of freedom: {df}")
+        raise ValidationError(f"Invalid degrees of freedom: {df}")
 
     # Step 5: P-value
     p_value = 1 - stats.chi2.cdf(test_statistic, df)
     rejected = p_value < alpha
 
-    return MCARTestResult(
+    return MCARTestSolution(
         statistic=test_statistic,
         df=df,
         p_value=p_value,

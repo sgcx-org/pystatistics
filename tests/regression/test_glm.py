@@ -319,7 +319,7 @@ class TestGLMSolution:
 
     def test_z_statistics_finite(self, binomial_result):
         """Binomial should use z-statistics."""
-        stat = binomial_result.test_statistics
+        stat = binomial_result.z_values
         assert np.all(np.isfinite(stat))
 
     def test_p_values_in_range(self, binomial_result):

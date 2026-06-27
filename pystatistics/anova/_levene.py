@@ -7,6 +7,7 @@ on the transformed values. center='median' gives the Brown-Forsythe variant
 """
 
 from typing import Any
+from pystatistics.core.exceptions import ValidationError
 
 import numpy as np
 from numpy.typing import NDArray
@@ -33,7 +34,7 @@ def levene_test_impl(
         LeveneParams with F statistic, p-value, and degrees of freedom
     """
     if center not in ('mean', 'median'):
-        raise ValueError(f"center must be 'mean' or 'median', got {center!r}")
+        raise ValidationError(f"center must be 'mean' or 'median', got {center!r}")
 
     group_str = np.array([str(v) for v in group])
     levels = sorted(set(group_str))

@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from pystatistics.core.result import Result
-from pystatistics.core.exceptions import NumericalError
+from pystatistics.core.exceptions import NumericalError, ValidationError
 from pystatistics.core.compute.timing import Timer
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearParams
@@ -64,10 +64,8 @@ class GPUQRBackend:
                     "and PyTorch with MPS support."
                 )
             if use_fp64:
-                raise RuntimeError(
-                    "MPS does not support float64. Use use_fp64=False "
-                    "or use backend='cpu' for double precision."
-                )
+                from pystatistics.core.compute.backend import FP64_REQUIRES_CUDA_MSG
+                raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
             self.device = torch.device('mps')
             self.dtype = torch.float32
             self.use_fp64 = False
@@ -75,7 +73,7 @@ class GPUQRBackend:
             self.device_memory = None
 
         else:
-            raise ValueError(
+            raise ValidationError(
                 f"Unknown GPU device: {device!r}. Use 'cuda' or 'mps'."
             )
 

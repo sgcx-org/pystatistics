@@ -50,10 +50,8 @@ class DirectMLEBackend:
 
         # Validate MPS + FP64 conflict
         if self._device == 'mps' and use_fp64:
-            raise RuntimeError(
-                "MPS does not support FP64. Use use_fp64=False "
-                "or use backend='cpu' for double precision."
-            )
+            from pystatistics.core.compute.backend import FP64_REQUIRES_CUDA_MSG
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
 
     @property
     def name(self) -> str:

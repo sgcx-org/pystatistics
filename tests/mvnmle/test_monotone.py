@@ -7,7 +7,7 @@ These tests pin the following invariants:
      true-negative on random MCAR).
   2. The closed-form MLE matches iterative EM to a tight tolerance
      on monotone data.
-  3. ``algorithm='monotone'`` on non-monotone data raises loudly
+  3. ``method='monotone'`` on non-monotone data raises loudly
      (Rule 1 — no silent dispatch).
   4. Correct handling of edge cases: complete data (trivially
      monotone); single-column datasets; two-pattern nested cases.
@@ -127,8 +127,8 @@ def test_closed_form_matches_em_on_attrition_data():
     rng = np.random.default_rng(0)
     X = _monotone_synthetic(rng, n=500, v=6, attrition_frac=0.25)
 
-    em_result = mlest(X, algorithm='em', tol=1e-8, max_iter=5000)
-    mon_result = mlest(X, algorithm='monotone')
+    em_result = mlest(X, method='em', tol=1e-8, max_iter=5000)
+    mon_result = mlest(X, method='monotone')
 
     assert mon_result.converged
     assert em_result.converged
@@ -147,8 +147,8 @@ def test_closed_form_matches_em_on_attrition_data():
 def test_closed_form_matches_em_on_apple():
     """Apple dataset: v=2, second var missing on bottom rows — a
     canonical monotone case."""
-    em_result = mlest(datasets.apple, algorithm='em', tol=1e-8, max_iter=10000)
-    mon_result = mlest(datasets.apple, algorithm='monotone')
+    em_result = mlest(datasets.apple, method='em', tol=1e-8, max_iter=10000)
+    mon_result = mlest(datasets.apple, method='monotone')
 
     np.testing.assert_allclose(mon_result.muhat, em_result.muhat, rtol=1e-5)
     np.testing.assert_allclose(mon_result.sigmahat, em_result.sigmahat, rtol=1e-5)
@@ -162,8 +162,8 @@ def test_closed_form_matches_em_after_column_permutation():
     perm = np.array([2, 0, 3, 1])
     X_perm = X[:, perm]
 
-    mon_original = mlest(X, algorithm='monotone')
-    mon_permuted = mlest(X_perm, algorithm='monotone')
+    mon_original = mlest(X, method='monotone')
+    mon_permuted = mlest(X_perm, method='monotone')
 
     # The permuted fit's mu should match the original mu reordered by perm.
     np.testing.assert_allclose(
@@ -189,7 +189,7 @@ def test_monotone_algorithm_on_non_monotone_data_raises():
     assert not is_monotone(X)
 
     with pytest.raises(ValidationError, match="not monotone"):
-        mlest(X, algorithm='monotone')
+        mlest(X, method='monotone')
 
 
 def test_closed_form_direct_call_on_non_monotone_raises():
@@ -229,8 +229,8 @@ def test_closed_form_faster_than_em_on_larger_v():
     X = _monotone_synthetic(rng, n=1500, v=20, attrition_frac=0.3)
 
     # Warmup
-    _ = mlest(X, algorithm='em', max_iter=500)
-    _ = mlest(X, algorithm='monotone')
+    _ = mlest(X, method='em', max_iter=500)
+    _ = mlest(X, method='monotone')
 
     # Best-of-N: take the minimum wall-clock over repeats for each algorithm.
     # The minimum is the noise-robust timing estimator — transient CPU
@@ -247,8 +247,8 @@ def test_closed_form_faster_than_em_on_larger_v():
             best = min(best, time.perf_counter() - t0)
         return best
 
-    em_time = _best_time(lambda: mlest(X, algorithm='em', max_iter=500))
-    mon_time = _best_time(lambda: mlest(X, algorithm='monotone'))
+    em_time = _best_time(lambda: mlest(X, method='em', max_iter=500))
+    mon_time = _best_time(lambda: mlest(X, method='monotone'))
 
     assert mon_time * 1.3 < em_time, (
         f"Closed-form {mon_time*1000:.1f} ms vs EM {em_time*1000:.1f} ms "

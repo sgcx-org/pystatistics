@@ -10,6 +10,8 @@ Skipped if no GPU (CUDA or MPS) is available.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -273,14 +275,14 @@ class GPUPermutationBackend:
                 offset += batch
 
         with timer.section('p_value'):
-            if alternative == "two.sided":
+            if alternative == "two-sided":
                 count = int(np.sum(np.abs(perm_stats) >= np.abs(observed)))
             elif alternative == "greater":
                 count = int(np.sum(perm_stats >= observed))
             elif alternative == "less":
                 count = int(np.sum(perm_stats <= observed))
             else:
-                raise ValueError(f"Unknown alternative: {alternative!r}")
+                raise ValidationError(f"Unknown alternative: {alternative!r}")
 
             p_value = float(count + 1) / float(R + 1)
 

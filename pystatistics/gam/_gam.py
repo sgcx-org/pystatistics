@@ -15,6 +15,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.compute.backend import resolve_backend
 from pystatistics.core.result import Result
 from pystatistics.gam._common import GAMParams, SmoothInfo
 from pystatistics.gam._fit import (
@@ -41,7 +42,6 @@ def gam(
     max_iter: int = 200,
     names: list[str] | None = None,
     backend: str | None = None,
-    use_fp64: bool = False,
 ) -> GAMSolution:
     """Fit a Generalized Additive Model.
 
@@ -68,6 +68,10 @@ def gam(
         tol: Convergence tolerance for P-IRLS.
         max_iter: Maximum P-IRLS iterations.
         names: Optional names for parametric coefficients.
+        backend: Compute backend = (device, precision). ``'cpu'`` (default):
+            the R-validated reference path. ``'gpu'``: float32 (raises if no
+            GPU). ``'gpu_fp64'``: float64, CUDA only (raises on MPS).
+            ``'auto'``: GPU-float32 if CUDA is present, else CPU.
 
     Returns:
         :class:`GAMSolution` with fitted model, smooth-term info,
@@ -84,14 +88,15 @@ def gam(
         >>> print(result.summary())
     """
     # ------------------------------------------------------------------
-    # Backend resolution (see GPU_BACKEND_CONVENTION.md)
+    # Backend resolution (see pystatistics/CONVENTIONS.md)
     # ------------------------------------------------------------------
-    if backend is None:
-        backend = "cpu"
-    if backend not in ("cpu", "auto", "gpu"):
-        raise ValidationError(
-            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
-        )
+    # An auto-selected device may fall back to CPU when the family has no GPU
+    # kernel; an explicit GPU request must fail loud instead.
+    allow_cpu_fallback = backend in (None, "auto")
+    _target = resolve_backend(backend, supports_fp64=True)
+    backend = _target.backend
+    use_fp64 = _target.use_fp64
+    gpu_device_type = _target.device_type
 
     # ------------------------------------------------------------------
     # Input validation
@@ -167,38 +172,27 @@ def gam(
     gpu_fitter = None
     backend_name = "cpu_pirls"
     if backend != "cpu":
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            from pystatistics.gam.backends.gpu_pirls import GAMGPUFitter
-            try:
-                gpu_fitter = GAMGPUFitter(
-                    y_arr, X_aug, S_penalties, family_name=fam.name,
-                    parametric_cols=parametric_cols,
-                    device=dev.device_type, use_fp64=use_fp64,
-                )
-                backend_name = (
-                    f"gpu_pirls ({dev.device_type}, "
-                    f"{'fp64' if use_fp64 else 'fp32'})"
-                )
-            except ValueError:
-                # Family not supported on GPU — for an explicit
-                # backend='gpu' this should be loud; for 'auto' fall
-                # back to CPU silently.
-                if backend == "gpu":
-                    raise
-                gpu_fitter = None
-        elif backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available. "
-                "Install PyTorch with CUDA/MPS support or use "
-                "backend='cpu'."
+        # Device + precision resolved above (resolve_backend already raised for
+        # an explicit GPU request with no GPU, and downgraded 'auto' to CPU when
+        # no CUDA is present), so a non-'cpu' backend here means "run on GPU".
+        from pystatistics.gam.backends.gpu_pirls import GAMGPUFitter
+        try:
+            gpu_fitter = GAMGPUFitter(
+                y_arr, X_aug, S_penalties, family_name=fam.name,
+                parametric_cols=parametric_cols,
+                device=gpu_device_type, use_fp64=use_fp64,
             )
-        # else: backend='auto' with no GPU, fall through to CPU.
+            backend_name = (
+                f"gpu_pirls ({gpu_device_type}, "
+                f"{'fp64' if use_fp64 else 'fp32'})"
+            )
+        except ValueError:
+            # Family not supported on GPU — fall back to CPU only when the
+            # device was auto-selected; an explicit GPU request fails loud.
+            if not allow_cpu_fallback:
+                raise
+            gpu_fitter = None
+            backend_name = "cpu_pirls"
 
     # FP32 gradient precision is ~1e-7 — floor the P-IRLS tolerance on
     # the GPU FP32 path, same rationale as the multinomial / polr

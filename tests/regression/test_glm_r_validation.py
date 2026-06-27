@@ -147,7 +147,7 @@ class TestGLMRValidation:
         rtol = _get_se_rtol(fixture_name)
         r_stats = np.array(r_results['test_statistics'])
         np.testing.assert_allclose(
-            result.test_statistics, r_stats, rtol=rtol,
+            result.z_values, r_stats, rtol=rtol,
             err_msg=f"Test statistics differ from R ({fixture_name})"
         )
 

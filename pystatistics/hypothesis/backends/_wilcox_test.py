@@ -99,7 +99,7 @@ def wilcox_signed_rank(design: HypothesisDesign) -> tuple[HTestParams, list[str]
         pseudomedian = float(np.median(walsh)) + mu
         estimate = {"(pseudo)median": pseudomedian}
 
-        if alternative == "two.sided":
+        if alternative == "two-sided":
             alpha = 1.0 - conf_level
             lo = float(np.percentile(walsh, 100 * alpha / 2)) + mu
             hi = float(np.percentile(walsh, 100 * (1 - alpha / 2))) + mu
@@ -167,7 +167,7 @@ def wilcox_rank_sum(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         stat_scipy, p_two = sp_stats.mannwhitneyu(
             x, y + mu, alternative='two-sided', method='exact'
         )
-        if alternative == "two.sided":
+        if alternative == "two-sided":
             p_value = p_two
         elif alternative == "less":
             _, p_value = sp_stats.mannwhitneyu(
@@ -192,7 +192,7 @@ def wilcox_rank_sum(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         diffs.sort()
         estimate = {"difference in location": float(np.median(diffs))}
 
-        if alternative == "two.sided":
+        if alternative == "two-sided":
             alpha = 1.0 - conf_level
             lo = float(np.percentile(diffs, 100 * alpha / 2))
             hi = float(np.percentile(diffs, 100 * (1 - alpha / 2)))
@@ -238,7 +238,7 @@ def _signed_rank_exact_p(V: float, n: int, alternative: str) -> float:
             signs = np.array([(i >> j) & 1 for j in range(n)], dtype=np.float64)
             all_sums[i] = np.sum(signs * ranks)
 
-        if alternative == "two.sided":
+        if alternative == "two-sided":
             # p = P(V >= |V - E[V]| + E[V]) + P(V <= E[V] - |V - E[V]|)
             # Equivalently, p = 2 * min(P(V >= v), P(V <= v))
             # But R uses: p_geq + p_leq where they overlap at v
@@ -282,7 +282,7 @@ def _signed_rank_normal_p(
     # Continuity correction
     cc = 0.5 if correct else 0.0
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         z = (abs(V - mean_V) - cc) / sd_V
         p_value = 2.0 * sp_stats.norm.sf(z)
     elif alternative == "less":
@@ -318,7 +318,7 @@ def _rank_sum_normal_p(
     # Continuity correction
     cc = 0.5 if correct else 0.0
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         z = (abs(W - mean_W) - cc) / sd_W
         p_value = 2.0 * sp_stats.norm.sf(z)
     elif alternative == "less":

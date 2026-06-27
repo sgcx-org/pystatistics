@@ -19,6 +19,8 @@ submodules beyond core validation/exceptions.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import lfilter
@@ -429,7 +431,7 @@ def arima_negloglik(
         return css_loglik(params, y, order, include_mean)
     if method == "ML":
         return exact_loglik(params, y, order, include_mean)
-    raise ValueError(f"method must be 'CSS' or 'ML', got '{method}'")
+    raise ValidationError(f"method must be 'CSS' or 'ML', got '{method}'")
 
 
 def arima_gradient(

@@ -48,14 +48,14 @@ class TestSkewness:
         np.testing.assert_allclose(result.skewness[1], -1.3608276348795434, rtol=1e-12)
 
     def test_nan_everything_propagates(self):
-        """NaN propagates with use='everything'."""
-        result = describe([1, 2, np.nan, 4, 5], use='everything', backend='cpu')
+        """NaN propagates with na_action='everything'."""
+        result = describe([1, 2, np.nan, 4, 5], na_action='everything', backend='cpu')
         assert np.isnan(result.skewness[0])
 
     def test_nan_complete_obs(self):
-        """NaN rows removed with use='complete.obs'."""
+        """NaN rows removed with na_action='complete'."""
         # After NaN removal: [1, 2, 4, 5] which is still symmetric around 3
-        result = describe([1, 2, np.nan, 4, 5], use='complete.obs', backend='cpu')
+        result = describe([1, 2, np.nan, 4, 5], na_action='complete', backend='cpu')
         assert not np.isnan(result.skewness[0])
 
     def test_constant_nan(self):
@@ -106,8 +106,8 @@ class TestKurtosis:
         np.testing.assert_allclose(result.kurtosis[1], 2.0, rtol=1e-12)
 
     def test_nan_everything_propagates(self):
-        """NaN propagates with use='everything'."""
-        result = describe([1, 2, np.nan, 4, 5], use='everything', backend='cpu')
+        """NaN propagates with na_action='everything'."""
+        result = describe([1, 2, np.nan, 4, 5], na_action='everything', backend='cpu')
         assert np.isnan(result.kurtosis[0])
 
     def test_constant_nan(self):

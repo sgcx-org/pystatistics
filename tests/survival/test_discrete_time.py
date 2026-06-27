@@ -61,7 +61,7 @@ class TestDiscreteTimeBasic:
         result = discrete_time(DT_TIME, DT_EVENT, DT_X)
         mask = result.standard_errors > 0
         expected_z = result.coefficients[mask] / result.standard_errors[mask]
-        assert_allclose(result.z_statistics[mask], expected_z, rtol=1e-10)
+        assert_allclose(result.z_values[mask], expected_z, rtol=1e-10)
 
     def test_p_values_valid(self):
         """p-values in [0, 1]."""

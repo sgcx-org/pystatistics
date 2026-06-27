@@ -16,7 +16,7 @@ from pystatistics.mvnmle.patterns import (
 )
 from pystatistics.mvnmle.mcar_test import (
     little_mcar_test,
-    MCARTestResult,
+    MCARTestSolution,
 )
 from pystatistics.mvnmle._monotone import (
     is_monotone,
@@ -35,7 +35,7 @@ __all__ = [
     'PatternInfo',
     'PatternSummary',
     'little_mcar_test',
-    'MCARTestResult',
+    'MCARTestSolution',
     'is_monotone',
     'monotone_permutation',
     'mlest_monotone_closed_form',

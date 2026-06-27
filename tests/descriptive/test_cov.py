@@ -68,36 +68,36 @@ class TestCovarianceWithNaN:
     """Test covariance with missing data."""
 
     def test_everything_propagates_nan(self):
-        """use='everything' propagates NaN."""
+        """na_action='everything' propagates NaN."""
         data = np.array([[1.0, np.nan], [3.0, 4.0], [5.0, 6.0]])
-        result = cov(data, use='everything', backend='cpu')
+        result = cov(data, na_action='everything', backend='cpu')
         C = result.covariance_matrix
         # Column 1 has NaN, so any covariance involving col 1 is NaN
         assert np.isnan(C[0, 1])
         assert np.isnan(C[1, 0])
 
     def test_complete_obs_listwise_deletion(self):
-        """use='complete.obs' removes rows with any NaN."""
+        """na_action='complete' removes rows with any NaN."""
         data = np.array([
             [1.0, 10.0],
             [2.0, np.nan],
             [3.0, 30.0],
             [4.0, 40.0],
         ])
-        result = cov(data, use='complete.obs', backend='cpu')
+        result = cov(data, na_action='complete', backend='cpu')
         # After removing row 1: [[1,10], [3,30], [4,40]]
         clean = np.array([[1.0, 10.0], [3.0, 30.0], [4.0, 40.0]])
         expected = np.cov(clean, rowvar=False, ddof=1)
         np.testing.assert_allclose(result.covariance_matrix, expected, rtol=1e-12)
 
     def test_pairwise_uses_available_pairs(self):
-        """use='pairwise.complete.obs' uses shared non-NaN rows per pair."""
+        """na_action='pairwise' uses shared non-NaN rows per pair."""
         data = np.array([
             [1.0, 10.0],
             [2.0, np.nan],
             [3.0, 30.0],
         ])
-        result = cov(data, use='pairwise.complete.obs', backend='cpu')
+        result = cov(data, na_action='pairwise', backend='cpu')
         C = result.covariance_matrix
 
         # Var(col0): all 3 rows available → var([1,2,3]) = 1.0
@@ -118,7 +118,7 @@ class TestCovarianceWithNaN:
             [2.0, np.nan],
             [3.0, 30.0],
         ])
-        result = cov(data, use='pairwise.complete.obs', backend='cpu')
+        result = cov(data, na_action='pairwise', backend='cpu')
         assert result.pairwise_n is not None
         # col0 has all 3 values, col1 has 2
         # (0,0): 3, (1,1): 2, (0,1): 2
@@ -132,5 +132,5 @@ class TestCovarianceWithNaN:
             [1.0, np.nan],
             [np.nan, 20.0],
         ])
-        result = cov(data, use='pairwise.complete.obs', backend='cpu')
+        result = cov(data, na_action='pairwise', backend='cpu')
         assert np.isnan(result.covariance_matrix[0, 1])

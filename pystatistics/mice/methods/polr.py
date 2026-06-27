@@ -113,7 +113,7 @@ class PolrMethod:
         # not silent, and local (the next sweep retries the full model).
         ridge = _slope_ridge(X_obs)
         try:
-            fit = fit_polr(y, X_obs, ridge=ridge)
+            fit = fit_polr(y, X_obs, l2=ridge)
         except (ConvergenceError, NumericalError, np.linalg.LinAlgError) as exc:
             warnings.warn(
                 f"polr fit did not converge ({type(exc).__name__}); using a "

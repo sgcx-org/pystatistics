@@ -15,7 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.exceptions import ValidationError
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 
 if TYPE_CHECKING:
     from pystatistics.mice.design import MICEDesign
@@ -35,7 +35,7 @@ class MICEParams:
 
 
 @dataclass
-class MICESolution:
+class MICESolution(SolutionReprMixin):
     """User-facing MICE results: ``m`` completed datasets plus diagnostics."""
 
     _result: Result[MICEParams]
@@ -43,12 +43,12 @@ class MICESolution:
 
     # ----------------------------------------------------------- basic shape
     @property
-    def m(self) -> int:
+    def n_imputations(self) -> int:
         """Number of imputations (completed datasets)."""
         return self._result.params.m
 
     @property
-    def maxit(self) -> int:
+    def max_iter(self) -> int:
         """Iterations per chain."""
         return self._result.params.maxit
 
@@ -65,15 +65,15 @@ class MICESolution:
     # ------------------------------------------------------ completed datasets
     def completed(self, i: int) -> NDArray[np.floating[Any]]:
         """The ``i``-th completed dataset (n x p), 0-based."""
-        if not (0 <= i < self.m):
+        if not (0 <= i < self.n_imputations):
             raise ValidationError(
-                f"imputation index {i} out of range [0, {self.m})"
+                f"imputation index {i} out of range [0, {self.n_imputations})"
             )
         return self._result.params.completed[i]
 
     def completed_datasets(self) -> list[NDArray[np.floating[Any]]]:
         """All ``m`` completed datasets as a list of (n x p) arrays."""
-        return [self._result.params.completed[i] for i in range(self.m)]
+        return [self._result.params.completed[i] for i in range(self.n_imputations)]
 
     def __iter__(self) -> Iterator[NDArray[np.floating[Any]]]:
         """Iterate over the ``m`` completed datasets."""
@@ -92,7 +92,7 @@ class MICESolution:
             )
         mask_col = self._design.missing_mask[:, col]
         completed = self._result.params.completed
-        return np.stack([completed[i][mask_col, col] for i in range(self.m)])
+        return np.stack([completed[i][mask_col, col] for i in range(self.n_imputations)])
 
     # ----------------------------------------------------------- diagnostics
     @property
@@ -131,8 +131,8 @@ class MICESolution:
             f"Observations: {self._design.n}",
             f"Variables: {self._design.p}",
             f"Missing rate: {self._design.missing_rate:.1%}",
-            f"Imputations (m): {self.m}",
-            f"Iterations (maxit): {self.maxit}",
+            f"Imputations: {self.n_imputations}",
+            f"Iterations: {self.max_iter}",
             f"Backend: {self.backend_name}",
             "",
             "Imputed columns (method):",
@@ -150,7 +150,7 @@ class MICESolution:
 
     def __repr__(self) -> str:
         return (
-            f"MICESolution(m={self.m}, maxit={self.maxit}, "
+            f"MICESolution(n_imputations={self.n_imputations}, max_iter={self.max_iter}, "
             f"n={self._design.n}, p={self._design.p}, "
             f"imputed={len(self.incomplete_columns)})"
         )

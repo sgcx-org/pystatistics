@@ -31,10 +31,11 @@ from numpy.typing import NDArray
 from scipy import stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import SolutionReprMixin
 
 
 @dataclass(frozen=True)
-class PooledResult:
+class PooledSolution(SolutionReprMixin):
     """Pooled estimate(s) and inference from Rubin's rules.
 
     Each field is a scalar when a single quantity was pooled, or a vector
@@ -52,8 +53,39 @@ class PooledResult:
     riv: NDArray[np.floating[Any]] | float          # relative increase in variance
     lambda_: NDArray[np.floating[Any]] | float      # proportion of variance from missingness
     fmi: NDArray[np.floating[Any]] | float          # fraction of missing information
-    m: int
+    n_imputations: int
     alpha: float
+
+    def summary(self) -> str:
+        """R-style summary of the pooled inference (mirrors ``mice::summary.mipo``).
+
+        One row per pooled quantity: estimate, standard error, Barnard-Rubin
+        df, the confidence interval at level ``1 - alpha``, and the fraction of
+        missing information.
+        """
+        est = np.atleast_1d(self.estimate)
+        se = np.atleast_1d(self.se)
+        df = np.atleast_1d(self.df)
+        lo = np.atleast_1d(self.ci_low)
+        hi = np.atleast_1d(self.ci_high)
+        fmi = np.atleast_1d(self.fmi)
+        conf = round((1.0 - self.alpha) * 100)
+
+        lines = [
+            "Pooled estimates (Rubin's rules)",
+            "=" * 64,
+            f"Imputations: {self.n_imputations}",
+            "",
+            f"{'':>4}{'estimate':>12}{'se':>12}{'df':>9}"
+            f"{f'{conf}% CI':>24}{'fmi':>8}",
+        ]
+        for i in range(len(est)):
+            ci = f"[{lo[i]:.4g}, {hi[i]:.4g}]"
+            lines.append(
+                f"{i:>4}{est[i]:>12.4g}{se[i]:>12.4g}{df[i]:>9.1f}"
+                f"{ci:>24}{fmi[i]:>8.3f}"
+            )
+        return "\n".join(lines)
 
 
 def pool(
@@ -62,7 +94,7 @@ def pool(
     *,
     dfcom: float | None = None,
     alpha: float = 0.05,
-) -> PooledResult:
+) -> PooledSolution:
     """Pool ``m`` estimates and their variances with Rubin's rules.
 
     Parameters
@@ -82,7 +114,7 @@ def pool(
 
     Returns
     -------
-    PooledResult
+    PooledSolution
     """
     Q = np.asarray(estimates, dtype=np.float64)
     U = np.asarray(variances, dtype=np.float64)
@@ -136,7 +168,7 @@ def pool(
     def out(x):
         return float(x[0]) if scalar_input else x
 
-    return PooledResult(
+    return PooledSolution(
         estimate=out(qbar),
         se=out(se),
         df=out(df),
@@ -148,7 +180,7 @@ def pool(
         riv=out(riv),
         lambda_=out(lam),
         fmi=out(fmi),
-        m=m,
+        n_imputations=m,
         alpha=alpha,
     )
 

@@ -41,7 +41,7 @@ def solution(reference):
     matrix = np.genfromtxt(DATA_CSV, delimiter=",", skip_header=1)
     design = MICEDesign.from_array(matrix, column_kinds=_KINDS)
     meta = reference["meta"]
-    return design, mice(design, m=meta["m"], maxit=meta["maxit"], seed=20260614)
+    return design, mice(design, n_imputations=meta["m"], max_iter=meta["maxit"], seed=20260614)
 
 
 def _imputed_proportions(sol, design, col, levels):

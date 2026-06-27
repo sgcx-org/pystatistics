@@ -14,6 +14,8 @@ References:
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
@@ -208,7 +210,7 @@ def _compute_ci(
             ci_lower = np.exp(-np.exp(log_neg_log_s + z * se_loglog))
             ci_upper = np.exp(-np.exp(log_neg_log_s - z * se_loglog))
     else:
-        raise ValueError(
+        raise ValidationError(
             f"Unknown conf_type '{conf_type}'. "
             f"Choose from 'log', 'plain', 'log-log'."
         )

@@ -5,6 +5,7 @@ Tools for analyzing missingness patterns in multivariate data.
 """
 
 import numpy as np
+from pystatistics.core.exceptions import ValidationError
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -154,13 +155,13 @@ def analyze_patterns(data) -> List[PatternInfo]:
         data_array = np.asarray(data, dtype=float)
 
     if data_array.ndim != 2:
-        raise ValueError("Data must be 2-dimensional")
+        raise ValidationError("Data must be 2-dimensional")
 
     if data_array.shape[0] < 1:
-        raise ValueError("Data must have at least one observation")
+        raise ValidationError("Data must have at least one observation")
 
     if data_array.shape[1] < 1:
-        raise ValueError("Data must have at least one variable")
+        raise ValidationError("Data must have at least one variable")
 
     return identify_missingness_patterns(data_array)
 
@@ -182,7 +183,7 @@ def pattern_summary(patterns: List[PatternInfo],
     PatternSummary
     """
     if len(patterns) == 0:
-        raise ValueError("No patterns provided")
+        raise ValidationError("No patterns provided")
 
     n_patterns = len(patterns)
     total_cases = sum(p.n_cases for p in patterns)

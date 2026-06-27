@@ -9,7 +9,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Any
 from dataclasses import dataclass
 import warnings
-from pystatistics.core.exceptions import NumericalError
+from pystatistics.core.exceptions import NumericalError, ValidationError
 
 
 @dataclass
@@ -88,20 +88,20 @@ class MLEObjectiveBase:
             data = np.asarray(data)
 
         if data.ndim != 2:
-            raise ValueError(f"Data must be 2D, got shape {data.shape}")
+            raise ValidationError(f"Data must be 2D, got shape {data.shape}")
 
         if data.shape[0] < 2:
-            raise ValueError(f"Need at least 2 observations, got {data.shape[0]}")
+            raise ValidationError(f"Need at least 2 observations, got {data.shape[0]}")
 
         if data.shape[1] < 1:
-            raise ValueError(f"Need at least 1 variable, got {data.shape[1]}")
+            raise ValidationError(f"Need at least 1 variable, got {data.shape[1]}")
 
         # Check for all-missing rows or columns
         if np.any(np.all(np.isnan(data), axis=1)):
-            raise ValueError("Data contains rows with all missing values")
+            raise ValidationError("Data contains rows with all missing values")
 
         if np.any(np.all(np.isnan(data), axis=0)):
-            raise ValueError("Data contains columns with all missing values")
+            raise ValidationError("Data contains columns with all missing values")
 
     def _apply_mysort(self) -> None:
         """

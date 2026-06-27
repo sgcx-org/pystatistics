@@ -15,12 +15,12 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.stats import norm
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.ordinal._common import OrdinalParams
 
 
 @dataclass
-class OrdinalSolution:
+class OrdinalSolution(SolutionReprMixin):
     """
     User-facing ordinal regression results.
 
@@ -205,8 +205,8 @@ class OrdinalSolution:
         return self._result.params.n_iter
 
     @property
-    def method(self) -> str:
-        """Link function method name."""
+    def link(self) -> str:
+        """Link function name ('logistic', 'probit', or 'cloglog')."""
         return self._result.params.method
 
     # -- Metadata accessors ----------------------------------------------------

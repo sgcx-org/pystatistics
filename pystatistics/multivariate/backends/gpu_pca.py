@@ -45,7 +45,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.compute.torch_interop import to_host_f64
-from pystatistics.multivariate._common import PCAResult
+from pystatistics.core.result import Result
+from pystatistics.multivariate._common import PCASolution, PCAParams
 
 # Condition-number gate for the Gram-matrix path.
 #
@@ -133,10 +134,23 @@ def _prepare_X_gpu(X_arr, center, scale, col_means_cpu, scale_values_cpu,
     return X_gpu, dtype
 
 
+def _gpu_solution(params: PCAParams, device_type: str, method: str) -> PCASolution:
+    """Wrap PCAParams in a Result envelope tagged with the GPU backend."""
+    return PCASolution(
+        _result=Result(
+            params=params,
+            info={"method": method},
+            timing=None,
+            backend_name=f"gpu_pca ({device_type})",
+            warnings=(),
+        )
+    )
+
+
 def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
               col_means_cpu, scale_values_cpu, var_names, n, p,
-              *, device_resident: bool = False):
-    """Truncate and build PCAResult.
+              *, device_resident: bool = False, method: str = "svd"):
+    """Truncate and build PCASolution.
 
     When ``device_resident=False`` (default, back-compat path) the
     numeric fields (sdev / rotation / scores / center / scale) are
@@ -150,7 +164,7 @@ def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
     ``use_fp64=True``.
 
     When ``device_resident=True`` the tensors stay on-device and the
-    returned PCAResult holds them directly — this is the escape hatch
+    returned PCASolution holds them directly — this is the escape hatch
     for multi-step GPU pipelines where the scores are the input to a
     subsequent GPU computation. A 1M × 100 FP32 scores tensor is
     ~400 MB — the D2H copy of that is ~150 ms on PCIe 4.0, which
@@ -169,7 +183,7 @@ def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
         # torch tensors (when the device-resident moments path ran);
         # in the device_resident return, promote numpy inputs to
         # tensors on the same device so all numeric fields share the
-        # PCAResult.device contract.
+        # PCASolution.device contract.
         dev = scores_gpu.device
         dtype = scores_gpu.dtype
 
@@ -180,18 +194,23 @@ def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
                 return v.to(device=dev, dtype=dtype)
             return torch.as_tensor(v, device=dev, dtype=dtype)
 
-        return PCAResult(
-            sdev=sdev_gpu,
-            rotation=rotation_gpu,
-            center=_to_dev(col_means_cpu),
-            scale=_to_dev(scale_values_cpu),
-            x=scores_gpu,
-            n_obs=n,
-            n_vars=p,
-            var_names=var_names,
+        return _gpu_solution(
+            PCAParams(
+                sdev=sdev_gpu,
+                rotation=rotation_gpu,
+                center=_to_dev(col_means_cpu),
+                scale=_to_dev(scale_values_cpu),
+                x=scores_gpu,
+                n_obs=n,
+                n_vars=p,
+                var_names=var_names,
+            ),
+            dev.type,
+            method,
         )
 
-    # Default path: numpy-backed PCAResult.
+    # Default path: numpy-backed PCASolution.
+    device_type = scores_gpu.device.type
     sdev = sdev_gpu.cpu().numpy()
     rotation = rotation_gpu.cpu().numpy()
     scores = scores_gpu.cpu().numpy()
@@ -201,15 +220,19 @@ def _finalize(sdev_gpu, rotation_gpu, scores_gpu, n_components,
     if isinstance(scale_values_cpu, torch.Tensor):
         scale_values_cpu = scale_values_cpu.detach().cpu().numpy()
 
-    return PCAResult(
-        sdev=sdev,
-        rotation=rotation,
-        center=col_means_cpu,
-        scale=scale_values_cpu,
-        x=scores,
-        n_obs=n,
-        n_vars=p,
-        var_names=var_names,
+    return _gpu_solution(
+        PCAParams(
+            sdev=sdev,
+            rotation=rotation,
+            center=col_means_cpu,
+            scale=scale_values_cpu,
+            x=scores,
+            n_obs=n,
+            n_vars=p,
+            var_names=var_names,
+        ),
+        device_type,
+        method,
     )
 
 
@@ -217,7 +240,7 @@ def _pca_gpu_svd(
     X_arr, center, scale, n_components,
     col_means_cpu, scale_values_cpu, var_names,
     device, use_fp64, device_resident=False,
-) -> PCAResult:
+) -> PCASolution:
     """SVD-based PCA on GPU. Always safe, moderate GPU speedup."""
     import torch
     n, p = X_arr.shape
@@ -236,7 +259,7 @@ def _pca_gpu_svd(
     return _finalize(
         sdev_gpu, rotation_gpu, scores_gpu, n_components,
         col_means_cpu, scale_values_cpu, var_names, n, p,
-        device_resident=device_resident,
+        device_resident=device_resident, method="svd",
     )
 
 
@@ -244,7 +267,7 @@ def _pca_gpu_gram(
     X_arr, center, scale, n_components,
     col_means_cpu, scale_values_cpu, var_names,
     device, use_fp64, force, device_resident=False,
-) -> PCAResult:
+) -> PCASolution:
     """Gram-matrix PCA on GPU: eigendecompose X'X.
 
     Algorithmic choice: one big GEMM to form ``X'X`` (cuBLAS's sweet
@@ -323,7 +346,7 @@ def _pca_gpu_gram(
     return _finalize(
         sdev_gpu, rotation_gpu, scores_gpu, n_components,
         col_means_cpu, scale_values_cpu, var_names, n, p,
-        device_resident=device_resident,
+        device_resident=device_resident, method="gram",
     )
 
 
@@ -341,7 +364,7 @@ def pca_gpu(
     method: str = "svd",
     force: bool = False,
     device_resident: bool = False,
-) -> PCAResult:
+) -> PCASolution:
     """Fit PCA on GPU. Dispatches on ``method``.
 
     Parameters

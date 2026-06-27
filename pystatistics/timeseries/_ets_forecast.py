@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
-from pystatistics.timeseries._ets_fit import ETSResult
+from pystatistics.timeseries._ets_fit import ETSSolution
 from pystatistics.timeseries._ets_models import ETSSpec
 
 
@@ -36,7 +36,7 @@ class ETSForecast:
         Forecast horizon.
     model : ETSSpec
         Model specification used.
-    fitted : ETSResult
+    fitted : ETSSolution
         The underlying fitted model.
     """
 
@@ -45,7 +45,7 @@ class ETSForecast:
     upper: dict[int, NDArray]
     h: int
     model: ETSSpec
-    fitted: ETSResult
+    fitted: ETSSolution
 
     def summary(self) -> str:
         """
@@ -247,7 +247,7 @@ def _variance_additive_nonseasonal(
 # ---------------------------------------------------------------------------
 
 def forecast_ets(
-    fitted: ETSResult,
+    fitted: ETSSolution,
     h: int = 10,
     *,
     levels: list[int] | None = None,
@@ -257,7 +257,7 @@ def forecast_ets(
 
     Parameters
     ----------
-    fitted : ETSResult
+    fitted : ETSSolution
         A fitted ETS model (from :func:`ets`).
     h : int
         Forecast horizon (number of steps ahead).

@@ -29,6 +29,8 @@ against exact time-domain ML. GPU FP32 matches CPU Whittle at the
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import math
 from typing import Any
 
@@ -64,10 +66,8 @@ class BatchedWhittleGPU:
         import torch
 
         if device == "mps" and use_fp64:
-            raise RuntimeError(
-                "Batched GPU Whittle: MPS does not support FP64. "
-                "Use use_fp64=False or backend='cpu'."
-            )
+            from pystatistics.core.compute.backend import FP64_REQUIRES_CUDA_MSG
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
 
         self._torch = torch
         self._device = torch.device(device)
@@ -82,7 +82,7 @@ class BatchedWhittleGPU:
                 Y, device=self._device, dtype=self._dtype,
             )
         if Y_gpu.ndim != 2:
-            raise ValueError(
+            raise ValidationError(
                 f"Batched Whittle: Y must be 2-D (K, n), got {Y_gpu.ndim}-D"
             )
 

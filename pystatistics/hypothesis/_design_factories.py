@@ -48,7 +48,7 @@ def build_t_test_design(
     mu: float = 0.0,
     paired: bool = False,
     var_equal: bool = False,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_level: float = 0.95,
 ):
     """Build design for t_test()."""
@@ -207,7 +207,7 @@ def build_prop_test_design(
     n: ArrayLike,
     *,
     p: ArrayLike | float | None = None,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_level: float = 0.95,
     correct: bool = True,
 ):
@@ -246,9 +246,9 @@ def build_prop_test_design(
                 "All null proportions must be in (0, 1)"
             )
 
-    if len(x_arr) > 1 and alternative != "two.sided":
+    if len(x_arr) > 1 and alternative != "two-sided":
         raise ValidationError(
-            "alternative must be 'two.sided' for k > 1 groups"
+            "alternative must be 'two-sided' for k > 1 groups"
         )
 
     data_name = "x out of n" if len(x_arr) == 1 else "x"
@@ -266,7 +266,7 @@ def build_fisher_test_design(
     x: ArrayLike,
     y: ArrayLike | None = None,
     *,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_int: bool = True,
     conf_level: float = 0.95,
     simulate_p_value: bool = False,
@@ -312,9 +312,9 @@ def build_fisher_test_design(
         )
 
     nrow, ncol = table.shape
-    if (nrow > 2 or ncol > 2) and alternative != "two.sided":
+    if (nrow > 2 or ncol > 2) and alternative != "two-sided":
         raise ValidationError(
-            "alternative must be 'two.sided' for r x c tables "
+            "alternative must be 'two-sided' for r x c tables "
             "with r > 2 or c > 2"
         )
 
@@ -339,7 +339,7 @@ def build_wilcox_test_design(
     correct: bool = True,
     conf_int: bool = True,
     conf_level: float = 0.95,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
 ):
     """Build design for wilcox_test()."""
     from pystatistics.hypothesis.design import HypothesisDesign
@@ -393,7 +393,7 @@ def build_ks_test_design(
     x: ArrayLike,
     y: ArrayLike | None = None,
     *,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     distribution: str | None = None,
     **dist_params: float,
 ):
@@ -432,7 +432,7 @@ def build_var_test_design(
     y: ArrayLike,
     *,
     ratio: float = 1.0,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_level: float = 0.95,
 ):
     """Build design for var_test()."""

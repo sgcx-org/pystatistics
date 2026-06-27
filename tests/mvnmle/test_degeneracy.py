@@ -111,11 +111,11 @@ class TestMlestDegeneracyGuard:
     def test_direct_collinear_raises(self):
         X = _collinear_data()
         with pytest.raises(SingularMatrixError, match="collinear"):
-            mlest(X, backend="cpu", algorithm="direct")
+            mlest(X, backend="cpu", method="direct")
 
     def test_force_returns_non_converged_with_warning(self):
         X = _collinear_data()
-        res = mlest(X, backend="cpu", algorithm="direct", force=True)
+        res = mlest(X, backend="cpu", method="direct", force=True)
         assert res.converged is False
         assert any("force=True" in w for w in res._result.warnings)
 
@@ -126,7 +126,7 @@ class TestMlestDegeneracyGuard:
             # guard still raises after EM completes.
             warnings.simplefilter("ignore", UserWarning)
             with pytest.raises(SingularMatrixError):
-                mlest(X, backend="cpu", algorithm="em")
+                mlest(X, backend="cpu", method="em")
 
     def test_collinearity_tol_can_relax_the_guard(self):
         X = _collinear_data()
@@ -137,12 +137,12 @@ class TestMlestDegeneracyGuard:
         # platform-sensitive — so the relaxation window there is not a stable
         # thing to assert on. The default path's *raise* on collinear input is
         # covered by test_direct_collinear_raises.)
-        res = mlest(X, backend="cpu-reference", algorithm="direct",
+        res = mlest(X, backend="cpu-reference", method="direct",
                     collinearity_tol=1e-9)
         assert res is not None  # no SingularMatrixError
 
     def test_full_rank_data_unaffected(self):
-        res = mlest(datasets.apple, backend="cpu", algorithm="direct")
+        res = mlest(datasets.apple, backend="cpu", method="direct")
         assert res.converged is True
         assert not any(
             "rank-deficient" in w for w in res._result.warnings

@@ -91,7 +91,7 @@ class TestSingleImputation:
         assert res.estimate == pytest.approx(4.0)
         assert res.between == pytest.approx(0.0)
         assert res.total == pytest.approx(2.0)
-        assert res.m == 1
+        assert res.n_imputations == 1
 
 
 class TestPoolingValidation:
@@ -122,7 +122,7 @@ class TestEndToEndWithMice:
         # Fit OLS slope of col 0 on col 1 in each completed dataset, then pool.
         complete = datasets.make_gaussian_complete(120, seed=11)
         miss = datasets.make_mcar(complete, 0.2, seed=12)
-        sol = mice(miss, m=8, maxit=8, method="norm", seed=13)
+        sol = mice(miss, n_imputations=8, max_iter=8, method="norm", seed=13)
 
         slopes, variances = [], []
         for d in sol.completed_datasets():
@@ -139,4 +139,4 @@ class TestEndToEndWithMice:
         # True slope = cov(0,1)/var(1) = 0.6 / 1.0 = 0.6 for the default cov.
         assert res.ci_low < 0.6 < res.ci_high
         assert 0.0 <= res.fmi <= 1.0
-        assert res.m == 8
+        assert res.n_imputations == 8

@@ -102,8 +102,8 @@ class TestGPUvsCPU:
 
     def test_quantiles(self, data_2d):
         """GPU quantiles (CPU fallback) match CPU exactly."""
-        cpu = quantile(data_2d, type=7, backend='cpu')
-        gpu = quantile(data_2d, type=7, backend='gpu')
+        cpu = quantile(data_2d, quantile_type=7, backend='cpu')
+        gpu = quantile(data_2d, quantile_type=7, backend='gpu')
         np.testing.assert_allclose(gpu.quantiles, cpu.quantiles, rtol=1e-10)
 
     def test_summary(self, data_2d):
@@ -133,8 +133,8 @@ class TestGPUvsCPU:
     def test_all_quantile_types(self, data_2d):
         """All 9 quantile types match CPU exactly."""
         for qtype in range(1, 10):
-            cpu = quantile(data_2d, type=qtype, backend='cpu')
-            gpu = quantile(data_2d, type=qtype, backend='gpu')
+            cpu = quantile(data_2d, quantile_type=qtype, backend='cpu')
+            gpu = quantile(data_2d, quantile_type=qtype, backend='gpu')
             np.testing.assert_allclose(
                 gpu.quantiles, cpu.quantiles, rtol=1e-10,
                 err_msg=f"Type {qtype} mismatch"

@@ -42,12 +42,12 @@ def regression_coef_stat(data, indices):
 # ---------------------------------------------------------------------------
 
 class TestOrdinaryBootstrap:
-    """Tests for sim='ordinary' bootstrap."""
+    """Tests for method='ordinary' bootstrap."""
 
     def test_basic_mean(self):
         """Bootstrap of the mean works correctly."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
-        result = boot(data, mean_stat, R=999, seed=42)
+        result = boot(data, mean_stat, n_resamples=999, seed=42)
 
         # t0 should be the actual mean
         assert result.t0[0] == pytest.approx(5.5, rel=1e-10)
@@ -67,7 +67,7 @@ class TestOrdinaryBootstrap:
     def test_multi_statistic(self):
         """Bootstrap with multiple statistics (mean + var)."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_var_stat, R=500, seed=42)
+        result = boot(data, mean_var_stat, n_resamples=500, seed=42)
 
         assert result.t0.shape == (2,)
         assert result.t.shape == (500, 2)
@@ -82,7 +82,7 @@ class TestOrdinaryBootstrap:
         y = 2.0 + 3.0 * x + rng.normal(0, 1, n)
         data = np.column_stack([x, y])
 
-        result = boot(data, regression_coef_stat, R=500, seed=42)
+        result = boot(data, regression_coef_stat, n_resamples=500, seed=42)
 
         # t0 should be close to true values (intercept≈2, slope≈3)
         assert result.t0[0] == pytest.approx(2.0, abs=1.0)
@@ -94,8 +94,8 @@ class TestOrdinaryBootstrap:
     def test_seed_reproducibility(self):
         """Same seed gives same results."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        r1 = boot(data, mean_stat, R=100, seed=42)
-        r2 = boot(data, mean_stat, R=100, seed=42)
+        r1 = boot(data, mean_stat, n_resamples=100, seed=42)
+        r2 = boot(data, mean_stat, n_resamples=100, seed=42)
 
         np.testing.assert_array_equal(r1.t, r2.t)
         np.testing.assert_array_equal(r1.t0, r2.t0)
@@ -105,15 +105,15 @@ class TestOrdinaryBootstrap:
     def test_different_seeds_differ(self):
         """Different seeds give different results."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        r1 = boot(data, mean_stat, R=100, seed=42)
-        r2 = boot(data, mean_stat, R=100, seed=99)
+        r1 = boot(data, mean_stat, n_resamples=100, seed=42)
+        r2 = boot(data, mean_stat, n_resamples=100, seed=99)
 
         assert not np.allclose(r1.t, r2.t)
 
     def test_large_R(self):
         """Large R produces stable estimates."""
         data = np.arange(1.0, 101.0)
-        result = boot(data, mean_stat, R=5000, seed=42)
+        result = boot(data, mean_stat, n_resamples=5000, seed=42)
 
         # True mean = 50.5, true SE ≈ 28.87/sqrt(100) ≈ 2.887
         assert result.t0[0] == pytest.approx(50.5, rel=1e-10)
@@ -123,7 +123,7 @@ class TestOrdinaryBootstrap:
     def test_single_observation(self):
         """Bootstrap with n=1 (degenerate case)."""
         data = np.array([5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
 
         # All replicates should be 5.0
         assert result.t0[0] == pytest.approx(5.0)
@@ -135,12 +135,12 @@ class TestOrdinaryBootstrap:
 # ---------------------------------------------------------------------------
 
 class TestBalancedBootstrap:
-    """Tests for sim='balanced' bootstrap."""
+    """Tests for method='balanced' bootstrap."""
 
     def test_balanced_basic(self):
         """Balanced bootstrap produces valid results."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, sim="balanced", seed=42)
+        result = boot(data, mean_stat, n_resamples=100, method="balanced", seed=42)
 
         assert result.t0[0] == pytest.approx(3.0, rel=1e-10)
         assert result.t.shape == (100, 1)
@@ -166,7 +166,7 @@ class TestBalancedBootstrap:
                     counts[idx] += 1
             return np.array([np.mean(d[indices])])
 
-        result = boot(data, counting_stat, R=R, sim="balanced", seed=42)
+        result = boot(data, counting_stat, n_resamples=R, method="balanced", seed=42)
 
         # Each observation should appear exactly R times total
         np.testing.assert_array_equal(counts, np.full(n, R))
@@ -174,8 +174,8 @@ class TestBalancedBootstrap:
     def test_balanced_vs_ordinary_similar_se(self):
         """Balanced and ordinary should give similar SE estimates."""
         data = np.arange(1.0, 21.0)
-        r_ord = boot(data, mean_stat, R=1000, sim="ordinary", seed=42)
-        r_bal = boot(data, mean_stat, R=1000, sim="balanced", seed=42)
+        r_ord = boot(data, mean_stat, n_resamples=1000, method="ordinary", seed=42)
+        r_bal = boot(data, mean_stat, n_resamples=1000, method="balanced", seed=42)
 
         # SEs should be in the same ballpark
         assert r_ord.se[0] == pytest.approx(r_bal.se[0], rel=0.3)
@@ -194,7 +194,7 @@ class TestStratifiedBootstrap:
         data = np.array([1.0, 2.0, 3.0, 10.0, 20.0, 30.0])
         strata = np.array([0, 0, 0, 1, 1, 1])
 
-        result = boot(data, mean_stat, R=100, strata=strata, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, strata=strata, seed=42)
 
         # Each replicate should mix values from both strata
         # Mean should be between group means
@@ -215,7 +215,7 @@ class TestStratifiedBootstrap:
             n_s1 = np.sum(d_sample >= 50)
             return np.array([float(n_s0), float(n_s1)])
 
-        result = boot(data, strata_check_stat, R=50, strata=strata, seed=42)
+        result = boot(data, strata_check_stat, n_resamples=50, strata=strata, seed=42)
 
         # Each replicate should have exactly 3 from s0 and 2 from s1
         np.testing.assert_array_equal(result.t[:, 0], 3.0)
@@ -230,7 +230,7 @@ class TestStype:
     """Tests for different stype options."""
 
     def test_stype_f(self):
-        """stype='f' passes frequency counts."""
+        """statistic_type='frequency' passes frequency counts."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
 
         def freq_mean_stat(d, freqs):
@@ -240,20 +240,20 @@ class TestStype:
                 return np.array([0.0])
             return np.array([np.sum(d * freqs) / total])
 
-        result = boot(data, freq_mean_stat, R=100, stype="f", seed=42)
+        result = boot(data, freq_mean_stat, n_resamples=100, statistic_type="frequency", seed=42)
 
         # t0 with uniform frequencies should give the regular mean
         assert result.t0[0] == pytest.approx(3.0, rel=1e-10)
 
     def test_stype_w(self):
-        """stype='w' passes normalized weights."""
+        """statistic_type='weight' passes normalized weights."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
 
         def weight_mean_stat(d, weights):
             """Compute weighted mean."""
             return np.array([np.sum(d * weights)])
 
-        result = boot(data, weight_mean_stat, R=100, stype="w", seed=42)
+        result = boot(data, weight_mean_stat, n_resamples=100, statistic_type="weight", seed=42)
 
         # t0 with uniform weights should give the regular mean
         assert result.t0[0] == pytest.approx(3.0, rel=1e-10)
@@ -269,7 +269,7 @@ class TestBootstrapSolution:
     def test_summary(self):
         """summary() produces readable output."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         s = result.summary()
 
         assert "ORDINARY NONPARAMETRIC BOOTSTRAP" in s
@@ -281,7 +281,7 @@ class TestBootstrapSolution:
     def test_repr(self):
         """__repr__ produces useful string."""
         data = np.array([1.0, 2.0, 3.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         r = repr(result)
 
         assert "BootstrapSolution" in r
@@ -291,13 +291,13 @@ class TestBootstrapSolution:
     def test_backend_name(self):
         """Backend name is set correctly (cpu or gpu depending on hardware)."""
         data = np.array([1.0, 2.0, 3.0])
-        result = boot(data, mean_stat, R=10, seed=42)
+        result = boot(data, mean_stat, n_resamples=10, seed=42)
         assert "bootstrap" in result.backend_name
 
     def test_timing(self):
         """Timing info is available."""
         data = np.array([1.0, 2.0, 3.0])
-        result = boot(data, mean_stat, R=10, seed=42)
+        result = boot(data, mean_stat, n_resamples=10, seed=42)
         assert result.timing is not None
         assert 'total_seconds' in result.timing
 
@@ -313,24 +313,24 @@ class TestBootstrapValidation:
         """R must be >= 1."""
         data = np.array([1.0, 2.0, 3.0])
         with pytest.raises(ValueError, match="R must be >= 1"):
-            boot(data, mean_stat, R=0)
+            boot(data, mean_stat, n_resamples=0)
 
     def test_invalid_sim(self):
         """Invalid sim raises ValueError."""
         data = np.array([1.0, 2.0, 3.0])
         with pytest.raises(ValueError, match="sim must be"):
-            boot(data, mean_stat, R=10, sim="invalid")
+            boot(data, mean_stat, n_resamples=10, method="invalid")
 
-    def test_invalid_stype(self):
-        """Invalid stype raises ValueError."""
+    def test_invalid_statistic_type(self):
+        """Invalid statistic_type raises ValueError."""
         data = np.array([1.0, 2.0, 3.0])
-        with pytest.raises(ValueError, match="stype must be"):
-            boot(data, mean_stat, R=10, stype="x")
+        with pytest.raises(ValueError, match="statistic_type must be"):
+            boot(data, mean_stat, n_resamples=10, statistic_type="invalid")
 
     def test_empty_data(self):
         """Empty data raises ValueError."""
         with pytest.raises(ValueError):
-            boot(np.array([]), mean_stat, R=10)
+            boot(np.array([]), mean_stat, n_resamples=10)
 
     def test_2d_data(self):
         """2D data works correctly."""
@@ -338,7 +338,7 @@ class TestBootstrapValidation:
             np.array([1.0, 2.0, 3.0, 4.0, 5.0]),
             np.array([2.0, 4.0, 6.0, 8.0, 10.0]),
         ])
-        result = boot(data, regression_coef_stat, R=100, seed=42)
+        result = boot(data, regression_coef_stat, n_resamples=100, seed=42)
         assert result.t0.shape == (2,)
         assert result.t.shape == (100, 2)
 
@@ -346,13 +346,13 @@ class TestBootstrapValidation:
         """Strata length must match data rows."""
         data = np.array([1.0, 2.0, 3.0])
         with pytest.raises(ValueError, match="strata length"):
-            boot(data, mean_stat, R=10, strata=np.array([0, 1]))
+            boot(data, mean_stat, n_resamples=10, strata=np.array([0, 1]))
 
     def test_parametric_requires_ran_gen(self):
         """Parametric bootstrap requires ran_gen."""
         data = np.array([1.0, 2.0, 3.0])
         with pytest.raises(ValueError, match="ran_gen is required"):
-            boot(data, mean_stat, R=10, sim="parametric")
+            boot(data, mean_stat, n_resamples=10, method="parametric")
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ class TestBootstrapValidation:
 # ---------------------------------------------------------------------------
 
 class TestParametricBootstrap:
-    """Tests for sim='parametric' bootstrap."""
+    """Tests for method='parametric' bootstrap."""
 
     def test_parametric_normal_mean(self):
         """Parametric bootstrap for normal mean."""
@@ -377,8 +377,8 @@ class TestParametricBootstrap:
             return np.array([np.mean(d)])
 
         result = boot(
-            data, mean_param_stat, R=500,
-            sim="parametric", ran_gen=ran_gen, mle=mle_params,
+            data, mean_param_stat, n_resamples=500,
+            method="parametric", ran_gen=ran_gen, mle=mle_params,
             seed=42,
         )
 
@@ -403,13 +403,13 @@ class TestParametricBootstrap:
             return np.array([np.mean(d)])
 
         r1 = boot(
-            data, mean_param_stat, R=100,
-            sim="parametric", ran_gen=ran_gen, mle=mle_params,
+            data, mean_param_stat, n_resamples=100,
+            method="parametric", ran_gen=ran_gen, mle=mle_params,
             seed=42,
         )
         r2 = boot(
-            data, mean_param_stat, R=100,
-            sim="parametric", ran_gen=ran_gen, mle=mle_params,
+            data, mean_param_stat, n_resamples=100,
+            method="parametric", ran_gen=ran_gen, mle=mle_params,
             seed=42,
         )
 
@@ -454,8 +454,8 @@ class TestParametricBootstrap:
             return np.array([ic, sl])
 
         result = boot(
-            data, reg_stat, R=500,
-            sim="parametric", ran_gen=ran_gen, mle=mle_params,
+            data, reg_stat, n_resamples=500,
+            method="parametric", ran_gen=ran_gen, mle=mle_params,
             seed=42,
         )
 
@@ -479,8 +479,8 @@ class TestParametricBootstrap:
             return np.array([np.mean(d)])
 
         result = boot(
-            data, mean_param_stat, R=50,
-            sim="parametric", ran_gen=ran_gen, mle=mle_params,
+            data, mean_param_stat, n_resamples=50,
+            method="parametric", ran_gen=ran_gen, mle=mle_params,
             seed=42,
         )
 

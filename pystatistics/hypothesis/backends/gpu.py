@@ -145,7 +145,7 @@ class GPUHypothesisBackend:
             conf_level=0.95,
             estimate=None,
             null_value=None,
-            alternative="two.sided",
+            alternative="two-sided",
             method=method,
             data_name=design.data_name,
             extras={
@@ -199,7 +199,7 @@ class GPUHypothesisBackend:
             conf_level=0.95,
             estimate=None,
             null_value=None,
-            alternative="two.sided",
+            alternative="two-sided",
             method=method,
             data_name=design.data_name,
             extras={
@@ -242,7 +242,7 @@ class GPUHypothesisBackend:
             conf_level=0.95,
             estimate=None,
             null_value=None,
-            alternative="two.sided",
+            alternative="two-sided",
             method=method,
             data_name=design.data_name,
         ), warnings_list

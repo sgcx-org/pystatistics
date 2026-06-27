@@ -10,7 +10,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.regression._formatting import significance_stars
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class LinearParams:
 
 
 @dataclass
-class LinearSolution:
+class LinearSolution(SolutionReprMixin):
     """
     User-facing regression results.
 
@@ -188,7 +188,7 @@ class LinearSolution:
         return self._standard_errors
 
     @property
-    def t_statistics(self) -> NDArray[np.floating[Any]]:
+    def t_values(self) -> NDArray[np.floating[Any]]:
         """t-statistics for coefficients."""
         if self._t_statistics is not None:
             return self._t_statistics
@@ -208,7 +208,7 @@ class LinearSolution:
 
         from scipy import stats
 
-        t = self.t_statistics
+        t = self.t_values
         df = self.df_residual
 
         if df <= 0:
@@ -271,7 +271,7 @@ class LinearSolution:
 
         for name, coef, se, t, pv in zip(
             names, self.coefficients, self.standard_errors,
-            self.t_statistics, self.p_values
+            self.t_values, self.p_values
         ):
             if np.isnan(coef):
                 lines.append(f"  {name:<{col_w}s} (aliased)")

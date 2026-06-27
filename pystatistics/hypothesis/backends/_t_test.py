@@ -161,7 +161,7 @@ def _t_pvalue(t_stat: float, df: float, alternative: str) -> float:
     """Compute p-value from t distribution."""
     if np.isnan(t_stat) or np.isnan(df) or df <= 0:
         return np.nan
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         return float(2.0 * sp_stats.t.sf(abs(t_stat), df))
     elif alternative == "less":
         return float(sp_stats.t.cdf(t_stat, df))
@@ -182,7 +182,7 @@ def _t_conf_int(
     if np.isnan(se) or np.isnan(df) or df <= 0 or se == 0.0:
         return np.array([np.nan, np.nan])
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         t_crit = sp_stats.t.ppf(1.0 - alpha / 2.0, df)
         return np.array([estimate - t_crit * se, estimate + t_crit * se])
     elif alternative == "less":

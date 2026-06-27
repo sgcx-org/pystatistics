@@ -12,6 +12,8 @@ the appropriate backend, and wraps the Result in a Solution.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from typing import Literal
 
 import numpy as np
@@ -62,12 +64,12 @@ def kaplan_meier(
     design = SurvivalDesign.for_survival(time, event, strata=strata)
 
     if conf_level <= 0 or conf_level >= 1:
-        raise ValueError(
+        raise ValidationError(
             f"conf_level must be in (0, 1), got {conf_level}"
         )
 
     if conf_type not in ("log", "plain", "log-log"):
-        raise ValueError(
+        raise ValidationError(
             f"conf_type must be 'log', 'plain', or 'log-log', "
             f"got '{conf_type}'"
         )
@@ -130,7 +132,7 @@ def survdiff(
     group = np.asarray(group).ravel()
 
     if len(group) != design.n:
-        raise ValueError(
+        raise ValidationError(
             f"group must have {design.n} elements to match time, "
             f"got {len(group)}"
         )
@@ -224,17 +226,17 @@ def coxph(
     """
     if terms is not None:
         if names is not None:
-            raise ValueError("Pass either terms or names, not both")
+            raise ValidationError("Pass either terms or names, not both")
         from pystatistics.regression.terms import build_terms_design
         X, names = build_terms_design(X, terms, intercept=False)
 
     design = SurvivalDesign.for_survival(time, event, X)
 
     if design.X is None:
-        raise ValueError("X (covariates) is required for coxph()")
+        raise ValidationError("X (covariates) is required for coxph()")
 
     if ties not in ("efron", "breslow"):
-        raise ValueError(
+        raise ValidationError(
             f"ties must be 'efron' or 'breslow', got '{ties}'"
         )
 
@@ -278,7 +280,7 @@ def coxph(
     if names is not None:
         p = design.X.shape[1]
         if len(names) != p:
-            raise ValueError(
+            raise ValidationError(
                 f"names must have {p} elements to match X with "
                 f"{p} columns, got {len(names)}"
             )
@@ -326,7 +328,7 @@ def discrete_time(
     design = SurvivalDesign.for_survival(time, event, X)
 
     if design.X is None:
-        raise ValueError("X (covariates) is required for discrete_time()")
+        raise ValidationError("X (covariates) is required for discrete_time()")
 
     intervals_arr = None
     if intervals is not None:
@@ -360,7 +362,7 @@ def discrete_time(
     if names is not None:
         p = design.X.shape[1]
         if len(names) != p:
-            raise ValueError(
+            raise ValidationError(
                 f"names must have {p} elements to match X with "
                 f"{p} columns, got {len(names)}"
             )

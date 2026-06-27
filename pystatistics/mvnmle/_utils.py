@@ -149,7 +149,7 @@ def extract_parameters(theta: np.ndarray, n_vars: int) -> Tuple[np.ndarray, np.n
         raise NumericalError(
             f"Failed to invert Delta matrix during parameter extraction: {e}. "
             f"The optimizer may have diverged. Try different starting values, "
-            f"scale your data, or use algorithm='em'."
+            f"scale your data, or use method='em'."
         ) from e
 
     return mu, sigma

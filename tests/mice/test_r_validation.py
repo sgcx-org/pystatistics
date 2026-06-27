@@ -53,8 +53,8 @@ def _our_solution(matrix, method, ref):
     meta = ref["meta"]
     return mice(
         matrix,
-        m=meta["m"],
-        maxit=meta["maxit"],
+        n_imputations=meta["m"],
+        max_iter=meta["maxit"],
         method=method,
         seed=20260614,
     )

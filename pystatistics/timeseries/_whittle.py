@@ -53,6 +53,8 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.result import Result
+from pystatistics.timeseries._arima_solution import ARIMAParams
 
 
 def _periodogram(y: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -322,12 +324,11 @@ def fit_arima_whittle(
     tol: float,
     max_iter: int,
     backend: str | None,
-    use_fp64: bool,
     yule_walker_start: Callable[[NDArray, int], NDArray],
     css_residuals: Callable[[NDArray, NDArray, NDArray, float], NDArray],
-    ARIMAResult: Any,
+    ARIMASolution: Any,
 ):
-    """Assemble an :class:`ARIMAResult` for a Whittle-method ARIMA fit.
+    """Assemble an :class:`ARIMASolution` for a Whittle-method ARIMA fit.
 
     Called by :func:`arima` when ``method='Whittle'``. Kept here (and
     not in ``_arima_fit.py``) so the Whittle implementation stays
@@ -344,12 +345,11 @@ def fit_arima_whittle(
 
     p, d, q = order
 
-    if backend is None:
-        backend = "cpu"
-    if backend not in ("cpu", "auto", "gpu"):
-        raise ValidationError(
-            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
-        )
+    from pystatistics.core.compute.backend import resolve_backend
+    _target = resolve_backend(backend, supports_fp64=True)
+    backend = _target.backend
+    use_fp64 = _target.use_fp64
+    gpu_device_type = _target.device_type
 
     # Whittle is centred internally. ``include_mean=True`` means "also
     # report the sample mean that we subtracted", not "estimate mean as
@@ -360,26 +360,16 @@ def fit_arima_whittle(
 
     gpu_like = None
     if backend != "cpu":
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            from pystatistics.timeseries.backends.whittle_gpu import (
-                WhittleGPULikelihood,
-            )
-            gpu_like = WhittleGPULikelihood(
-                y_centered, p, q,
-                device=dev.device_type, use_fp64=use_fp64,
-            )
-        elif backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available. "
-                "Install PyTorch with CUDA/MPS support or use "
-                "backend='cpu'."
-            )
+        # Device + precision resolved above (resolve_backend already raised for
+        # an explicit GPU request with no GPU and downgraded 'auto' to CPU when
+        # no CUDA is present).
+        from pystatistics.timeseries.backends.whittle_gpu import (
+            WhittleGPULikelihood,
+        )
+        gpu_like = WhittleGPULikelihood(
+            y_centered, p, q,
+            device=gpu_device_type, use_fp64=use_fp64,
+        )
 
     # FP32 noise floor: same convention as multinom / polr / gam.
     gpu_fp32_min_tol = 1e-5
@@ -462,25 +452,40 @@ def fit_arima_whittle(
     )
     vcov = np.full((n_coef, n_coef), np.nan)
 
-    return ARIMAResult(
-        order=order,
-        seasonal_order=None,
-        ar=phi_hat,
-        ma=theta_hat,
-        seasonal_ar=np.array([], dtype=np.float64),
-        seasonal_ma=np.array([], dtype=np.float64),
-        mean=(mu if include_mean else None),
-        sigma2=sigma2,
-        vcov=vcov,
-        residuals=residuals,
-        fitted_values=fitted,
-        log_likelihood=loglik,
-        aic=aic,
-        aicc=aicc,
-        bic=bic,
-        n_obs=n_obs,
-        n_used=n_used,
-        method="Whittle" + ("-GPU" if gpu_like is not None else ""),
-        converged=converged,
-        n_iter=n_iter,
+    method_str = "Whittle" + ("-GPU" if gpu_like is not None else "")
+    if gpu_like is not None:
+        backend_name = f"whittle_gpu ({gpu_device_type}, " \
+                       f"{'fp64' if use_fp64 else 'fp32'})"
+    else:
+        backend_name = "cpu"
+
+    return ARIMASolution(
+        _result=Result(
+            params=ARIMAParams(
+                order=order,
+                seasonal_order=None,
+                ar=phi_hat,
+                ma=theta_hat,
+                seasonal_ar=np.array([], dtype=np.float64),
+                seasonal_ma=np.array([], dtype=np.float64),
+                mean=(mu if include_mean else None),
+                sigma2=sigma2,
+                vcov=vcov,
+                residuals=residuals,
+                fitted_values=fitted,
+                log_likelihood=loglik,
+                aic=aic,
+                aicc=aicc,
+                bic=bic,
+                n_obs=n_obs,
+                n_used=n_used,
+                method=method_str,
+                converged=converged,
+                n_iter=n_iter,
+            ),
+            info={"method": method_str, "converged": converged},
+            timing=None,
+            backend_name=backend_name,
+            warnings=(),
+        )
     )

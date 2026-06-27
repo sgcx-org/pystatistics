@@ -13,6 +13,8 @@ family / canonical-link pairs (matching GEE's GPU family module).
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -141,7 +143,7 @@ def resolve_gpu_family(name: str) -> GPUFamilyOps:
             mu_from_y=lambda y: torch.clamp(y, min=1e-2),
         )
 
-    raise ValueError(
+    raise ValidationError(
         f"GPU GAM: unsupported family {name!r}. Supported: "
         "gaussian, binomial, poisson, gamma."
     )

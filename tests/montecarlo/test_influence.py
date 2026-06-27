@@ -22,14 +22,14 @@ class TestJackknifeInfluence:
     def test_influence_shape(self):
         """Influence values have shape (n,)."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
         assert L.shape == (5,)
 
     def test_influence_sum_zero(self):
         """Influence values should sum to approximately zero."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
 
         # Sum of influence values should be close to zero
@@ -39,7 +39,7 @@ class TestJackknifeInfluence:
         """For the mean, influence values are proportional to (x_i - x_bar)."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         n = len(data)
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
 
         # For the mean: theta_{-i} = (n*x_bar - x_i) / (n-1)
@@ -53,7 +53,7 @@ class TestJackknifeInfluence:
     def test_influence_symmetric_data(self):
         """Symmetric data gives antisymmetric influence values."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
 
         # L[0] should equal -L[4], L[1] should equal -L[3]
@@ -63,7 +63,7 @@ class TestJackknifeInfluence:
     def test_acceleration_parameter(self):
         """BCa acceleration parameter from influence values."""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
 
         # Acceleration: a = sum(L^3) / (6 * sum(L^2)^1.5)
@@ -76,7 +76,7 @@ class TestJackknifeInfluence:
         """Skewed data gives nonzero acceleration parameter."""
         # Exponential-like data (right-skewed)
         data = np.array([0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 50.0])
-        result = boot(data, mean_stat, R=100, seed=42)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
         L = jackknife_influence(result, stat_index=0)
 
         a = np.sum(L ** 3) / (6.0 * np.sum(L ** 2) ** 1.5)

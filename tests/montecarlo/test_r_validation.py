@@ -29,6 +29,14 @@ import pytest
 
 from pystatistics.montecarlo import boot, boot_ci, permutation_test
 
+# Fixtures mirror R verbatim; map R codes/values to the PyStatistics API.
+_STYPE = {"i": "index", "f": "frequency", "w": "weight"}
+
+
+def _alt(value):
+    return "two-sided" if value == "two.sided" else value
+
+
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
 
 
@@ -137,8 +145,8 @@ class TestBootstrapRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
@@ -156,8 +164,8 @@ class TestBootstrapRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
@@ -176,8 +184,8 @@ class TestBootstrapRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
@@ -195,8 +203,8 @@ class TestBootstrapRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
@@ -221,8 +229,8 @@ class TestBootstrapCIRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
@@ -238,7 +246,7 @@ class TestBootstrapCIRValidation:
                 continue
 
             ci_result = boot_ci(
-                result, type=ci_type, conf=conf_level,
+                result, ci_type=ci_type, conf_level=conf_level,
             )
             py_ci = ci_result.ci[ci_type]
 
@@ -260,14 +268,14 @@ class TestBootstrapCIRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
         for ci_type in meta["ci_types"]:
             ci_result = boot_ci(
-                result, type=ci_type, conf=meta["conf_level"],
+                result, ci_type=ci_type, conf_level=meta["conf_level"],
             )
             ci = ci_result.ci[ci_type]
             assert ci[0, 0] < ci[0, 1], \
@@ -281,13 +289,13 @@ class TestBootstrapCIRValidation:
         stat_fn = _boot_statistic_from_meta(meta)
 
         result = boot(
-            data, stat_fn, R=meta["R"],
-            sim=meta["sim"], stype=meta.get("stype", "i"),
+            data, stat_fn, n_resamples=meta["R"],
+            method=meta["sim"], statistic_type=_STYPE[meta.get("stype", "i")],
             seed=meta["seed"],
         )
 
         # Percentile CI with 95% confidence should contain t0 for normal data
-        ci_result = boot_ci(result, type="perc", conf=meta["conf_level"])
+        ci_result = boot_ci(result, ci_type="perc", conf_level=meta["conf_level"])
         ci = ci_result.ci["perc"]
 
         # This is not guaranteed for highly biased estimators, but should hold
@@ -313,8 +321,8 @@ class TestPermutationRValidation:
         y = np.array(meta["y"])
 
         result = permutation_test(
-            x, y, _mean_diff, R=meta["R"],
-            alternative=meta["alternative"],
+            x, y, _mean_diff, n_resamples=meta["R"],
+            alternative=_alt(meta["alternative"]),
             seed=meta["seed"],
         )
 
@@ -332,8 +340,8 @@ class TestPermutationRValidation:
         y = np.array(meta["y"])
 
         result = permutation_test(
-            x, y, _mean_diff, R=meta["R"],
-            alternative=meta["alternative"],
+            x, y, _mean_diff, n_resamples=meta["R"],
+            alternative=_alt(meta["alternative"]),
             seed=meta["seed"],
         )
 
@@ -363,8 +371,8 @@ class TestPermutationRValidation:
         y = np.array(meta["y"])
 
         result = permutation_test(
-            x, y, _mean_diff, R=meta["R"],
-            alternative=meta["alternative"],
+            x, y, _mean_diff, n_resamples=meta["R"],
+            alternative=_alt(meta["alternative"]),
             seed=meta["seed"],
         )
 
@@ -387,9 +395,9 @@ class TestPermutationRValidation:
         y = np.array(meta["y"])
 
         result = permutation_test(
-            x, y, _mean_diff, R=meta["R"],
-            alternative=meta["alternative"],
+            x, y, _mean_diff, n_resamples=meta["R"],
+            alternative=_alt(meta["alternative"]),
             seed=meta["seed"],
         )
 
-        assert result.alternative == meta["alternative"]
+        assert result.alternative == _alt(meta["alternative"])

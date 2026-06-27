@@ -282,7 +282,7 @@ class TestThreeClass:
         result = multinom(
             y, X,
             names=["intercept", "x1", "x2"],
-            class_names=["A", "B", "C"],
+            category_names=["A", "B", "C"],
         )
 
         fitted = result.coefficient_matrix
@@ -461,8 +461,8 @@ class TestFailureCases:
         rng = np.random.default_rng(5)
         y = rng.choice(3, size=100)
         X = np.column_stack([np.ones(100), rng.standard_normal((100, 2))])
-        with pytest.raises(ValidationError, match="class_names"):
-            multinom(y, X, class_names=["a", "b"])  # need 3
+        with pytest.raises(ValidationError, match="category_names"):
+            multinom(y, X, category_names=["a", "b"])  # need 3
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +540,7 @@ class TestSolution:
         result = multinom(
             y, X,
             names=["intercept", "x1", "x2"],
-            class_names=["A", "B", "C"],
+            category_names=["A", "B", "C"],
         )
         coef = result.coef
         assert "A" in coef
@@ -556,7 +556,7 @@ class TestSolution:
         result = multinom(
             y, X,
             names=["intercept", "x1", "x2"],
-            class_names=["A", "B", "C"],
+            category_names=["A", "B", "C"],
         )
         s = result.summary()
         assert "Multinomial Logistic Regression" in s
@@ -582,8 +582,8 @@ class TestSolution:
     def test_class_names_property(self, three_class_data):
         """class_names returns the tuple from params."""
         y, X, _ = three_class_data
-        result = multinom(y, X, class_names=["A", "B", "C"])
-        assert result.class_names == ("A", "B", "C")
+        result = multinom(y, X, category_names=["A", "B", "C"])
+        assert result.category_names == ("A", "B", "C")
 
     def test_feature_names_property(self, three_class_data):
         """feature_names returns the tuple from params."""
@@ -596,7 +596,7 @@ class TestSolution:
         y, X, _ = three_class_data
         result = multinom(y, X)
         assert result.feature_names == ("x0", "x1", "x2")
-        assert result.class_names == ("0", "1", "2")
+        assert result.category_names == ("0", "1", "2")
 
     def test_predicted_class_dtype(self, three_class_data):
         """predicted_class is integer array."""
@@ -647,7 +647,7 @@ class TestMultinomGPU:
         y, X, _ = three_class_data
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             multinom(y, X, backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(
@@ -670,7 +670,7 @@ class TestMultinomGPU:
             pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
         y, X, _ = three_class_data
         r_cpu = multinom(y, X, backend="cpu")
-        r_gpu = multinom(y, X, backend="gpu", use_fp64=True)
+        r_gpu = multinom(y, X, backend="gpu_fp64")
         assert r_cpu.log_likelihood == pytest.approx(
             r_gpu.log_likelihood, rel=1e-8,
         )
@@ -690,7 +690,7 @@ class TestMultinomGPU:
             pytest.skip("no GPU available")
         y, X, _ = three_class_data
         r_cpu = multinom(y, X, backend="cpu")
-        r_gpu = multinom(y, X, backend="gpu", use_fp64=False)
+        r_gpu = multinom(y, X, backend="gpu")
         assert r_cpu.log_likelihood == pytest.approx(
             r_gpu.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
         )
@@ -710,8 +710,8 @@ class TestMultinomGPU:
         y, X, _ = three_class_data
         gds = DataSource.from_arrays(X=X, y=y).to(self._gpu_device())
 
-        r_numpy = multinom(y, X, backend="gpu", use_fp64=False)
-        r_tensor = multinom(gds["y"], gds["X"], use_fp64=False)  # backend inferred
+        r_numpy = multinom(y, X, backend="gpu")
+        r_tensor = multinom(gds["y"], gds["X"])  # backend inferred
         # Same statistical answer within the GPU_FP32 tier.
         assert r_numpy.log_likelihood == pytest.approx(
             r_tensor.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,

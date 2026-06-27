@@ -7,6 +7,8 @@ CPUPermutationBackend: Permutation test with Phipson-Smyth correction.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -269,14 +271,14 @@ class CPUPermutationBackend:
 
         # Compute p-value with Phipson-Smyth correction
         with timer.section('p_value'):
-            if alternative == "two.sided":
+            if alternative == "two-sided":
                 count = np.sum(np.abs(perm_stats) >= np.abs(observed))
             elif alternative == "greater":
                 count = np.sum(perm_stats >= observed)
             elif alternative == "less":
                 count = np.sum(perm_stats <= observed)
             else:
-                raise ValueError(f"Unknown alternative: {alternative!r}")
+                raise ValidationError(f"Unknown alternative: {alternative!r}")
 
             p_value = float(count + 1) / float(R + 1)
 

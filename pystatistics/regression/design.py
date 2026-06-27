@@ -10,6 +10,8 @@ for making chairs." The lumber yard just provides logs.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 from typing import Any, Sequence
 import numpy as np
@@ -75,7 +77,7 @@ class Design:
             return cls._from_terms(source, terms=terms, y=y)
 
         if x is not None and terms is not None:
-            raise ValueError("Pass either x or terms, not both")
+            raise ValidationError("Pass either x or terms, not both")
 
         # Get y
         if y is not None:
@@ -83,7 +85,7 @@ class Design:
         elif 'y' in source:
             y_arr = source['y']
         else:
-            raise ValueError("Must specify y or DataSource must have 'y'")
+            raise ValidationError("Must specify y or DataSource must have 'y'")
         
         # Get X
         if x is not None:
@@ -102,10 +104,10 @@ class Design:
             else:
                 x_cols = [k for k in source.keys() if k != y]
             if not x_cols:
-                raise ValueError("No predictor columns available")
+                raise ValidationError("No predictor columns available")
             X_arr = _get_columns(source, x_cols)
         else:
-            raise ValueError("Must specify x or DataSource must have 'X'")
+            raise ValidationError("Must specify x or DataSource must have 'X'")
         
         # Convert tensors to numpy if needed
         if hasattr(X_arr, 'cpu'):
@@ -141,7 +143,7 @@ class Design:
         elif 'y' in source:
             y_arr = source['y']
         else:
-            raise ValueError("terms= requires y (or a 'y' array in the source)")
+            raise ValidationError("terms= requires y (or a 'y' array in the source)")
 
         if hasattr(y_arr, 'cpu'):
             y_arr = y_arr.cpu().numpy()
@@ -176,7 +178,7 @@ class Design:
         check_min_samples(X, p, 'X')
 
         if names is not None and len(names) != p:
-            raise ValueError(
+            raise ValidationError(
                 f"names has {len(names)} entries but X has {p} columns"
             )
 

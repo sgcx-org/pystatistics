@@ -27,6 +27,8 @@ The actual factor encoding is delegated to the shared, R-validated engine in
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import itertools
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence, Union
@@ -93,7 +95,7 @@ def _resolve_element(
         try:
             col = arr.astype(np.float64).reshape(-1, 1)
         except (ValueError, TypeError) as exc:
-            raise ValueError(
+            raise ValidationError(
                 f"Column {element!r} is not numeric and cannot be used as a "
                 f"bare predictor. Wrap it as a categorical: C({element!r})."
             ) from exc
@@ -124,7 +126,7 @@ def _resolve_interaction(
     position-for-position with lm/glm/coxph.
     """
     if len(elements) < 2:
-        raise ValueError(
+        raise ValidationError(
             f"Interaction term must have at least 2 elements, got {len(elements)}"
         )
 
@@ -175,7 +177,7 @@ def build_terms_design(
         TypeError: a term element of an unsupported type.
     """
     if not terms:
-        raise ValueError("terms must be a non-empty sequence")
+        raise ValidationError("terms must be a non-empty sequence")
 
     blocks: list[NDArray[np.floating[Any]]] = []
     names: list[str] = []
@@ -195,14 +197,14 @@ def build_terms_design(
         if n is None:
             n = cols.shape[0]
         elif cols.shape[0] != n:
-            raise ValueError(
+            raise ValidationError(
                 f"Term produced {cols.shape[0]} rows, expected {n}"
             )
         blocks.append(cols)
         names.extend(labels)
 
     if n is None:
-        raise ValueError("terms produced no columns")
+        raise ValidationError("terms produced no columns")
 
     if intercept:
         blocks.insert(0, np.ones((n, 1), dtype=np.float64))

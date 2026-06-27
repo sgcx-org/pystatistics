@@ -15,17 +15,17 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.core.validation import check_array, check_1d, check_finite
 
 
 # ---------------------------------------------------------------------------
-# Result dataclass
+# Result dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class DecompositionResult:
-    """
-    Result from time series decomposition.
+class DecompositionParams:
+    """Immutable parameter payload for a time series decomposition.
 
     Attributes
     ----------
@@ -53,6 +53,80 @@ class DecompositionResult:
     type: str
     method: str
 
+
+@dataclass
+class DecompositionSolution(SolutionReprMixin):
+    """
+    Result from time series decomposition.
+
+    Wraps a :class:`Result` ``[DecompositionParams]`` envelope; every datum
+    is exposed via a read-only ``@property`` so the public attribute
+    surface is unchanged from the previous flat dataclass.
+
+    Attributes
+    ----------
+    observed : NDArray
+        Original time series.
+    trend : NDArray
+        Trend component. May contain NaN at edges for classical decomposition.
+    seasonal : NDArray
+        Seasonal component (repeats with the given period).
+    residual : NDArray
+        Remainder after removing trend and seasonal.
+    period : int
+        Seasonal period used.
+    type : str
+        ``'additive'`` or ``'multiplicative'``.
+    method : str
+        ``'classical'`` or ``'stl'``.
+    """
+
+    _result: Result[DecompositionParams]
+
+    @property
+    def observed(self) -> NDArray:
+        return self._result.params.observed
+
+    @property
+    def trend(self) -> NDArray:
+        return self._result.params.trend
+
+    @property
+    def seasonal(self) -> NDArray:
+        return self._result.params.seasonal
+
+    @property
+    def residual(self) -> NDArray:
+        return self._result.params.residual
+
+    @property
+    def period(self) -> int:
+        return self._result.params.period
+
+    @property
+    def type(self) -> str:
+        return self._result.params.type
+
+    @property
+    def method(self) -> str:
+        return self._result.params.method
+
+    @property
+    def info(self) -> dict:
+        return self._result.info
+
+    @property
+    def timing(self) -> dict[str, float] | None:
+        return self._result.timing
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
+
     def summary(self) -> str:
         """
         Return a human-readable summary of the decomposition.
@@ -76,6 +150,7 @@ class DecompositionResult:
             res = self.residual[valid]
             lines.append(f"  Residual std:   {float(np.std(res)):.6f}")
         return "\n".join(lines)
+
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +275,7 @@ def decompose(
     period: int,
     *,
     type: str = "additive",
-) -> DecompositionResult:
+) -> DecompositionSolution:
     """
     Classical time series decomposition.
 
@@ -227,7 +302,7 @@ def decompose(
 
     Returns
     -------
-    DecompositionResult
+    DecompositionSolution
 
     Raises
     ------
@@ -270,14 +345,22 @@ def decompose(
     else:
         residual = arr / (trend * seasonal)
 
-    return DecompositionResult(
-        observed=arr,
-        trend=trend,
-        seasonal=seasonal,
-        residual=residual,
-        period=period,
-        type=type,
-        method="classical",
+    return DecompositionSolution(
+        _result=Result(
+            params=DecompositionParams(
+                observed=arr,
+                trend=trend,
+                seasonal=seasonal,
+                residual=residual,
+                period=period,
+                type=type,
+                method="classical",
+            ),
+            info={"method": "classical", "type": type},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )
 
 
@@ -412,7 +495,7 @@ def stl(
     robust: bool = False,
     n_outer: int = 0,
     n_inner: int = 2,
-) -> DecompositionResult:
+) -> DecompositionSolution:
     """
     Seasonal and Trend decomposition using LOESS (STL).
 
@@ -440,7 +523,7 @@ def stl(
 
     Returns
     -------
-    DecompositionResult
+    DecompositionSolution
 
     Raises
     ------
@@ -535,12 +618,20 @@ def stl(
 
     residual = arr - trend - seasonal
 
-    return DecompositionResult(
-        observed=arr,
-        trend=trend,
-        seasonal=seasonal,
-        residual=residual,
-        period=period,
-        type="additive",
-        method="stl",
+    return DecompositionSolution(
+        _result=Result(
+            params=DecompositionParams(
+                observed=arr,
+                trend=trend,
+                seasonal=seasonal,
+                residual=residual,
+                period=period,
+                type="additive",
+                method="stl",
+            ),
+            info={"method": "stl", "type": "additive", "robust": robust},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

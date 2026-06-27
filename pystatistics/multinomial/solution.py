@@ -14,11 +14,11 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.multinomial._common import MultinomialParams
 
 
-class MultinomialSolution:
+class MultinomialSolution(SolutionReprMixin):
     """Multinomial logistic regression solution.
 
     Wraps a Result[MultinomialParams] and provides convenient access
@@ -184,8 +184,8 @@ class MultinomialSolution:
         return self._result.params.n_classes
 
     @property
-    def class_names(self) -> tuple[str, ...]:
-        """Class labels in order (last is reference)."""
+    def category_names(self) -> tuple[str, ...]:
+        """Response category labels in order (last is reference)."""
         return self._result.params.class_names
 
     @property

@@ -11,11 +11,15 @@ Public API:
 
 from pystatistics.multivariate._pca import pca
 from pystatistics.multivariate._factor import factor_analysis
-from pystatistics.multivariate._common import PCAResult, FactorResult
+from pystatistics.multivariate._common import (
+    PCASolution, FactorSolution, PCAParams, FactorParams,
+)
 
 __all__ = [
     "pca",
     "factor_analysis",
-    "PCAResult",
-    "FactorResult",
+    "PCASolution",
+    "FactorSolution",
+    "PCAParams",
+    "FactorParams",
 ]

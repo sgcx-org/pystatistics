@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 
 if TYPE_CHECKING:
     from pystatistics.descriptive.design import DescriptiveDesign
@@ -52,7 +52,7 @@ class DescriptiveParams:
 
 
 @dataclass
-class DescriptiveSolution:
+class DescriptiveSolution(SolutionReprMixin):
     """
     User-facing descriptive statistics results.
 

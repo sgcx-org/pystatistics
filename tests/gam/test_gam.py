@@ -514,7 +514,7 @@ class TestGAMGPU:
         x, y = sine_data
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
                 backend="gpu")
 
@@ -542,7 +542,7 @@ class TestGAMGPU:
         r_cpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
                     backend="cpu")
         r_gpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="gpu", use_fp64=True)
+                    backend="gpu_fp64")
         # GAM's penalised normal-equation matrix has cond ≈ 1e16-1e17
         # for the small-lambda regime the L-BFGS-B search explores,
         # so the outer lambda optimization lands at FP64-equivalent but
@@ -600,7 +600,7 @@ class TestGAMGPU:
         r_cpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
                     backend="cpu")
         r_gpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="gpu", use_fp64=False)
+                    backend="gpu")
         np.testing.assert_allclose(
             r_cpu.fitted_values, r_gpu.fitted_values,
             rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
@@ -622,7 +622,7 @@ class TestGAMGPU:
             pytest.skip("no GPU available")
         x, y = sine_data
         r_numpy = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                      backend="gpu", use_fp64=False)
+                      backend="gpu")
         # Re-run the same fit with the same numpy inputs — the
         # amortized DataSource path for GAM is not yet wired at the
         # smooth-data level (basis construction still uses numpy), so
@@ -630,7 +630,7 @@ class TestGAMGPU:
         # deterministic given the same inputs, same as other
         # repeated-fit contracts in the suite.
         r_numpy_2 = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                        backend="gpu", use_fp64=False)
+                        backend="gpu")
         np.testing.assert_allclose(
             r_numpy.fitted_values, r_numpy_2.fitted_values,
             rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,

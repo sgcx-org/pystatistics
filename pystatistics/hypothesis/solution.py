@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.hypothesis._common import HTestParams
 
 if TYPE_CHECKING:
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class HTestSolution:
+class HTestSolution(SolutionReprMixin):
     """
     User-facing hypothesis test results.
 
@@ -177,7 +177,7 @@ class HTestSolution:
         if p.null_value is not None and p.null_value:
             nv_name = next(iter(p.null_value.keys()))
             nv_val = next(iter(p.null_value.values()))
-            if p.alternative == "two.sided":
+            if p.alternative == "two-sided":
                 lines.append(
                     f"alternative hypothesis: true {nv_name} "
                     f"is not equal to {nv_val:g}"

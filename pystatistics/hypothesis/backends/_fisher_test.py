@@ -60,7 +60,7 @@ def _fisher_2x2(
     # p-value via scipy
     # scipy.stats.fisher_exact expects [[a,b],[c,d]]
     # and alternative mapping: 'two-sided', 'less', 'greater'
-    scipy_alt = alternative.replace(".", "-")  # "two.sided" -> "two-sided"
+    scipy_alt = alternative.replace(".", "-")  # "two-sided" -> "two-sided"
     _, p_value = sp_stats.fisher_exact(table.astype(int), alternative=scipy_alt)
 
     # Conditional MLE of odds ratio
@@ -128,7 +128,7 @@ def _fisher_rxc(
         conf_level=0.95,
         estimate=None,
         null_value=None,
-        alternative="two.sided",
+        alternative="two-sided",
         method=method,
         data_name=data_name,
     ), warnings_list
@@ -243,7 +243,7 @@ def _fisher_or_ci(
     lo_k = max(0, n1 - m2)
     hi_k = min(n1, m1)
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         # Lower bound: find OR such that P(X >= a | OR) = alpha/2
         # Upper bound: find OR such that P(X <= a | OR) = alpha/2
         if a == lo_k:

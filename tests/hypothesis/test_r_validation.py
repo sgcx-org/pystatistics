@@ -48,6 +48,15 @@ def _load_r_results(name: str) -> dict:
         return json.load(f)
 
 
+def _alt(value: str) -> str:
+    """Map R's dotted ``alternative`` spelling to the PyStatistics value.
+
+    Fixtures mirror R verbatim (``"two.sided"``); the public API uses the
+    de-dotted ``"two-sided"`` (constitution S2 / amendment A1).
+    """
+    return "two-sided" if value == "two.sided" else value
+
+
 def _run_test(name: str):
     """Run the appropriate pystatistics test for a fixture."""
     meta = _load_meta(name)
@@ -58,13 +67,13 @@ def _run_test(name: str):
     if test_type == "t.test":
         kwargs: dict[str, Any] = {}
         if "mu" in params:
-            kwargs["mu"] = params["mu"]
+            kwargs["pop_mean"] = params["mu"]
         if "paired" in params:
             kwargs["paired"] = params["paired"]
         if "var.equal" in params:
-            kwargs["var_equal"] = params["var.equal"]
+            kwargs["equal_var"] = params["var.equal"]
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:
             kwargs["conf_level"] = params["conf.level"]
         y = data.get("y")
@@ -90,7 +99,7 @@ def _run_test(name: str):
     elif test_type == "fisher.test":
         kwargs = {}
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:
             kwargs["conf_level"] = params["conf.level"]
         if "conf.int" in params:
@@ -104,9 +113,9 @@ def _run_test(name: str):
     elif test_type == "wilcox.test":
         kwargs = {}
         if "mu" in params:
-            kwargs["mu"] = params["mu"]
+            kwargs["null_value"] = params["mu"]
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         if "paired" in params:
             kwargs["paired"] = params["paired"]
         if "exact" in params:
@@ -123,7 +132,7 @@ def _run_test(name: str):
     elif test_type == "ks.test":
         kwargs = {}
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         y = data.get("y")
         if y is not None:
             return ks_test(data["x"], y, **kwargs)
@@ -140,7 +149,7 @@ def _run_test(name: str):
         if "p" in params:
             kwargs["p"] = params["p"]
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:
             kwargs["conf_level"] = params["conf.level"]
         if "correct" in params:
@@ -152,7 +161,7 @@ def _run_test(name: str):
         if "ratio" in params:
             kwargs["ratio"] = params["ratio"]
         if "alternative" in params:
-            kwargs["alternative"] = params["alternative"]
+            kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:
             kwargs["conf_level"] = params["conf.level"]
         return var_test(data["x"], data["y"], **kwargs)

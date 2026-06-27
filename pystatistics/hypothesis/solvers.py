@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Literal
 from numpy.typing import ArrayLike
 
+from pystatistics.core.compute.backend import resolve_backend
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.hypothesis.design import HypothesisDesign
 from pystatistics.hypothesis.solution import HTestSolution
@@ -19,42 +20,41 @@ from pystatistics.hypothesis.backends.cpu import CPUHypothesisBackend
 from pystatistics.hypothesis._p_adjust import p_adjust  # re-export
 
 
+# Hypothesis tests have no GPU float64 path; the honest subset omits 'gpu_fp64'.
 BackendChoice = Literal['cpu', 'gpu', 'auto']
-# GPU is only useful for Monte Carlo simulation (chisq/Fisher).
-# All other tests use CPU. backend='auto' routes to CPU since
-# GPU only helps in specific Monte Carlo scenarios.
 
 
 def _get_backend(backend: str | None = None):
     """
     Select backend for hypothesis tests.
 
-    CPU is the default and correct choice for all scalar tests.
-    GPU only helps for Monte Carlo simulations (chi-squared and
-    Fisher r×c with simulate_p_value=True).
+    CPU is the default and correct choice for all scalar tests. GPU only helps
+    for Monte Carlo simulations (chi-squared and Fisher r×c with
+    simulate_p_value=True).
 
-    None (default) and 'auto' both route to CPU — GPU is only
-    instantiated when explicitly requested, so that non-GPU-accelerated
-    tests raise NotImplementedError instead of silently falling back.
+    DELIBERATE DEVIATION from the library-wide ``auto`` policy: ``None`` and
+    ``'auto'`` both route to CPU here. GPU is not a general accelerator for
+    this module — auto-selecting it for a scalar test would add launch overhead
+    with no benefit — so the GPU backend is instantiated only on an explicit
+    ``backend='gpu'``. Explicit requests are still validated through the
+    canonical resolver (honest subset: no ``gpu_fp64``), so an unknown backend,
+    ``gpu_fp64``, or a GPU request with no GPU all raise the standard errors.
     """
     if backend is None or backend in ('cpu', 'auto'):
         return CPUHypothesisBackend()
-    if backend == 'gpu':
-        from pystatistics.hypothesis.backends.gpu import GPUHypothesisBackend
-        return GPUHypothesisBackend()
-    raise ValidationError(
-        f"Unknown backend: {backend!r}. Use 'cpu', 'gpu', or 'auto'."
-    )
+    resolve_backend(backend, supports_fp64=False)  # validate; raises canonically
+    from pystatistics.hypothesis.backends.gpu import GPUHypothesisBackend
+    return GPUHypothesisBackend()
 
 
 def t_test(
     x: ArrayLike | HypothesisDesign,
     y: ArrayLike | None = None,
     *,
-    alternative: Literal["two.sided", "less", "greater"] = "two.sided",
-    mu: float = 0.0,
+    alternative: Literal["two-sided", "less", "greater"] = "two-sided",
+    pop_mean: float = 0.0,
     paired: bool = False,
-    var_equal: bool = False,
+    equal_var: bool = False,
     conf_level: float = 0.95,
     backend: str | None = None,
 ) -> HTestSolution:
@@ -68,13 +68,13 @@ def t_test(
     y : array-like or None
         Optional second sample for two-sample test.
     alternative : str
-        "two.sided" (default), "less", or "greater".
-    mu : float
+        "two-sided" (default), "less", or "greater".
+    pop_mean : float
         Hypothesized mean (one-sample) or difference in means (two-sample).
         Default 0.
     paired : bool
         If True, perform paired t-test. x and y must have same length.
-    var_equal : bool
+    equal_var : bool
         If True, use pooled variance (Student's t).
         If False (default), use Welch's approximation with
         Welch-Satterthwaite degrees of freedom. **R defaults to Welch.**
@@ -93,9 +93,9 @@ def t_test(
     else:
         design = HypothesisDesign.for_t_test(
             x, y,
-            mu=mu,
+            mu=pop_mean,
             paired=paired,
-            var_equal=var_equal,
+            var_equal=equal_var,
             alternative=alternative,
             conf_level=conf_level,
         )
@@ -172,7 +172,7 @@ def prop_test(
     n: ArrayLike | None = None,
     *,
     p: ArrayLike | float | None = None,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_level: float = 0.95,
     correct: bool = True,
     backend: str | None = None,
@@ -190,8 +190,8 @@ def prop_test(
         Null hypothesis proportion(s). If None, tests equality
         of proportions (k >= 2 groups).
     alternative : str
-        "two.sided" (default), "less", or "greater".
-        Only "two.sided" allowed for k > 1 groups.
+        "two-sided" (default), "less", or "greater".
+        Only "two-sided" allowed for k > 1 groups.
     conf_level : float
         Confidence level for the interval. Default 0.95.
     correct : bool
@@ -227,7 +227,7 @@ def fisher_test(
     x: ArrayLike | HypothesisDesign,
     y: ArrayLike | None = None,
     *,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_int: bool = True,
     conf_level: float = 0.95,
     simulate_p_value: bool = False,
@@ -245,8 +245,8 @@ def fisher_test(
     y : array-like or None
         If x is 1D, second factor to cross-tabulate.
     alternative : str
-        "two.sided" (default), "less", or "greater".
-        Only "two.sided" for r x c (r > 2 or c > 2).
+        "two-sided" (default), "less", or "greater".
+        Only "two-sided" for r x c (r > 2 or c > 2).
     conf_int : bool
         Compute confidence interval for odds ratio (2x2 only).
     conf_level : float
@@ -286,8 +286,8 @@ def wilcox_test(
     x: ArrayLike | HypothesisDesign,
     y: ArrayLike | None = None,
     *,
-    alternative: str = "two.sided",
-    mu: float = 0.0,
+    alternative: str = "two-sided",
+    null_value: float = 0.0,
     paired: bool = False,
     exact: bool | None = None,
     correct: bool = True,
@@ -305,8 +305,8 @@ def wilcox_test(
     y : array-like or None
         Second sample for rank-sum test, or paired sample.
     alternative : str
-        "two.sided" (default), "less", or "greater".
-    mu : float
+        "two-sided" (default), "less", or "greater".
+    null_value : float
         Hypothesized location (one-sample) or shift (two-sample).
     paired : bool
         If True, perform paired (signed-rank) test.
@@ -331,7 +331,7 @@ def wilcox_test(
     else:
         design = HypothesisDesign.for_wilcox_test(
             x, y,
-            mu=mu,
+            mu=null_value,
             paired=paired,
             exact=exact,
             correct=correct,
@@ -349,7 +349,7 @@ def ks_test(
     x: ArrayLike | HypothesisDesign,
     y: ArrayLike | None = None,
     *,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     distribution: str | None = None,
     backend: str | None = None,
     **dist_params: float,
@@ -365,7 +365,7 @@ def ks_test(
         Second sample for two-sample test. If None, performs
         one-sample test against a theoretical distribution.
     alternative : str
-        "two.sided" (default), "less", or "greater".
+        "two-sided" (default), "less", or "greater".
     distribution : str or None
         Distribution name for one-sample test ("norm", "unif", "exp").
         If None and y is None, defaults to standard normal.
@@ -399,7 +399,7 @@ def var_test(
     y: ArrayLike | None = None,
     *,
     ratio: float = 1.0,
-    alternative: str = "two.sided",
+    alternative: str = "two-sided",
     conf_level: float = 0.95,
     backend: str | None = None,
 ) -> HTestSolution:
@@ -415,7 +415,7 @@ def var_test(
     ratio : float
         Hypothesized ratio of variances (var_x / var_y). Default 1.
     alternative : str
-        "two.sided" (default), "less", or "greater".
+        "two-sided" (default), "less", or "greater".
     conf_level : float
         Confidence level. Default 0.95.
     backend : str

@@ -17,6 +17,7 @@ Key concepts:
 """
 
 from dataclasses import dataclass
+from pystatistics.core.exceptions import ValidationError
 from typing import Any
 
 import numpy as np
@@ -81,7 +82,7 @@ def encode_dummy(
     else:
         baseline = str(reference)
         if baseline not in levels:
-            raise ValueError(
+            raise ValidationError(
                 f"reference level {reference!r} not found in factor levels "
                 f"{levels}"
             )
@@ -190,7 +191,7 @@ def build_design_matrix(
         DesignMatrix with full design matrix and metadata
     """
     if coding not in ('treatment', 'deviation'):
-        raise ValueError(f"coding must be 'treatment' or 'deviation', got {coding!r}")
+        raise ValidationError(f"coding must be 'treatment' or 'deviation', got {coding!r}")
 
     n = len(next(iter(factors.values())))
     columns = []

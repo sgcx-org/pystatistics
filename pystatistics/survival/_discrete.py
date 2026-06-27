@@ -82,7 +82,7 @@ def discrete_time_fit(
         return DiscreteTimeParams(
             coefficients=np.zeros(p, dtype=np.float64),
             standard_errors=np.full(p, np.inf),
-            z_statistics=np.zeros(p, dtype=np.float64),
+            z_values=np.zeros(p, dtype=np.float64),
             p_values=np.ones(p, dtype=np.float64),
             hazard_ratios=np.ones(p, dtype=np.float64),
             baseline_hazard=np.array([], dtype=np.float64),
@@ -191,7 +191,7 @@ def discrete_time_fit(
     return DiscreteTimeParams(
         coefficients=cov_coefs,
         standard_errors=cov_se,
-        z_statistics=cov_z,
+        z_values=cov_z,
         p_values=cov_p,
         hazard_ratios=hazard_ratios,
         baseline_hazard=baseline_hazard,

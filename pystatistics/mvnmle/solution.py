@@ -9,7 +9,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 
 if TYPE_CHECKING:
     from pystatistics.mvnmle.design import MVNDesign
@@ -31,7 +31,7 @@ class MVNParams:
 
 
 @dataclass
-class MVNSolution:
+class MVNSolution(SolutionReprMixin):
     """
     User-facing MVN MLE results.
 

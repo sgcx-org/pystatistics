@@ -7,6 +7,8 @@ by backends to perform resampling. Immutable, validated at construction.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -82,30 +84,30 @@ class BootstrapDesign:
         elif data_arr.ndim == 2:
             data_arr = data_arr.copy()
         else:
-            raise ValueError(
+            raise ValidationError(
                 f"data must be 1D or 2D, got {data_arr.ndim}D"
             )
 
         n = data_arr.shape[0]
         if n < 1:
-            raise ValueError("data must have at least 1 observation")
+            raise ValidationError("data must have at least 1 observation")
 
         if R < 1:
-            raise ValueError(f"R must be >= 1, got {R}")
+            raise ValidationError(f"R must be >= 1, got {R}")
 
         if sim not in ("ordinary", "balanced", "parametric"):
-            raise ValueError(
+            raise ValidationError(
                 f"sim must be 'ordinary', 'balanced', or 'parametric', "
                 f"got {sim!r}"
             )
 
         if stype not in ("i", "f", "w"):
-            raise ValueError(
+            raise ValidationError(
                 f"stype must be 'i', 'f', or 'w', got {stype!r}"
             )
 
         if sim == "parametric" and ran_gen is None:
-            raise ValueError(
+            raise ValidationError(
                 "ran_gen is required for parametric bootstrap "
                 "(sim='parametric')"
             )
@@ -114,7 +116,7 @@ class BootstrapDesign:
         if strata is not None:
             strata_arr = np.asarray(strata)
             if strata_arr.shape[0] != n:
-                raise ValueError(
+                raise ValidationError(
                     f"strata length ({strata_arr.shape[0]}) must match "
                     f"data rows ({n})"
                 )
@@ -142,7 +144,7 @@ class PermutationDesign:
         y: Group 2 data, shape (n2,) or (n2, p).
         statistic: fn(x, y) -> float.
         R: Number of permutations.
-        alternative: "two.sided", "less", or "greater".
+        alternative: "two-sided", "less", or "greater".
         seed: Random seed for reproducibility.
     """
     x: NDArray[np.floating[Any]]
@@ -160,7 +162,7 @@ class PermutationDesign:
         statistic: Callable,
         R: int = 9999,
         *,
-        alternative: str = "two.sided",
+        alternative: str = "two-sided",
         seed: int | None = None,
     ) -> PermutationDesign:
         """
@@ -171,7 +173,7 @@ class PermutationDesign:
             y: Group 2 data.
             statistic: fn(x, y) -> float. The test statistic.
             R: Number of permutations. Must be >= 1.
-            alternative: "two.sided", "less", or "greater".
+            alternative: "two-sided", "less", or "greater".
             seed: Random seed.
 
         Returns:
@@ -181,17 +183,17 @@ class PermutationDesign:
         y_arr = np.asarray(y, dtype=np.float64).copy()
 
         if x_arr.ndim == 0 or y_arr.ndim == 0:
-            raise ValueError("x and y must be arrays, not scalars")
+            raise ValidationError("x and y must be arrays, not scalars")
 
         if len(x_arr) < 1 or len(y_arr) < 1:
-            raise ValueError("x and y must each have at least 1 observation")
+            raise ValidationError("x and y must each have at least 1 observation")
 
         if R < 1:
-            raise ValueError(f"R must be >= 1, got {R}")
+            raise ValidationError(f"R must be >= 1, got {R}")
 
-        if alternative not in ("two.sided", "less", "greater"):
-            raise ValueError(
-                f"alternative must be 'two.sided', 'less', or 'greater', "
+        if alternative not in ("two-sided", "less", "greater"):
+            raise ValidationError(
+                f"alternative must be 'two-sided', 'less', or 'greater', "
                 f"got {alternative!r}"
             )
 

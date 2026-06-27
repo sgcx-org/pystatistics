@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.anova._common import (
     AnovaParams,
     AnovaRMParams,
@@ -29,7 +29,7 @@ from pystatistics.anova._common import (
 
 
 @dataclass
-class AnovaSolution:
+class AnovaSolution(SolutionReprMixin):
     """
     User-facing result for between-subjects ANOVA.
 
@@ -149,7 +149,7 @@ class AnovaSolution:
 
 
 @dataclass
-class AnovaRMSolution:
+class AnovaRMSolution(SolutionReprMixin):
     """
     User-facing result for repeated-measures ANOVA.
 
@@ -260,7 +260,7 @@ class AnovaRMSolution:
 
 
 @dataclass
-class LeveneSolution:
+class LeveneSolution(SolutionReprMixin):
     """
     User-facing result for Levene's test.
 
@@ -285,7 +285,7 @@ class LeveneSolution:
         return self._result.params.df_within
 
     @property
-    def center(self) -> str:
+    def location(self) -> str:
         return self._result.params.center
 
     @property
@@ -293,21 +293,21 @@ class LeveneSolution:
         return self._result.params.group_vars
 
     def summary(self) -> str:
-        variant = "Brown-Forsythe" if self.center == 'median' else "Levene"
+        variant = "Brown-Forsythe" if self.location == 'median' else "Levene"
         lines = [
             f"{variant} Test for Homogeneity of Variances",
             "=" * 50,
             f"F({self.df_between}, {self.df_within}) = {self.f_value:.4f}, "
             f"p = {self.p_value:.4e}",
             "",
-            f"Center: {self.center}",
+            f"Location: {self.location}",
         ]
         return "\n".join(lines)
 
     def __repr__(self) -> str:
         return (
             f"LeveneSolution(F={self.f_value:.4f}, "
-            f"p={self.p_value:.4e}, center={self.center!r})"
+            f"p={self.p_value:.4e}, location={self.location!r})"
         )
 
 
@@ -317,7 +317,7 @@ class LeveneSolution:
 
 
 @dataclass
-class PostHocSolution:
+class PostHocSolution(SolutionReprMixin):
     """
     User-facing result for post-hoc comparisons.
 

@@ -20,6 +20,8 @@ References:
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from abc import ABC, abstractmethod
 import numpy as np
 from numpy.typing import NDArray
@@ -184,7 +186,7 @@ def _resolve_link(link: str | Link | None, default: Link) -> Link:
         cls = _LINK_CLASSES.get(link.lower())
         if cls is None:
             valid = ', '.join(sorted(_LINK_CLASSES.keys()))
-            raise ValueError(f"Unknown link: {link!r}. Valid links: {valid}")
+            raise ValidationError(f"Unknown link: {link!r}. Valid links: {valid}")
         return cls()
     raise TypeError(f"link must be str or Link, got {type(link).__name__}")
 
@@ -527,7 +529,7 @@ class NegativeBinomial(Family):
         self, theta: float | None = None, link: str | Link | None = None
     ):
         if theta is not None and theta <= 0:
-            raise ValueError(f"theta must be positive, got {theta}")
+            raise ValidationError(f"theta must be positive, got {theta}")
         self.theta = theta
         super().__init__(link)
 
@@ -540,7 +542,7 @@ class NegativeBinomial(Family):
 
     def variance(self, mu: NDArray) -> NDArray:
         if self.theta is None:
-            raise ValueError(
+            raise ValidationError(
                 "Cannot compute variance without theta. "
                 "Set theta or use fit(family='negative.binomial') for "
                 "automatic theta estimation."
@@ -555,7 +557,7 @@ class NegativeBinomial(Family):
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
         if self.theta is None:
-            raise ValueError("Cannot compute deviance without theta.")
+            raise ValidationError("Cannot compute deviance without theta.")
         theta = self.theta
         # NUMERICAL GUARD: prevents log(0) in deviance computation
         mu = np.maximum(mu, 1e-10)
@@ -569,7 +571,7 @@ class NegativeBinomial(Family):
         self, y: NDArray, mu: NDArray, wt: NDArray, dispersion: float
     ) -> float:
         if self.theta is None:
-            raise ValueError("Cannot compute log-likelihood without theta.")
+            raise ValidationError("Cannot compute log-likelihood without theta.")
         theta = self.theta
         from scipy.special import gammaln
         # NUMERICAL GUARD: prevents log(0) in NB log-likelihood
@@ -632,7 +634,7 @@ def resolve_family(family: str | Family) -> Family:
             valid = ', '.join(
                 sorted(k for k in _FAMILY_CLASSES.keys() if k != 'normal')
             )
-            raise ValueError(
+            raise ValidationError(
                 f"Unknown family: {family!r}. Valid families: {valid}"
             )
         return cls()

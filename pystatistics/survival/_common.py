@@ -62,7 +62,7 @@ class CoxParams:
     coefficients: NDArray        # (p,) — log hazard ratios
     hazard_ratios: NDArray       # (p,) — exp(coef)
     standard_errors: NDArray     # (p,) — from observed information matrix
-    z_statistics: NDArray        # (p,) — coef / se
+    z_values: NDArray        # (p,) — coef / se
     p_values: NDArray            # (p,) — two-sided Wald test
     loglik: tuple[float, float]  # (null log-lik, model log-lik)
     concordance: float           # Harrell's C-statistic
@@ -82,7 +82,7 @@ class DiscreteTimeParams:
 
     coefficients: NDArray        # (p,) — covariate log odds ratios
     standard_errors: NDArray
-    z_statistics: NDArray
+    z_values: NDArray
     p_values: NDArray
     hazard_ratios: NDArray       # exp(coef) — discrete-time hazard ratios
     baseline_hazard: NDArray     # (T,) — baseline discrete hazard per interval

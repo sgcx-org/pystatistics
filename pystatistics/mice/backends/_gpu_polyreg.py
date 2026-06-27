@@ -37,6 +37,8 @@ a non-finite imputation caught by the backend's end-of-sweep guard.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from pystatistics.mice.backends._gpu_linreg import (
     add_intercept,
     discrete_glm_compute_dtype,
@@ -159,7 +161,7 @@ def gpu_polyreg_impute(y_obs, X_obs, X_mis, gen, *, donors=None, n_classes=None)
     import torch
 
     if n_classes is None:
-        raise ValueError("gpu_polyreg_impute requires n_classes (number of levels)")
+        raise ValidationError("gpu_polyreg_impute requires n_classes (number of levels)")
     K = int(n_classes)
 
     out_dtype = X_obs.dtype

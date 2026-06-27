@@ -69,7 +69,7 @@ def _prop_test_one_sample(
 
     df = 1.0
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         p_value = float(sp_stats.chi2.sf(chisq, df))
     elif alternative == "less":
         # One-sided: use normal approximation
@@ -139,7 +139,7 @@ def _prop_test_given_p(
         conf_level=conf_level,
         estimate=estimate,
         null_value=None,
-        alternative="two.sided",
+        alternative="two-sided",
         method=method,
         data_name="x",
     ), warnings_list
@@ -218,14 +218,14 @@ def _wilson_ci(
     x : number of successes
     n : number of trials
     conf_level : confidence level
-    alternative : "two.sided", "less", or "greater"
+    alternative : "two-sided", "less", or "greater"
     correct : whether correction was applied
     yates : the YATES value (0.5 if corrected, 0 otherwise),
             already capped by min(0.5, abs(x - n*p0))
     """
     p_hat = x / n
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         z = float(sp_stats.norm.ppf((1.0 + conf_level) / 2.0))
     else:
         z = float(sp_stats.norm.ppf(conf_level))
@@ -258,7 +258,7 @@ def _wilson_ci(
     p_l = max(0.0, float(p_l))
     p_u = min(1.0, float(p_u))
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         return (p_l, p_u)
     elif alternative == "less":
         return (0.0, p_u)

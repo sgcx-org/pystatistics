@@ -18,14 +18,15 @@ evaluation.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
+from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
 from pystatistics.timeseries._differencing import diff
 from pystatistics.timeseries._arima_factored import (
     _factored_to_effective,
@@ -37,151 +38,6 @@ from pystatistics.timeseries._arima_likelihood import (
     check_invertible,
     check_stationary,
 )
-
-
-# ---------------------------------------------------------------------------
-# Result dataclass
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class ARIMAResult:
-    """
-    Result from fitting an ARIMA model.
-
-    Attributes
-    ----------
-    order : tuple[int, int, int]
-        ``(p, d, q)`` — AR order, differencing order, MA order.
-    seasonal_order : tuple[int, int, int, int] or None
-        ``(P, D, Q, m)`` — seasonal orders and period, or ``None``.
-    ar : NDArray
-        AR coefficients (length p). For seasonal models, these are the
-        non-seasonal AR coefficients only.
-    ma : NDArray
-        MA coefficients (length q). For seasonal models, these are the
-        non-seasonal MA coefficients only.
-    seasonal_ar : NDArray
-        Seasonal AR coefficients (length P). Empty if non-seasonal.
-    seasonal_ma : NDArray
-        Seasonal MA coefficients (length Q). Empty if non-seasonal.
-    mean : float or None
-        Estimated mean of the differenced series (``None`` if
-        ``include_mean=False``).
-    sigma2 : float
-        Estimated innovation variance.
-    vcov : NDArray
-        Variance-covariance matrix of the estimated coefficients
-        (AR, MA, seasonal AR, seasonal MA, mean). Computed from the
-        numerical Hessian of the negative log-likelihood.
-    residuals : NDArray
-        Innovation residuals (length of the differenced series).
-    fitted_values : NDArray
-        One-step-ahead fitted values (length of the differenced series).
-    log_likelihood : float
-        Maximized log-likelihood value.
-    aic : float
-        Akaike information criterion: ``-2*loglik + 2*k``.
-    aicc : float
-        Corrected AIC: ``AIC + 2*k*(k+1)/(n-k-1)``.
-    bic : float
-        Bayesian information criterion: ``-2*loglik + k*log(n)``.
-    n_obs : int
-        Length of the original (undifferenced) series.
-    n_used : int
-        Number of observations used in estimation (after differencing).
-    method : str
-        Estimation method: ``'CSS'``, ``'ML'``, or ``'CSS-ML'``.
-    converged : bool
-        Whether the optimizer converged.
-    n_iter : int
-        Number of optimizer iterations.
-    """
-
-    order: tuple[int, int, int]
-    seasonal_order: tuple[int, int, int, int] | None
-    ar: NDArray
-    ma: NDArray
-    seasonal_ar: NDArray
-    seasonal_ma: NDArray
-    mean: float | None
-    sigma2: float
-    vcov: NDArray
-    residuals: NDArray
-    fitted_values: NDArray
-    log_likelihood: float
-    aic: float
-    aicc: float
-    bic: float
-    n_obs: int
-    n_used: int
-    method: str
-    converged: bool
-    n_iter: int
-
-    @property
-    def n_params(self) -> int:
-        """Total number of estimated parameters (AR + MA + seasonal + mean + sigma2)."""
-        p = len(self.ar)
-        q = len(self.ma)
-        sp = len(self.seasonal_ar)
-        sq = len(self.seasonal_ma)
-        k = p + q + sp + sq + (1 if self.mean is not None else 0) + 1
-        return k
-
-    def summary(self) -> str:
-        """
-        R-style summary matching ``stats::arima()`` output.
-
-        Returns
-        -------
-        str
-            Multi-line summary string.
-        """
-        p, d, q = self.order
-        if self.seasonal_order is not None:
-            sp, sd, sq_s, m = self.seasonal_order
-            header = f"ARIMA({p},{d},{q})({sp},{sd},{sq_s})[{m}]"
-        else:
-            header = f"ARIMA({p},{d},{q})"
-
-        lines = [header, ""]
-        names, coefs = self._collect_coef_names_values()
-
-        if names:
-            n_coef = len(coefs)
-            se = np.sqrt(np.abs(np.diag(self.vcov[:n_coef, :n_coef])))
-            cw = max(10, max(len(n) for n in names) + 2)
-
-            lines.append("Coefficients:")
-            lines.append("".join(f"{n:>{cw}}" for n in names))
-            lines.append("".join(f"{c:>{cw}.4f}" for c in coefs))
-            lines.append("s.e." + "".join(f"{s:>{cw}.4f}" for s in se))
-            lines.append("")
-
-        lines.append(
-            f"sigma^2 = {self.sigma2:.4f}:  "
-            f"log likelihood = {self.log_likelihood:.2f}"
-        )
-        lines.append(
-            f"AIC={self.aic:.2f}   AICc={self.aicc:.2f}   BIC={self.bic:.2f}"
-        )
-        return "\n".join(lines)
-
-    def _collect_coef_names_values(self) -> tuple[list[str], list[float]]:
-        """Build parallel lists of coefficient names and values."""
-        names: list[str] = []
-        coefs: list[float] = []
-        for i, v in enumerate(self.ar):
-            names.append(f"ar{i + 1}"); coefs.append(float(v))
-        for i, v in enumerate(self.ma):
-            names.append(f"ma{i + 1}"); coefs.append(float(v))
-        for i, v in enumerate(self.seasonal_ar):
-            names.append(f"sar{i + 1}"); coefs.append(float(v))
-        for i, v in enumerate(self.seasonal_ma):
-            names.append(f"sma{i + 1}"); coefs.append(float(v))
-        if self.mean is not None:
-            names.append("intercept"); coefs.append(self.mean)
-        return names, coefs
 
 
 # ---------------------------------------------------------------------------
@@ -610,8 +466,7 @@ def arima(
     tol: float = 1e-8,
     max_iter: int = 1000,
     backend: str | None = None,
-    use_fp64: bool = False,
-) -> ARIMAResult:
+) -> ARIMASolution:
     """
     Fit an ARIMA(p, d, q) or seasonal ARIMA(p, d, q)(P, D, Q)[m] model.
 
@@ -657,7 +512,7 @@ def arima(
 
     Returns
     -------
-    ARIMAResult
+    ARIMASolution
         Fitted model with coefficients, residuals, and diagnostics.
 
     Raises
@@ -703,10 +558,10 @@ def arima(
         return fit_arima_whittle(
             y_diff=y_diff, n_obs=n_obs, order=order,
             include_mean=include_mean, tol=tol, max_iter=max_iter,
-            backend=backend, use_fp64=use_fp64,
+            backend=backend,
             yule_walker_start=_yule_walker_start,
             css_residuals=arima_css_residuals,
-            ARIMAResult=ARIMAResult,
+            ARIMASolution=ARIMASolution,
         )
 
     # ----- Build effective ARMA orders -----
@@ -768,27 +623,35 @@ def arima(
             + 0.5 * n_used * np.log(max(sigma2, 1e-15))
             + 0.5 * n_used
         )
-        return ARIMAResult(
-            order=order,
-            seasonal_order=seasonal,
-            ar=np.array([], dtype=np.float64),
-            ma=np.array([], dtype=np.float64),
-            seasonal_ar=np.array([], dtype=np.float64),
-            seasonal_ma=np.array([], dtype=np.float64),
-            mean=None,
-            sigma2=sigma2,
-            vcov=np.array([], dtype=np.float64).reshape(0, 0),
-            residuals=residuals,
-            fitted_values=y_diff - residuals,
-            log_likelihood=-nll,
-            aic=2.0 * nll + 2.0,
-            aicc=2.0 * nll + 2.0 + (2.0 / max(n_used - 2, 1)),
-            bic=2.0 * nll + np.log(n_used),
-            n_obs=n_obs,
-            n_used=n_used,
-            method=method,
-            converged=True,
-            n_iter=0,
+        return ARIMASolution(
+            _result=Result(
+                params=ARIMAParams(
+                    order=order,
+                    seasonal_order=seasonal,
+                    ar=np.array([], dtype=np.float64),
+                    ma=np.array([], dtype=np.float64),
+                    seasonal_ar=np.array([], dtype=np.float64),
+                    seasonal_ma=np.array([], dtype=np.float64),
+                    mean=None,
+                    sigma2=sigma2,
+                    vcov=np.array([], dtype=np.float64).reshape(0, 0),
+                    residuals=residuals,
+                    fitted_values=y_diff - residuals,
+                    log_likelihood=-nll,
+                    aic=2.0 * nll + 2.0,
+                    aicc=2.0 * nll + 2.0 + (2.0 / max(n_used - 2, 1)),
+                    bic=2.0 * nll + np.log(n_used),
+                    n_obs=n_obs,
+                    n_used=n_used,
+                    method=method,
+                    converged=True,
+                    n_iter=0,
+                ),
+                info={"method": method, "converged": True},
+                timing=None,
+                backend_name="cpu",
+                warnings=(),
+            )
         )
 
     # ----- Optimize -----
@@ -893,25 +756,33 @@ def arima(
     else:
         aicc = np.inf
 
-    return ARIMAResult(
-        order=order,
-        seasonal_order=seasonal,
-        ar=ar_nonseasonal,
-        ma=ma_nonseasonal,
-        seasonal_ar=sar,
-        seasonal_ma=sma,
-        mean=mean_est,
-        sigma2=sigma2,
-        vcov=vcov,
-        residuals=residuals,
-        fitted_values=fitted,
-        log_likelihood=loglik,
-        aic=aic,
-        aicc=aicc,
-        bic=bic,
-        n_obs=n_obs,
-        n_used=n_used,
-        method=method_used,
-        converged=converged,
-        n_iter=n_iter,
+    return ARIMASolution(
+        _result=Result(
+            params=ARIMAParams(
+                order=order,
+                seasonal_order=seasonal,
+                ar=ar_nonseasonal,
+                ma=ma_nonseasonal,
+                seasonal_ar=sar,
+                seasonal_ma=sma,
+                mean=mean_est,
+                sigma2=sigma2,
+                vcov=vcov,
+                residuals=residuals,
+                fitted_values=fitted,
+                log_likelihood=loglik,
+                aic=aic,
+                aicc=aicc,
+                bic=bic,
+                n_obs=n_obs,
+                n_used=n_used,
+                method=method_used,
+                converged=converged,
+                n_iter=n_iter,
+            ),
+            info={"method": method_used, "converged": converged},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

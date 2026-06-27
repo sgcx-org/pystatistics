@@ -48,4 +48,4 @@ class PermutationParams:
     perm_stats: NDArray[np.floating[Any]]      # shape (R,)
     p_value: float
     R: int
-    alternative: str                            # "two.sided" | "less" | "greater"
+    alternative: str                            # "two-sided" | "less" | "greater"

@@ -60,7 +60,7 @@ class TestGPUBootstrap:
     def test_gpu_bootstrap_mean(self, gpu_available):
         """GPU bootstrap produces correct results for mean statistic."""
         data = np.arange(1.0, 51.0)
-        result = boot(data, mean_stat, R=500, seed=42, backend='gpu')
+        result = boot(data, mean_stat, n_resamples=500, seed=42, backend='gpu')
 
         # t0 should be exact (deterministic)
         assert result.t0[0] == pytest.approx(25.5, rel=1e-10)
@@ -82,8 +82,8 @@ class TestGPUBootstrap:
         """
         data = np.arange(1.0, 51.0)
 
-        result_cpu = boot(data, mean_stat, R=2000, seed=42, backend='cpu')
-        result_gpu = boot(data, mean_stat, R=2000, seed=42, backend='gpu')
+        result_cpu = boot(data, mean_stat, n_resamples=2000, seed=42, backend='cpu')
+        result_gpu = boot(data, mean_stat, n_resamples=2000, seed=42, backend='gpu')
 
         # t0 is deterministic — must match exactly
         np.testing.assert_array_equal(result_gpu.t0, result_cpu.t0)
@@ -96,7 +96,7 @@ class TestGPUBootstrap:
     def test_gpu_bootstrap_multivariate(self, gpu_available):
         """GPU bootstrap handles multi-dimensional statistics."""
         data = np.arange(1.0, 31.0)
-        result = boot(data, mean_var_stat, R=300, seed=42, backend='gpu')
+        result = boot(data, mean_var_stat, n_resamples=300, seed=42, backend='gpu')
 
         assert result.t0.shape == (2,)
         assert result.t.shape == (300, 2)
@@ -104,7 +104,7 @@ class TestGPUBootstrap:
     def test_gpu_bootstrap_backend_name(self, gpu_available):
         """GPU backend name indicates device."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=50, seed=42, backend='gpu')
+        result = boot(data, mean_stat, n_resamples=50, seed=42, backend='gpu')
 
         assert 'gpu' in result.backend_name.lower() or 'cpu' in result.backend_name.lower()
         assert 'bootstrap' in result.backend_name.lower()
@@ -113,8 +113,8 @@ class TestGPUBootstrap:
         """GPU bootstrap supports balanced simulation."""
         data = np.arange(1.0, 21.0)
         result = boot(
-            data, mean_stat, R=200, seed=42,
-            sim="balanced", backend='gpu',
+            data, mean_stat, n_resamples=200, seed=42,
+            method="balanced", backend='gpu',
         )
 
         assert result.t.shape == (200, 1)
@@ -125,12 +125,12 @@ class TestGPUBootstrap:
         data = np.arange(1.0, 21.0)
 
         result_cpu = boot(
-            data, mean_stat, R=200, seed=42,
-            sim="balanced", backend='cpu',
+            data, mean_stat, n_resamples=200, seed=42,
+            method="balanced", backend='cpu',
         )
         result_gpu = boot(
-            data, mean_stat, R=200, seed=42,
-            sim="balanced", backend='gpu',
+            data, mean_stat, n_resamples=200, seed=42,
+            method="balanced", backend='gpu',
         )
 
         # Balanced sim falls back to CPU — results should be identical
@@ -141,8 +141,8 @@ class TestGPUBootstrap:
         """GPU bootstrap is reproducible with same seed."""
         data = np.arange(1.0, 31.0)
 
-        result1 = boot(data, mean_stat, R=100, seed=123, backend='gpu')
-        result2 = boot(data, mean_stat, R=100, seed=123, backend='gpu')
+        result1 = boot(data, mean_stat, n_resamples=100, seed=123, backend='gpu')
+        result2 = boot(data, mean_stat, n_resamples=100, seed=123, backend='gpu')
 
         np.testing.assert_array_equal(result1.t, result2.t)
 
@@ -161,7 +161,7 @@ class TestGPUPermutation:
         y = rng.normal(3, 1, 30)
 
         result = permutation_test(
-            x, y, mean_diff, R=999,
+            x, y, mean_diff, n_resamples=999,
             seed=42, backend='gpu',
         )
 
@@ -174,7 +174,7 @@ class TestGPUPermutation:
         y = rng.normal(0, 1, 30)
 
         result = permutation_test(
-            x, y, mean_diff, R=999,
+            x, y, mean_diff, n_resamples=999,
             seed=42, backend='gpu',
         )
 
@@ -192,11 +192,11 @@ class TestGPUPermutation:
         y = rng.normal(2, 1, 50)
 
         result_cpu = permutation_test(
-            x, y, mean_diff, R=2000,
+            x, y, mean_diff, n_resamples=2000,
             seed=42, backend='cpu',
         )
         result_gpu = permutation_test(
-            x, y, mean_diff, R=2000,
+            x, y, mean_diff, n_resamples=2000,
             seed=42, backend='gpu',
         )
 
@@ -212,7 +212,7 @@ class TestGPUPermutation:
         y = rng.normal(0, 1, 10)
 
         result = permutation_test(
-            x, y, mean_diff, R=50,
+            x, y, mean_diff, n_resamples=50,
             seed=42, backend='gpu',
         )
 
@@ -225,9 +225,9 @@ class TestGPUPermutation:
         x = rng.normal(0, 1, 20)
         y = rng.normal(2, 1, 20)
 
-        for alt in ["two.sided", "less", "greater"]:
+        for alt in ["two-sided", "less", "greater"]:
             result = permutation_test(
-                x, y, mean_diff, R=500,
+                x, y, mean_diff, n_resamples=500,
                 alternative=alt, seed=42, backend='gpu',
             )
             # p-value is always in [0, 1]; specific values depend on
@@ -242,11 +242,11 @@ class TestGPUPermutation:
         y = rng.normal(1, 1, 15)
 
         result1 = permutation_test(
-            x, y, mean_diff, R=200,
+            x, y, mean_diff, n_resamples=200,
             seed=99, backend='gpu',
         )
         result2 = permutation_test(
-            x, y, mean_diff, R=200,
+            x, y, mean_diff, n_resamples=200,
             seed=99, backend='gpu',
         )
 
@@ -264,7 +264,7 @@ class TestGPUFallback:
     def test_gpu_bootstrap_multivariate_falls_back(self):
         """Multi-output bootstrap falls back to CPU gracefully."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_var_stat, R=50, seed=42, backend='gpu')
+        result = boot(data, mean_var_stat, n_resamples=50, seed=42, backend='gpu')
         # Should fall back to CPU for multivariate statistic
         assert 'cpu' in result.backend_name
 
@@ -274,7 +274,7 @@ class TestGPUFallback:
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
         result = permutation_test(
-            x, y, mean_diff, R=100,
+            x, y, mean_diff, n_resamples=100,
             seed=42, backend='gpu',
         )
         assert result.p_value < 0.05  # clearly different groups
@@ -282,7 +282,7 @@ class TestGPUFallback:
     def test_auto_backend_uses_gpu_or_cpu_bootstrap(self):
         """backend='auto' uses GPU for simple stats, CPU for complex."""
         data = np.arange(1.0, 11.0)
-        result = boot(data, mean_stat, R=50, seed=42, backend='auto')
+        result = boot(data, mean_stat, n_resamples=50, seed=42, backend='auto')
 
         assert 'bootstrap' in result.backend_name
 
@@ -292,7 +292,7 @@ class TestGPUFallback:
         y = np.array([4.0, 5.0, 6.0])
 
         result = permutation_test(
-            x, y, mean_diff, R=50,
+            x, y, mean_diff, n_resamples=50,
             seed=42, backend='auto',
         )
 

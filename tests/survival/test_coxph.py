@@ -102,14 +102,14 @@ class TestCoxPHBasic:
         assert result.n_observations == 20
         assert len(result.coefficients) == 2
         assert len(result.standard_errors) == 2
-        assert len(result.z_statistics) == 2
+        assert len(result.z_values) == 2
         assert len(result.p_values) == 2
 
     def test_z_statistics_consistent(self):
         """z = coef / se."""
         result = coxph(TWO_COV_TIME, TWO_COV_EVENT, TWO_COV_X)
         expected_z = result.coefficients / result.standard_errors
-        assert_allclose(result.z_statistics, expected_z, rtol=1e-10)
+        assert_allclose(result.z_values, expected_z, rtol=1e-10)
 
     def test_p_values_valid(self):
         """p-values in [0, 1]."""

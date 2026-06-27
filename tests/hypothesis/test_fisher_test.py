@@ -26,7 +26,7 @@ class TestFisher2x2:
             0.16476659315874892, rel=1e-3
         )
         assert result.method == "Fisher's Exact Test for Count Data"
-        assert result.alternative == "two.sided"
+        assert result.alternative == "two-sided"
         assert result.statistic is None  # Fisher has no test statistic
 
     def test_basic_ci(self):

@@ -19,6 +19,10 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import minimize, approx_fprime
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.compute.backend import (
+    resolve_backend, valid_backends, unknown_backend_message,
+    FP64_REQUIRES_CUDA_MSG,
+)
 from pystatistics.core.result import Result
 from pystatistics.core.validation import (
     check_array,
@@ -360,11 +364,10 @@ def multinom(
     X: ArrayLike,
     *,
     names: list[str] | None = None,
-    class_names: list[str] | None = None,
+    category_names: list[str] | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
     backend: str | None = None,
-    use_fp64: bool = False,
 ) -> MultinomialSolution:
     """Fit a multinomial logistic regression model.
 
@@ -385,26 +388,24 @@ def multinom(
             behavior where formula syntax handles intercept addition.
         names: Optional list of predictor names matching columns of X.
             If None, defaults to ["x0", "x1", ...].
-        class_names: Optional list of class labels in order 0, 1, ..., J-1.
+        category_names: Optional list of class labels in order 0, 1, ..., J-1.
             If None, defaults to ["0", "1", ...].
         tol: Convergence tolerance for L-BFGS-B optimizer. Both
             function tolerance (ftol) and gradient tolerance (gtol)
             are set to this value.
         max_iter: Maximum number of optimizer iterations.
-        backend: Compute backend: ``'cpu'`` (default), ``'auto'``, or
-            ``'gpu'``. ``'cpu'`` uses the numpy reference path,
-            validated against R ``nnet::multinom``. ``'auto'`` prefers
-            GPU when available, falls back to CPU. ``'gpu'`` is
-            explicit — raises if no GPU is available (Rule 1: no
-            silent fallback). GPU keeps ``X`` and the one-hot ``y`` on
+        backend: Compute backend = (device, precision). ``'cpu'``
+            (default): the numpy reference path, validated against R
+            ``nnet::multinom``. ``'gpu'``: float32, matches CPU at the
+            project's ``GPU_FP32`` tolerance tier (rtol = 1e-4) — raises
+            if no GPU is available (Rule 1: no silent fallback).
+            ``'gpu_fp64'``: float64, CUDA only (raises on MPS) for
+            CPU-matching precision, subject to the consumer-NVIDIA FP64
+            throughput penalty. ``'auto'``: GPU-float32 if CUDA is
+            present, else CPU. GPU keeps ``X`` and the one-hot ``y`` on
             the device for the full optimization; only the parameter
             vector and (scalar NLL, gradient vector) cross the bus per
             L-BFGS-B iteration.
-        use_fp64: Only relevant when actually running on GPU. Default
-            False (FP32): matches CPU at the project's ``GPU_FP32``
-            tolerance tier (rtol = 1e-4). Set True on CUDA to get
-            CPU-matching precision; note the consumer-NVIDIA FP64
-            throughput penalty applies.
 
     Returns:
         MultinomialSolution wrapping the fitted model.
@@ -448,7 +449,7 @@ def multinom(
             )
         if not torch.isfinite(X).all():
             raise ValidationError("X contains non-finite values")
-        if backend is None:
+        if backend in (None, "auto"):
             backend = "gpu" if X.device.type != "cpu" else "cpu"
         if backend == "cpu":
             raise ValidationError(
@@ -457,6 +458,16 @@ def multinom(
                 "CPU DataSource to the CPU backend, or call `.to('cpu')` "
                 "on the DataSource explicitly to move it back."
             )
+        if backend not in ("gpu", "gpu_fp64"):
+            raise ValidationError(
+                unknown_backend_message(backend, valid_backends(True))
+            )
+        # Precision lives in the backend string; the tensor's own device is
+        # authoritative, so guard fp64-needs-CUDA against it directly.
+        use_fp64 = backend == "gpu_fp64"
+        if use_fp64 and X.device.type != "cuda":
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
+        gpu_device_type = X.device.type
         # y may also be a tensor (from the same DataSource). It's
         # tiny (n labels) so we pull to CPU numpy once — no benefit
         # keeping it on-device for the one-shot one-hot build.
@@ -477,8 +488,10 @@ def multinom(
         X_arr = None
         X_for_gpu = X
     else:
-        if backend is None:
-            backend = "cpu"
+        target = resolve_backend(backend, supports_fp64=True)
+        backend = target.backend
+        use_fp64 = target.use_fp64
+        gpu_device_type = target.device_type
         y_arr = check_array(y, "y")
         X_arr = check_array(X, "X")
         y_codes, X_arr, n_classes = _validate_inputs(y_arr, X_arr)
@@ -496,26 +509,21 @@ def multinom(
     else:
         feature_names = tuple(f"x{i}" for i in range(p))
 
-    if class_names is not None:
-        if len(class_names) != n_classes:
+    if category_names is not None:
+        if len(category_names) != n_classes:
             raise ValidationError(
-                f"class_names: length {len(class_names)} does not match "
+                f"category_names: length {len(category_names)} does not match "
                 f"number of classes {n_classes}"
             )
-        cls_names = tuple(class_names)
+        cls_names = tuple(category_names)
     else:
         cls_names = tuple(str(i) for i in range(n_classes))
 
-    # --- Backend dispatch (see README "Design Philosophy") ---
-    # 'cpu' (default): R-reference numpy path, validated against nnet::multinom.
-    # 'auto': use GPU if available, else CPU — silent CPU fallback is the
-    #   definition of 'auto'.
-    # 'gpu': explicit — raise if no GPU is available (Rule 1: no silent
-    #   substitution when the caller made an explicit choice).
-    if backend not in ("cpu", "auto", "gpu"):
-        raise ValidationError(
-            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
-        )
+    # --- Backend dispatch ---
+    # Device + precision resolved above (tensor input -> the tensor's device;
+    # numpy input -> resolve_backend, which already raised for 'gpu' with no
+    # GPU and downgraded 'auto' to CPU when no CUDA). So backend here is one of
+    # 'cpu' / 'gpu' / 'gpu_fp64', and non-'cpu' means "run on the GPU".
 
     # FP32 gradient precision is ~1e-7, so L-BFGS-B's default ``gtol`` of
     # 1e-8 routinely reports ABNORMAL (line search stall below noise
@@ -533,46 +541,23 @@ def multinom(
     # round-tripping through numpy.
     gpu_like = None
 
-    if X_arr is None:
-        # GPU-tensor entry path: X_for_gpu already on device. We know
-        # the device from the tensor; no device selection needed.
-        gpu_device = X_for_gpu.device.type
-        params_flat, vcov, n_iter, converged, gpu_like = _fit_multinom_gpu(
-            y_codes, X_for_gpu, n_classes, effective_tol, max_iter,
-            device=gpu_device,
-            use_fp64=use_fp64,
-        )
-        backend_name = f"gpu_lbfgsb ({gpu_device}, {'fp64' if use_fp64 else 'fp32'})"
-    elif backend == "cpu":
+    if backend == "cpu":
         backend_name = "cpu_lbfgsb"
         params_flat, vcov, n_iter, converged = _fit_multinom(
             y_codes, X_arr, n_classes, tol, max_iter,
         )
     else:
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            params_flat, vcov, n_iter, converged, gpu_like = _fit_multinom_gpu(
-                y_codes, X_arr, n_classes, effective_tol, max_iter,
-                device=dev.device_type,
-                use_fp64=use_fp64,
-            )
-            backend_name = f"gpu_lbfgsb ({dev.device_type}, {'fp64' if use_fp64 else 'fp32'})"
-        elif backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available. "
-                "Install PyTorch with CUDA/MPS support or use backend='cpu'."
-            )
-        else:
-            # backend='auto' and no GPU: fall through to CPU.
-            backend_name = "cpu_lbfgsb"
-            params_flat, vcov, n_iter, converged = _fit_multinom(
-                y_codes, X_arr, n_classes, tol, max_iter,
-            )
+        # GPU path. ``X_for_gpu`` is the device tensor on the tensor-input
+        # path; ``X_arr`` is the numpy design on the numpy path.
+        X_gpu_in = X_for_gpu if X_arr is None else X_arr
+        params_flat, vcov, n_iter, converged, gpu_like = _fit_multinom_gpu(
+            y_codes, X_gpu_in, n_classes, effective_tol, max_iter,
+            device=gpu_device_type,
+            use_fp64=use_fp64,
+        )
+        backend_name = (
+            f"gpu_lbfgsb ({gpu_device_type}, {'fp64' if use_fp64 else 'fp32'})"
+        )
 
     # Post-fit quantities. When we ran on GPU, reuse the likelihood
     # object — it already holds the on-device X and one-hot y, so

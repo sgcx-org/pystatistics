@@ -1,6 +1,10 @@
 # PyStatistics Roadmap
 
-**Last Updated:** February 2026
+**Software Version:** 4.0
+**Last Updated:** June 2026
+
+> 4.0 is the API-consistency release; the binding API rules (naming, backends,
+> result objects, errors) live in `pystatistics/CONVENTIONS.md`.
 
 ---
 

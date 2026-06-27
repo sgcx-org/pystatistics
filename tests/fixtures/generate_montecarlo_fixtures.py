@@ -186,7 +186,7 @@ def make_perm_significant():
         "x": x,
         "y": y,
         "R": 9999,
-        "alternative": "two.sided",
+        "alternative": "two-sided",
         "seed": 42,
         "description": "Permutation test, significant difference, two-sided",
     })
@@ -203,7 +203,7 @@ def make_perm_not_significant():
         "x": x,
         "y": y,
         "R": 9999,
-        "alternative": "two.sided",
+        "alternative": "two-sided",
         "seed": 42,
         "description": "Permutation test, no significant difference",
     })

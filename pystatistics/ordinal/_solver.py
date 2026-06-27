@@ -24,6 +24,10 @@ from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.compute.backend import (
+    resolve_backend, valid_backends, unknown_backend_message,
+    FP64_REQUIRES_CUDA_MSG,
+)
 from pystatistics.core.validation import (
     check_array,
     check_1d,
@@ -478,14 +482,13 @@ def polr(
     y: ArrayLike,
     X: ArrayLike,
     *,
-    method: str = 'logistic',
+    link: str = 'logistic',
     names: list[str] | None = None,
-    level_names: list[str] | None = None,
+    category_names: list[str] | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
-    ridge: float = 0.0,
+    l2: float = 0.0,
     backend: str | None = None,
-    use_fp64: bool = False,
 ) -> OrdinalSolution:
     """
     Fit a proportional odds (cumulative link) model.
@@ -500,17 +503,17 @@ def polr(
             Must contain all levels from 0 to max(y) with no gaps.
         X: Design matrix of shape (n, p). Must NOT include an intercept
             column (thresholds serve as category-specific intercepts).
-        method: Link function. One of 'logistic' (default, proportional
+        link: Link function. One of 'logistic' (default, proportional
             odds), 'probit', or 'cloglog'.
         names: Labels for the p predictor columns. If None, defaults to
             'x1', 'x2', etc.
-        level_names: Labels for the K ordered categories. If None,
+        category_names: Labels for the K ordered categories. If None,
             defaults to '0', '1', etc.
         tol: Convergence tolerance (gradient norm) for L-BFGS-B.
         max_iter: Maximum number of optimizer iterations.
-        ridge: L2 (ridge) penalty coefficient on the slope coefficients beta
+        l2: L2 (ridge) penalty coefficient on the slope coefficients beta
             (the threshold/intercept parameters are never penalized). The
-            penalty ``0.5 * ridge * ||beta||^2`` is added to the negative
+            penalty ``0.5 * l2 * ||beta||^2`` is added to the negative
             log-likelihood. The default 0.0 fits the exact, R-validated
             maximum-likelihood model. A small positive value makes the
             objective strongly convex, which keeps the fit finite and
@@ -519,6 +522,10 @@ def polr(
             and the fit would be rejected. Reported coefficients, standard
             errors, and vcov are then those of the penalized fit. CPU backend
             only; the GPU backend applies its own ridge stabilization.
+        backend: Compute backend = (device, precision). ``'cpu'`` (default):
+            the R-validated reference path. ``'gpu'``: float32 (raises if no
+            GPU). ``'gpu_fp64'``: float64, CUDA only (raises on MPS).
+            ``'auto'``: GPU-float32 if CUDA is present, else CPU.
 
     Returns:
         OrdinalSolution wrapping the fitted model parameters, with
@@ -546,7 +553,7 @@ def polr(
         >>> sol = polr(y, X, method='logistic', names=['x1', 'x2'])
         >>> print(sol.summary())
     """
-    # Convention (see GPU_BACKEND_CONVENTION.md): numpy input defaults
+    # Convention (see CONVENTIONS.md): numpy input defaults
     # to CPU, GPU torch.Tensor input defaults to GPU. Explicit
     # backend='cpu' with a GPU tensor raises (Rule 1: no silent
     # migration).
@@ -562,7 +569,7 @@ def polr(
             raise ValidationError(f"X: expected 2-D tensor, got {X.ndim}-D")
         if not torch.isfinite(X).all():
             raise ValidationError("X contains non-finite values")
-        if backend is None:
+        if backend in (None, "auto"):
             backend = "gpu" if X.device.type != "cpu" else "cpu"
         if backend == "cpu":
             raise ValidationError(
@@ -571,6 +578,16 @@ def polr(
                 "CPU DataSource to the CPU backend, or call `.to('cpu')` "
                 "on the DataSource explicitly to move it back."
             )
+        if backend not in ("gpu", "gpu_fp64"):
+            raise ValidationError(
+                unknown_backend_message(backend, valid_backends(True))
+            )
+        # Precision lives in the backend string; guard fp64-needs-CUDA against
+        # the tensor's own device.
+        use_fp64 = backend == "gpu_fp64"
+        if use_fp64 and X.device.type != "cuda":
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
+        gpu_device_type = X.device.type
         # Pull y (tiny integer vector) to CPU for the shared validator.
         y_host = (
             y.detach().cpu().numpy()
@@ -578,42 +595,39 @@ def polr(
         )
         y_codes, _discard_X, col_names, lvl_names, n_levels = _validate_inputs(
             y_host, np.zeros((X.shape[0], X.shape[1]), dtype=np.float64),
-            names, level_names,
+            names, category_names,
         )
         # Replace the placeholder numpy X with the real device tensor.
         X_arr = None
         X_for_gpu = X
         n, p = X.shape
     else:
-        if backend is None:
-            backend = "cpu"
+        target = resolve_backend(backend, supports_fp64=True)
+        backend = target.backend
+        use_fp64 = target.use_fp64
+        gpu_device_type = target.device_type
         y_codes, X_arr, col_names, lvl_names, n_levels = _validate_inputs(
-            y, X, names, level_names,
+            y, X, names, category_names,
         )
         X_for_gpu = None
         n, p = X_arr.shape
 
-    if backend not in ("cpu", "auto", "gpu"):
+    if not np.isfinite(l2) or l2 < 0.0:
         raise ValidationError(
-            f"backend: must be 'cpu', 'auto', or 'gpu', got {backend!r}"
+            f"l2: must be a finite non-negative float, got {l2!r}"
         )
-
-    if not np.isfinite(ridge) or ridge < 0.0:
-        raise ValidationError(
-            f"ridge: must be a finite non-negative float, got {ridge!r}"
-        )
-    # The ridge penalty is wired through the CPU L-BFGS-B/Newton path only; the
+    # The L2 penalty is wired through the CPU L-BFGS-B/Newton path only; the
     # GPU path applies its own ridge stabilization. Fail loud rather than
     # silently ignore a requested penalty (Rule 1).
-    if ridge > 0.0 and backend != "cpu":
+    if l2 > 0.0 and backend != "cpu":
         raise ValidationError(
-            "ridge > 0 is only supported on the CPU backend (the GPU backend "
+            "l2 > 0 is only supported on the CPU backend (the GPU backend "
             "applies its own ridge stabilization). Use backend='cpu' or "
-            "ridge=0.0."
+            "l2=0.0."
         )
 
-    # Resolve link
-    link = _resolve_method_link(method)
+    # Resolve the link function (``link`` is the user's string choice).
+    link_fn = _resolve_method_link(link)
 
     # FP32 gradient precision is ~1e-7 — floor tol on the GPU FP32 path
     # for the same reason as multinomial (L-BFGS-B ABNORMAL otherwise).
@@ -625,41 +639,22 @@ def polr(
     gpu_like = None
     vcov_raw = None
 
-    if X_arr is None:
-        gpu_device = X_for_gpu.device.type
-        opt_params, n_iter, converged, neg_loglik, gpu_like = _fit_polr_gpu(
-            y_codes, X_for_gpu, link, n_levels, effective_tol, max_iter,
-            device=gpu_device, use_fp64=use_fp64,
-        )
-        backend_name = f"gpu_lbfgsb ({gpu_device}, {'fp64' if use_fp64 else 'fp32'})"
-    elif backend == "cpu":
+    if backend == "cpu":
         opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
-            y_codes, X_arr, link, n_levels, tol, max_iter, ridge=ridge,
+            y_codes, X_arr, link_fn, n_levels, tol, max_iter, ridge=l2,
         )
         backend_name = "cpu_lbfgsb"
     else:
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            opt_params, n_iter, converged, neg_loglik, gpu_like = _fit_polr_gpu(
-                y_codes, X_arr, link, n_levels, effective_tol, max_iter,
-                device=dev.device_type, use_fp64=use_fp64,
-            )
-            backend_name = f"gpu_lbfgsb ({dev.device_type}, {'fp64' if use_fp64 else 'fp32'})"
-        elif backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available. "
-                "Install PyTorch with CUDA/MPS support or use backend='cpu'."
-            )
-        else:
-            opt_params, n_iter, converged, neg_loglik, vcov_raw = _fit_polr(
-                y_codes, X_arr, link, n_levels, tol, max_iter, ridge=ridge,
-            )
-            backend_name = "cpu_lbfgsb"
+        # GPU path: device + precision resolved above. ``X_for_gpu`` is the
+        # device tensor (tensor input); ``X_arr`` the numpy design (numpy input).
+        X_gpu_in = X_for_gpu if X_arr is None else X_arr
+        opt_params, n_iter, converged, neg_loglik, gpu_like = _fit_polr_gpu(
+            y_codes, X_gpu_in, link_fn, n_levels, effective_tol, max_iter,
+            device=gpu_device_type, use_fp64=use_fp64,
+        )
+        backend_name = (
+            f"gpu_lbfgsb ({gpu_device_type}, {'fp64' if use_fp64 else 'fp32'})"
+        )
 
     # Extract parameters
     n_thresh = n_levels - 1
@@ -696,14 +691,14 @@ def polr(
         level_names=tuple(lvl_names),
         n_iter=n_iter,
         converged=converged,
-        method=method.lower(),
+        method=link.lower(),
     )
 
     result = Result(
         params=params,
         info={
-            'method': method.lower(),
-            'link': link.name,
+            'method': link.lower(),
+            'link': link_fn.name,
             'converged': converged,
             'iterations': n_iter,
         },

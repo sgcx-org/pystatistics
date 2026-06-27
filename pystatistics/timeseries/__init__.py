@@ -25,15 +25,24 @@ Public API:
 from pystatistics.timeseries._acf import acf, pacf
 from pystatistics.timeseries._differencing import diff, ndiffs
 from pystatistics.timeseries._stationarity import adf_test, kpss_test
-from pystatistics.timeseries._common import ACFResult, StationarityResult
-from pystatistics.timeseries._ets_fit import ets, ETSResult
+from pystatistics.timeseries._common import (
+    ACFParams, ACFSolution, StationarityParams, StationaritySolution,
+)
+from pystatistics.timeseries._ets_fit import ets, ETSParams, ETSSolution
 from pystatistics.timeseries._ets_forecast import forecast_ets, ETSForecast
 from pystatistics.timeseries._ets_models import ETSSpec
-from pystatistics.timeseries._arima_fit import arima, ARIMAResult
-from pystatistics.timeseries._arima_batch import arima_batch, ARMABatchResult
+from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
+from pystatistics.timeseries._arima_fit import arima
+from pystatistics.timeseries._arima_batch import (
+    arima_batch, ARMABatchParams, ARMABatchSolution,
+)
 from pystatistics.timeseries._arima_forecast import forecast_arima, ARIMAForecast
-from pystatistics.timeseries._arima_order import auto_arima, AutoARIMAResult
-from pystatistics.timeseries._decomposition import decompose, stl, DecompositionResult
+from pystatistics.timeseries._arima_order import (
+    auto_arima, AutoARIMAParams, AutoARIMASolution,
+)
+from pystatistics.timeseries._decomposition import (
+    decompose, stl, DecompositionParams, DecompositionSolution,
+)
 
 __all__ = [
     "acf",
@@ -42,22 +51,29 @@ __all__ = [
     "ndiffs",
     "adf_test",
     "kpss_test",
-    "ACFResult",
-    "StationarityResult",
+    "ACFParams",
+    "ACFSolution",
+    "StationarityParams",
+    "StationaritySolution",
     "ets",
-    "ETSResult",
+    "ETSParams",
+    "ETSSolution",
     "forecast_ets",
     "ETSForecast",
     "ETSSpec",
     "arima",
-    "ARIMAResult",
+    "ARIMAParams",
+    "ARIMASolution",
     "arima_batch",
-    "ARMABatchResult",
+    "ARMABatchParams",
+    "ARMABatchSolution",
     "forecast_arima",
     "ARIMAForecast",
     "auto_arima",
-    "AutoARIMAResult",
+    "AutoARIMAParams",
+    "AutoARIMASolution",
     "decompose",
     "stl",
-    "DecompositionResult",
+    "DecompositionParams",
+    "DecompositionSolution",
 ]

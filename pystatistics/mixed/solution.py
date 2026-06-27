@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.mixed._common import LMMParams, GLMMParams, VarCompSummary
 
 
@@ -40,7 +40,7 @@ def _format_pvalue(p: float) -> str:
         return f'{p:.4f}'
 
 
-class LMMSolution:
+class LMMSolution(SolutionReprMixin):
     """Solution wrapper for a fitted linear mixed model.
 
     Provides R-style summary output matching lmerTest::summary(),
@@ -68,7 +68,7 @@ class LMMSolution:
         return dict(zip(self.params.coefficient_names, self.params.coefficients))
 
     @property
-    def se(self) -> NDArray:
+    def standard_errors(self) -> NDArray:
         """Standard errors of fixed effects."""
         return self.params.se
 
@@ -277,7 +277,7 @@ class LMMSolution:
         )
 
 
-class GLMMSolution:
+class GLMMSolution(SolutionReprMixin):
     """Solution wrapper for a fitted generalized linear mixed model.
 
     Same interface as LMMSolution plus family-specific properties.
@@ -302,7 +302,7 @@ class GLMMSolution:
         return dict(zip(self.params.coefficient_names, self.params.coefficients))
 
     @property
-    def se(self) -> NDArray:
+    def standard_errors(self) -> NDArray:
         return self.params.se
 
     @property

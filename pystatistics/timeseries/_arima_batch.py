@@ -21,11 +21,16 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import Result, SolutionReprMixin
+from pystatistics.core.compute.backend import (
+    resolve_backend, valid_backends, unknown_backend_message,
+    FP64_REQUIRES_CUDA_MSG,
+)
 
 
 @dataclass(frozen=True)
-class ARMABatchResult:
-    """Result from a batched ARMA fit.
+class ARMABatchParams:
+    """Immutable parameter payload for a batched ARMA fit.
 
     Attributes
     ----------
@@ -62,6 +67,125 @@ class ARMABatchResult:
     n_series: int
     n_used: int
     method: str
+
+
+@dataclass
+class ARMABatchSolution(SolutionReprMixin):
+    """Result from a batched ARMA fit.
+
+    Wraps a :class:`Result` ``[ARMABatchParams]`` envelope; every datum is
+    exposed via a read-only ``@property`` so the public attribute surface is
+    unchanged from the previous flat dataclass.
+
+    Attributes
+    ----------
+    order : tuple[int, int, int]
+        ``(p, d, q)``. The ``d`` that was applied before the ARMA fit.
+    ar : NDArray
+        AR coefficients, shape ``(K, p)``.
+    ma : NDArray
+        MA coefficients, shape ``(K, q)``.
+    sigma2 : NDArray
+        Innovation variance per series, shape ``(K,)``.
+    mean : NDArray | None
+        Per-series sample mean of the differenced series (None if
+        ``include_mean=False``).
+    n_iter : int
+        Maximum iteration count across all series.
+    converged : NDArray
+        Per-series boolean convergence flag, shape ``(K,)``.
+    n_series : int
+        Number of series K.
+    n_used : int
+        Length of each (post-differencing) series.
+    method : str
+        Which fitter ran: ``'Whittle-batch-GPU'``, ``'Whittle-loop-CPU'``.
+    """
+
+    _result: Result[ARMABatchParams]
+
+    @property
+    def order(self) -> tuple[int, int, int]:
+        return self._result.params.order
+
+    @property
+    def ar(self) -> NDArray:
+        return self._result.params.ar
+
+    @property
+    def ma(self) -> NDArray:
+        return self._result.params.ma
+
+    @property
+    def sigma2(self) -> NDArray:
+        return self._result.params.sigma2
+
+    @property
+    def mean(self) -> NDArray | None:
+        return self._result.params.mean
+
+    @property
+    def n_iter(self) -> int:
+        return self._result.params.n_iter
+
+    @property
+    def converged(self) -> NDArray:
+        return self._result.params.converged
+
+    @property
+    def n_series(self) -> int:
+        return self._result.params.n_series
+
+    @property
+    def n_used(self) -> int:
+        return self._result.params.n_used
+
+    @property
+    def method(self) -> str:
+        return self._result.params.method
+
+    @property
+    def info(self) -> dict:
+        return self._result.info
+
+    @property
+    def timing(self) -> dict[str, float] | None:
+        return self._result.timing
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
+
+    def summary(self) -> str:
+        """Compact summary of a batched ARMA fit across the K series."""
+        p, d, q = self.order
+        n_conv = int(np.sum(self.converged))
+        lines = [
+            f"Batched ARIMA({p},{d},{q}) — {self.n_series} series",
+            "=" * 56,
+            f"Fitter: {self.method}",
+            f"Observations per series (after differencing): {self.n_used}",
+            f"Converged: {n_conv}/{self.n_series}",
+            "",
+            f"sigma^2  mean={float(np.mean(self.sigma2)):.4g}  "
+            f"min={float(np.min(self.sigma2)):.4g}  "
+            f"max={float(np.max(self.sigma2)):.4g}",
+        ]
+        if p > 0:
+            lines.append(
+                f"AR[1]    mean={float(np.mean(self.ar[:, 0])):.4f}  "
+                f"(across series)"
+            )
+        if q > 0:
+            lines.append(
+                f"MA[1]    mean={float(np.mean(self.ma[:, 0])):.4f}  "
+                f"(across series)"
+            )
+        return "\n".join(lines)
 
 
 def _yule_walker_batch(Y_centered: NDArray, p: int) -> NDArray:
@@ -119,8 +243,7 @@ def arima_batch(
     max_iter: int = 300,
     lr: float = 0.05,
     backend: str | None = None,
-    use_fp64: bool = False,
-) -> ARMABatchResult:
+) -> ARMABatchSolution:
     """Fit K independent ARMA(p, d, q) models on the rows of ``Y``.
 
     Parameters
@@ -147,17 +270,15 @@ def arima_batch(
         see per-series non-convergence, larger if you want faster
         wall time on easy problems.
     backend : str or None
-        ``'cpu'`` (default — loop over :func:`arima` with
-        ``method='Whittle'``), ``'auto'`` (GPU when available, else
-        CPU loop), ``'gpu'`` (require GPU). A torch.Tensor input
-        routes to GPU automatically matching the
-        GPU_BACKEND_CONVENTION.md convention.
-    use_fp64 : bool
-        FP64 on GPU (CUDA only). Default FP32.
+        Compute backend = (device, precision). ``'cpu'`` (default — loop over
+        :func:`arima` with ``method='Whittle'``, float64), ``'gpu'`` (float32,
+        require GPU), ``'gpu_fp64'`` (float64, CUDA only — raises on MPS),
+        ``'auto'`` (GPU-float32 if CUDA present, else CPU loop). A torch.Tensor
+        input routes to its own device automatically (see CONVENTIONS.md).
 
     Returns
     -------
-    ARMABatchResult
+    ARMABatchSolution
     """
     if method != "Whittle":
         raise ValidationError(
@@ -178,7 +299,7 @@ def arima_batch(
         import torch
         if Y.ndim != 2:
             raise ValidationError(f"Y: expected 2-D, got {Y.ndim}-D")
-        if backend is None:
+        if backend in (None, "auto"):
             backend = "gpu" if Y.device.type != "cpu" else "cpu"
         if backend == "cpu":
             raise ValidationError(
@@ -186,18 +307,25 @@ def arima_batch(
                 f"device {Y.device}. Move the tensor with .to('cpu') "
                 "explicitly, or drop backend= to use the device Y is on."
             )
+        if backend not in ("gpu", "gpu_fp64"):
+            raise ValidationError(
+                unknown_backend_message(backend, valid_backends(True))
+            )
+        # Precision lives in the backend string; guard fp64-needs-CUDA against
+        # the tensor's own device.
+        use_fp64 = backend == "gpu_fp64"
+        if use_fp64 and Y.device.type != "cuda":
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
+        gpu_device_type = Y.device.type
         Y_host = Y
     else:
-        if backend is None:
-            backend = "cpu"
+        _target = resolve_backend(backend, supports_fp64=True)
+        backend = _target.backend
+        use_fp64 = _target.use_fp64
+        gpu_device_type = _target.device_type
         Y_host = np.asarray(Y, dtype=np.float64)
         if Y_host.ndim != 2:
             raise ValidationError(f"Y: expected 2-D, got {Y_host.ndim}-D")
-
-    if backend not in ("cpu", "auto", "gpu"):
-        raise ValidationError(
-            f"backend: 'cpu' | 'auto' | 'gpu', got {backend!r}"
-        )
 
     # Per-series differencing. Done on CPU numpy for clarity — it's
     # one vectorised np.diff-equivalent per d-step, negligible cost.
@@ -214,23 +342,11 @@ def arima_batch(
             f"got n={n_used}."
         )
 
-    # Route to GPU when possible / requested.
-    run_gpu = False
-    device_type = "cuda"
-    if backend != "cpu":
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            run_gpu = True
-            device_type = dev.device_type
-        elif backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available."
-            )
+    # Route to GPU when possible / requested. Device + precision were resolved
+    # above (resolve_backend already raised for an explicit GPU request with no
+    # GPU and downgraded 'auto' to CPU when no CUDA is present).
+    run_gpu = backend != "cpu"
+    device_type = gpu_device_type
 
     if include_mean:
         mu_batch = Y_diff.mean(axis=1)
@@ -283,15 +399,29 @@ def arima_batch(
         converged = np.array(conv_vals, dtype=bool)
         method_str = "Whittle-loop-CPU"
 
-    return ARMABatchResult(
-        order=order,
-        ar=ar,
-        ma=ma,
-        sigma2=sigma2,
-        mean=mu_batch,
-        n_iter=int(n_iter),
-        converged=converged,
-        n_series=K,
-        n_used=n_used,
-        method=method_str,
+    if run_gpu:
+        backend_name = f"whittle_batch_gpu ({device_type}, " \
+                       f"{'fp64' if use_fp64 else 'fp32'})"
+    else:
+        backend_name = "cpu"
+
+    return ARMABatchSolution(
+        _result=Result(
+            params=ARMABatchParams(
+                order=order,
+                ar=ar,
+                ma=ma,
+                sigma2=sigma2,
+                mean=mu_batch,
+                n_iter=int(n_iter),
+                converged=converged,
+                n_series=K,
+                n_used=n_used,
+                method=method_str,
+            ),
+            info={"method": method_str},
+            timing=None,
+            backend_name=backend_name,
+            warnings=(),
+        )
     )

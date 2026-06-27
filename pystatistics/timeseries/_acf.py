@@ -13,8 +13,9 @@ from numpy.typing import ArrayLike, NDArray
 from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
-from pystatistics.timeseries._common import ACFResult
+from pystatistics.timeseries._common import ACFParams, ACFSolution
 
 
 def _validate_series(x: ArrayLike, name: str = "x") -> NDArray:
@@ -139,7 +140,7 @@ def acf(
     max_lag: int | None = None,
     conf_level: float = 0.95,
     demean: bool = True,
-) -> ACFResult:
+) -> ACFSolution:
     """
     Compute the autocorrelation function.
 
@@ -165,7 +166,7 @@ def acf(
 
     Returns
     -------
-    ACFResult
+    ACFSolution
         Result containing acf values, lags, and confidence bands.
 
     Raises
@@ -208,14 +209,22 @@ def acf(
     lags = np.arange(max_lag + 1)
     ci_upper, ci_lower = _ci_bounds(n, conf_level, max_lag + 1)
 
-    return ACFResult(
-        acf=acf_vals,
-        lags=lags,
-        n_obs=n,
-        conf_level=conf_level,
-        ci_upper=ci_upper,
-        ci_lower=ci_lower,
-        type="correlation",
+    return ACFSolution(
+        _result=Result(
+            params=ACFParams(
+                acf=acf_vals,
+                lags=lags,
+                n_obs=n,
+                conf_level=conf_level,
+                ci_upper=ci_upper,
+                ci_lower=ci_lower,
+                type="correlation",
+            ),
+            info={"type": "correlation"},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )
 
 
@@ -224,7 +233,7 @@ def pacf(
     *,
     max_lag: int | None = None,
     conf_level: float = 0.95,
-) -> ACFResult:
+) -> ACFSolution:
     """
     Compute the partial autocorrelation function.
 
@@ -253,7 +262,7 @@ def pacf(
 
     Returns
     -------
-    ACFResult
+    ACFSolution
         Result with type='partial'. Lags start at 1 (no lag 0).
 
     Raises
@@ -326,12 +335,20 @@ def pacf(
     lags = np.arange(1, max_lag + 1)
     ci_upper, ci_lower = _ci_bounds(n, conf_level, max_lag)
 
-    return ACFResult(
-        acf=pacf_vals,
-        lags=lags,
-        n_obs=n,
-        conf_level=conf_level,
-        ci_upper=ci_upper,
-        ci_lower=ci_lower,
-        type="partial",
+    return ACFSolution(
+        _result=Result(
+            params=ACFParams(
+                acf=pacf_vals,
+                lags=lags,
+                n_obs=n,
+                conf_level=conf_level,
+                ci_upper=ci_upper,
+                ci_lower=ci_lower,
+                type="partial",
+            ),
+            info={"type": "partial"},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

@@ -7,7 +7,7 @@ with R-style summary() methods.
 
 from __future__ import annotations
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.survival._common import (
     CoxParams,
     DiscreteTimeParams,
@@ -16,7 +16,7 @@ from pystatistics.survival._common import (
 )
 
 
-class KMSolution:
+class KMSolution(SolutionReprMixin):
     """Kaplan-Meier survival curve solution.
 
     Properties mirror R's survfit() output.
@@ -154,7 +154,7 @@ class KMSolution:
         )
 
 
-class LogRankSolution:
+class LogRankSolution(SolutionReprMixin):
     """Log-rank test solution.
 
     Properties mirror R's survdiff() output.
@@ -246,7 +246,7 @@ class LogRankSolution:
         )
 
 
-class CoxSolution:
+class CoxSolution(SolutionReprMixin):
     """Cox proportional hazards solution.
 
     Properties mirror R's coxph() output.
@@ -283,8 +283,8 @@ class CoxSolution:
         return self._result.params.standard_errors
 
     @property
-    def z_statistics(self):
-        return self._result.params.z_statistics
+    def z_values(self):
+        return self._result.params.z_values
 
     @property
     def p_values(self):
@@ -358,7 +358,7 @@ class CoxSolution:
                 f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
                 f"{self.hazard_ratios[i]:10.6f}  "
                 f"{self.standard_errors[i]:10.6f}  "
-                f"{self.z_statistics[i]:10.4f}  "
+                f"{self.z_values[i]:10.4f}  "
                 f"{self.p_values[i]:12.4g}"
             )
 
@@ -400,7 +400,7 @@ class CoxSolution:
         )
 
 
-class DiscreteTimeSolution:
+class DiscreteTimeSolution(SolutionReprMixin):
     """Discrete-time survival model solution.
 
     Properties mirror the logistic regression on person-period data.
@@ -433,8 +433,8 @@ class DiscreteTimeSolution:
         return self._result.params.standard_errors
 
     @property
-    def z_statistics(self):
-        return self._result.params.z_statistics
+    def z_values(self):
+        return self._result.params.z_values
 
     @property
     def p_values(self):
@@ -514,7 +514,7 @@ class DiscreteTimeSolution:
                 f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
                 f"{self.hazard_ratios[i]:10.6f}  "
                 f"{self.standard_errors[i]:10.6f}  "
-                f"{self.z_statistics[i]:10.4f}  "
+                f"{self.z_values[i]:10.4f}  "
                 f"{self.p_values[i]:12.4g}"
             )
 

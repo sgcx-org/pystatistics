@@ -10,7 +10,7 @@ import numpy as np
 
 from pystatistics.regression import fit, Design
 from pystatistics.regression.solution import LinearSolution
-from pystatistics.core.exceptions import NumericalError
+from pystatistics.core.exceptions import NumericalError, ValidationError
 
 
 class TestFitBasic:
@@ -72,7 +72,7 @@ class TestFitProperties:
     def test_t_statistics_finite(self, simple_regression_data):
         X, y, _ = simple_regression_data
         result = fit(X, y)
-        assert np.all(np.isfinite(result.t_statistics))
+        assert np.all(np.isfinite(result.t_values))
 
     def test_p_values_in_zero_one(self, simple_regression_data):
         X, y, _ = simple_regression_data
@@ -135,7 +135,7 @@ class TestFitRankDeficient:
     def test_collinear_has_nan_t(self, collinear_data):
         X, y = collinear_data
         result = fit(X, y, backend='cpu')
-        assert np.any(np.isnan(result.t_statistics))
+        assert np.any(np.isnan(result.t_values))
 
     def test_collinear_has_nan_pv(self, collinear_data):
         X, y = collinear_data
@@ -151,9 +151,9 @@ class TestBackendSelection:
         result = fit(X, y, backend='cpu')
         assert result.backend_name == 'cpu_qr'
 
-    def test_cpu_qr_backend(self, simple_regression_data):
+    def test_cpu_qr_solver(self, simple_regression_data):
         X, y, _ = simple_regression_data
-        result = fit(X, y, backend='cpu_qr')
+        result = fit(X, y, backend='cpu', solver='qr')
         assert result.backend_name == 'cpu_qr'
 
     def test_auto_backend_works(self, simple_regression_data):
@@ -164,13 +164,24 @@ class TestBackendSelection:
 
     def test_invalid_backend_raises(self, simple_regression_data):
         X, y, _ = simple_regression_data
-        with pytest.raises(ValueError, match="Unknown backend"):
+        with pytest.raises(ValidationError, match="Unknown backend"):
             fit(X, y, backend='nonsense')
 
-    def test_cpu_svd_not_implemented(self, simple_regression_data):
+    def test_algorithm_suffixed_backend_rejected(self, simple_regression_data):
+        # The old algorithm-in-backend strings are gone in 4.0 (use solver=).
+        X, y, _ = simple_regression_data
+        with pytest.raises(ValidationError, match="Unknown backend"):
+            fit(X, y, backend='cpu_qr')
+
+    def test_cpu_svd_solver_not_implemented(self, simple_regression_data):
         X, y, _ = simple_regression_data
         with pytest.raises(NotImplementedError):
-            fit(X, y, backend='cpu_svd')
+            fit(X, y, backend='cpu', solver='svd')
+
+    def test_solver_rejected_for_glm(self, simple_regression_data):
+        X, y, _ = simple_regression_data
+        with pytest.raises(ValidationError, match="solver= applies only"):
+            fit(X, y, family='binomial', solver='qr')
 
 
 def _gpu_available():

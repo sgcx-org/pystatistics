@@ -289,7 +289,7 @@ def _undifference(
 # ---------------------------------------------------------------------------
 
 def forecast_arima(
-    fitted: 'ARIMAResult',  # noqa: F821  forward reference
+    fitted: 'ARIMASolution',  # noqa: F821  forward reference
     y_original: ArrayLike,
     *,
     h: int = 10,
@@ -301,7 +301,7 @@ def forecast_arima(
 
     Parameters
     ----------
-    fitted : ARIMAResult
+    fitted : ARIMASolution
         A fitted ARIMA model (from :func:`arima`).
     y_original : ArrayLike
         The **original** (un-differenced) time series that was passed
@@ -321,11 +321,11 @@ def forecast_arima(
     ValidationError
         If *h* < 1 or *levels* are invalid.
     """
-    from pystatistics.timeseries._arima_fit import ARIMAResult  # noqa: F811
+    from pystatistics.timeseries._arima_fit import ARIMASolution  # noqa: F811
 
-    if not isinstance(fitted, ARIMAResult):
+    if not isinstance(fitted, ARIMASolution):
         raise ValidationError(
-            f"fitted: expected ARIMAResult, got {type(fitted).__name__}"
+            f"fitted: expected ARIMASolution, got {type(fitted).__name__}"
         )
 
     y_orig = np.asarray(y_original, dtype=np.float64).ravel()

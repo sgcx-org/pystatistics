@@ -120,7 +120,7 @@ class TestRValidation:
         result, r, ill = _load_fixture(fixture_name)
         tol = _tolerances(ill)
         np.testing.assert_allclose(
-            result.t_statistics, r['t_statistics'], **tol
+            result.t_values, r['t_statistics'], **tol
         )
 
     @pytest.mark.parametrize("fixture_name", FIXTURE_NAMES)

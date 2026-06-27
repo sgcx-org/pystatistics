@@ -37,6 +37,8 @@ is then required.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -72,11 +74,11 @@ def build_batched_constants(patterns, n_vars: int) -> BatchedConstants:
         If there are no patterns, or every pattern has zero observed variables.
     """
     if len(patterns) == 0:
-        raise ValueError("no missingness patterns to build constants from")
+        raise ValidationError("no missingness patterns to build constants from")
     P = len(patterns)
     v_obs_max = max(len(p.observed_indices) for p in patterns)
     if v_obs_max == 0:
-        raise ValueError("every pattern has zero observed variables")
+        raise ValidationError("every pattern has zero observed variables")
 
     obs_idx = np.zeros((P, v_obs_max), dtype=np.int64)
     obs_mask = np.zeros((P, v_obs_max), dtype=bool)

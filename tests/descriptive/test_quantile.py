@@ -2,7 +2,7 @@
 Tests for quantile computation (all 9 R types) and summary().
 
 All expected values are computed directly from R 4.x using:
-    quantile(x, probs, type=t)
+    quantile(x, probs, quantile_type=t)
     summary(x)
 """
 
@@ -196,7 +196,7 @@ class TestQuantileSolver:
     @pytest.mark.parametrize("qtype", range(1, 10))
     def test_type_matches_r(self, qtype):
         """All 9 types through quantile() match R."""
-        result = quantile([1, 2, 3, 4, 5], type=qtype)
+        result = quantile([1, 2, 3, 4, 5], quantile_type=qtype)
         assert result.quantiles is not None
         expected = np.array(R_QUANTILES_1TO5[qtype], dtype=np.float64)
         np.testing.assert_allclose(result.quantiles[:, 0], expected, rtol=1e-12)
@@ -205,7 +205,7 @@ class TestQuantileSolver:
         """Quantiles computed per column for 2D data."""
         data = np.array([[1, 10], [2, 20], [3, 30], [4, 40], [5, 50]],
                         dtype=np.float64)
-        result = quantile(data, type=7)
+        result = quantile(data, quantile_type=7)
         assert result.quantiles is not None
         assert result.quantiles.shape == (5, 2)
         # Column 0: same as 1:5
@@ -216,24 +216,24 @@ class TestQuantileSolver:
     def test_invalid_type_raises(self):
         """Type outside 1-9 raises ValidationError."""
         with pytest.raises(ValidationError):
-            quantile([1, 2, 3], type=0)
+            quantile([1, 2, 3], quantile_type=0)
         with pytest.raises(ValidationError):
-            quantile([1, 2, 3], type=10)
+            quantile([1, 2, 3], quantile_type=10)
 
     def test_nan_everything_propagates(self):
-        """use='everything' propagates NaN."""
+        """na_action='everything' propagates NaN."""
         data = [1, 2, np.nan, 4, 5]
-        result = quantile(data, use='everything')
+        result = quantile(data, na_action='everything')
         assert result.quantiles is not None
         assert np.all(np.isnan(result.quantiles[:, 0]))
 
     def test_nan_complete_obs(self):
-        """use='complete.obs' drops NaN rows."""
+        """na_action='complete' drops NaN rows."""
         data = [1, 2, np.nan, 4, 5]
-        result = quantile(data, use='complete.obs', type=7)
+        result = quantile(data, na_action='complete', quantile_type=7)
         assert result.quantiles is not None
         # After removing NaN: [1, 2, 4, 5], type 7
-        # R: quantile(c(1,2,4,5), type=7)
+        # R: quantile(c(1,2,4,5), quantile_type=7)
         # 0%=1, 25%=1.75, 50%=3, 75%=4.25, 100%=5
         expected = np.array([1.0, 1.75, 3.0, 4.25, 5.0])
         np.testing.assert_allclose(result.quantiles[:, 0], expected, rtol=1e-12)
@@ -277,16 +277,16 @@ class TestSummary:
         np.testing.assert_allclose(result.summary_table[5, 1], 300.0)
 
     def test_summary_nan_everything(self):
-        """Summary with NaN and use='everything' propagates NaN."""
+        """Summary with NaN and na_action='everything' propagates NaN."""
         data = [1, np.nan, 3, 4, 5]
-        result = summary(data, use='everything')
+        result = summary(data, na_action='everything')
         assert result.summary_table is not None
         assert np.all(np.isnan(result.summary_table[:, 0]))
 
     def test_summary_nan_complete_obs(self):
-        """Summary with NaN and use='complete.obs' works."""
+        """Summary with NaN and na_action='complete' works."""
         data = [1, np.nan, 3, 4, 5]
-        result = summary(data, use='complete.obs')
+        result = summary(data, na_action='complete')
         assert result.summary_table is not None
         table = result.summary_table[:, 0]
         np.testing.assert_allclose(table[0], 1.0)    # Min

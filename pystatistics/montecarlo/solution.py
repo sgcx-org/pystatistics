@@ -13,7 +13,7 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.montecarlo._common import BootParams, PermutationParams
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class BootstrapSolution:
+class BootstrapSolution(SolutionReprMixin):
     """
     User-facing bootstrap results.
 
@@ -127,8 +127,8 @@ class BootstrapSolution:
 
         # Call info
         lines.append(
-            f"Call: boot(data, statistic, R={self.R}, "
-            f"sim=\"{self.sim}\")"
+            f"Call: boot(data, statistic, n_resamples={self.R}, "
+            f"method=\"{self.sim}\")"
         )
         lines.append("")
 
@@ -170,7 +170,7 @@ class BootstrapSolution:
 
 
 @dataclass
-class PermutationSolution:
+class PermutationSolution(SolutionReprMixin):
     """
     User-facing permutation test results.
 

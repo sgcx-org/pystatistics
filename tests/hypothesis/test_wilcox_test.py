@@ -16,10 +16,10 @@ class TestSignedRank:
 
     def test_basic(self):
         """
-        R: wilcox.test(c(1.5, 2.2, 3.1, 4.0, 5.3), mu=3)
+        R: wilcox.test(c(1.5, 2.2, 3.1, 4.0, 5.3), null_value=3)
         V = 9, p-value = 0.8125 (exact)
         """
-        result = wilcox_test([1.5, 2.2, 3.1, 4.0, 5.3], mu=3)
+        result = wilcox_test([1.5, 2.2, 3.1, 4.0, 5.3], null_value=3)
         assert result.statistic == pytest.approx(9.0, abs=1e-10)
         assert result.statistic_name == "V"
         assert result.p_value == pytest.approx(0.8125, rel=1e-10)
@@ -27,13 +27,13 @@ class TestSignedRank:
 
     def test_exact(self):
         """Exact test for small n, no ties."""
-        result = wilcox_test([1.5, 2.2, 3.1, 4.0, 5.3], mu=3)
+        result = wilcox_test([1.5, 2.2, 3.1, 4.0, 5.3], null_value=3)
         assert "exact" in result.method.lower()
 
     def test_ci(self):
         """Hodges-Lehmann pseudomedian and CI."""
         result = wilcox_test(
-            [1.5, 2.2, 3.1, 4.0, 5.3], mu=3, conf_int=True
+            [1.5, 2.2, 3.1, 4.0, 5.3], null_value=3, conf_int=True
         )
         # R: pseudomedian = 3.1, CI = [1.5, 5.3]
         assert result.estimate is not None
@@ -43,11 +43,11 @@ class TestSignedRank:
 
     def test_alternative_less(self):
         """
-        R: wilcox.test(c(1.5, 2.2, 3.1, 4.0, 5.3), mu=3, alternative="less")
+        R: wilcox.test(c(1.5, 2.2, 3.1, 4.0, 5.3), null_value=3, alternative="less")
         V = 9, p = 0.6875
         """
         result = wilcox_test(
-            [1.5, 2.2, 3.1, 4.0, 5.3], mu=3, alternative="less"
+            [1.5, 2.2, 3.1, 4.0, 5.3], null_value=3, alternative="less"
         )
         assert result.statistic == pytest.approx(9.0, abs=1e-10)
         assert result.p_value == pytest.approx(0.6875, rel=1e-10)
@@ -139,14 +139,14 @@ class TestWilcoxEdgeCases:
 
     def test_summary(self):
         """summary() produces readable output."""
-        result = wilcox_test([1, 2, 3, 4, 5], mu=0)
+        result = wilcox_test([1, 2, 3, 4, 5], null_value=0)
         s = result.summary()
         assert "Wilcoxon" in s
         assert "p-value" in s
 
     def test_backend_name(self):
         """Backend is cpu_hypothesis."""
-        result = wilcox_test([1, 2, 3, 4, 5], mu=0)
+        result = wilcox_test([1, 2, 3, 4, 5], null_value=0)
         assert result.backend_name == "cpu_hypothesis"
 
     def test_design_passthrough(self):

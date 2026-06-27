@@ -33,7 +33,7 @@ class TestPermutationTest:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
-        result = permutation_test(x, y, mean_diff, R=9999, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=9999, seed=42)
 
         # Should be highly significant (p < 0.05)
         assert result.p_value < 0.05
@@ -46,7 +46,7 @@ class TestPermutationTest:
         x = rng.normal(0, 1, 20)
         y = rng.normal(0, 1, 20)
 
-        result = permutation_test(x, y, mean_diff, R=999, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=999, seed=42)
 
         # p-value should be large (not significant)
         assert result.p_value > 0.05
@@ -57,10 +57,10 @@ class TestPermutationTest:
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
         result = permutation_test(
-            x, y, mean_diff, R=999,
-            alternative="two.sided", seed=42,
+            x, y, mean_diff, n_resamples=999,
+            alternative="two-sided", seed=42,
         )
-        assert result.alternative == "two.sided"
+        assert result.alternative == "two-sided"
         assert result.p_value < 0.05
 
     def test_less(self):
@@ -69,7 +69,7 @@ class TestPermutationTest:
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
         result = permutation_test(
-            x, y, mean_diff, R=999,
+            x, y, mean_diff, n_resamples=999,
             alternative="less", seed=42,
         )
         assert result.alternative == "less"
@@ -82,7 +82,7 @@ class TestPermutationTest:
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
         result = permutation_test(
-            x, y, mean_diff, R=999,
+            x, y, mean_diff, n_resamples=999,
             alternative="greater", seed=42,
         )
         assert result.alternative == "greater"
@@ -94,8 +94,8 @@ class TestPermutationTest:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        r1 = permutation_test(x, y, mean_diff, R=999, seed=42)
-        r2 = permutation_test(x, y, mean_diff, R=999, seed=42)
+        r1 = permutation_test(x, y, mean_diff, n_resamples=999, seed=42)
+        r2 = permutation_test(x, y, mean_diff, n_resamples=999, seed=42)
 
         assert r1.p_value == r2.p_value
         np.testing.assert_array_equal(r1.perm_stats, r2.perm_stats)
@@ -105,8 +105,8 @@ class TestPermutationTest:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        r1 = permutation_test(x, y, mean_diff, R=999, seed=42)
-        r2 = permutation_test(x, y, mean_diff, R=999, seed=99)
+        r1 = permutation_test(x, y, mean_diff, n_resamples=999, seed=42)
+        r2 = permutation_test(x, y, mean_diff, n_resamples=999, seed=99)
 
         assert not np.allclose(r1.perm_stats, r2.perm_stats)
 
@@ -115,7 +115,7 @@ class TestPermutationTest:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         y = np.array([6.0, 7.0, 8.0, 9.0, 10.0])
 
-        result = permutation_test(x, y, median_diff, R=9999, seed=42)
+        result = permutation_test(x, y, median_diff, n_resamples=9999, seed=42)
         assert result.observed_stat == pytest.approx(-5.0, rel=1e-10)
         assert result.p_value < 0.10  # stochastic, use wider threshold
 
@@ -132,7 +132,7 @@ class TestPValue:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        result = permutation_test(x, y, mean_diff, R=999, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=999, seed=42)
         assert 0 < result.p_value <= 1.0
 
     def test_p_value_phipson_smyth(self):
@@ -142,7 +142,7 @@ class TestPValue:
         x = np.array([1.0])
         y = np.array([1000.0])
 
-        result = permutation_test(x, y, mean_diff, R=99, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=99, seed=42)
 
         # With n1=1, n2=1, there are only 2 possible permutations
         # p should be 1/(99+1) = 0.01 minimum, or we might get 2/100 etc.
@@ -153,7 +153,7 @@ class TestPValue:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        result = permutation_test(x, y, mean_diff, R=500, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=500, seed=42)
         assert result.perm_stats.shape == (500,)
 
 
@@ -169,7 +169,7 @@ class TestPermutationSolution:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        result = permutation_test(x, y, mean_diff, R=99, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=99, seed=42)
         s = result.summary()
 
         assert "PERMUTATION TEST" in s
@@ -180,7 +180,7 @@ class TestPermutationSolution:
         x = np.array([1.0, 2.0, 3.0])
         y = np.array([4.0, 5.0, 6.0])
 
-        result = permutation_test(x, y, mean_diff, R=99, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=99, seed=42)
         r = repr(result)
 
         assert "PermutationSolution" in r
@@ -191,7 +191,7 @@ class TestPermutationSolution:
         x = np.array([1.0, 2.0])
         y = np.array([3.0, 4.0])
 
-        result = permutation_test(x, y, mean_diff, R=10, seed=42)
+        result = permutation_test(x, y, mean_diff, n_resamples=10, seed=42)
         assert "permutation" in result.backend_name
 
 
@@ -207,21 +207,21 @@ class TestPermutationValidation:
         x = np.array([1.0, 2.0])
         y = np.array([3.0, 4.0])
         with pytest.raises(ValueError, match="alternative"):
-            permutation_test(x, y, mean_diff, R=10, alternative="invalid")
+            permutation_test(x, y, mean_diff, n_resamples=10, alternative="invalid")
 
     def test_R_must_be_positive(self):
         """R must be >= 1."""
         x = np.array([1.0, 2.0])
         y = np.array([3.0, 4.0])
         with pytest.raises(ValueError, match="R must be >= 1"):
-            permutation_test(x, y, mean_diff, R=0)
+            permutation_test(x, y, mean_diff, n_resamples=0)
 
     def test_empty_x(self):
         """Empty x raises ValueError."""
         with pytest.raises(ValueError):
-            permutation_test(np.array([]), np.array([1.0]), mean_diff, R=10)
+            permutation_test(np.array([]), np.array([1.0]), mean_diff, n_resamples=10)
 
     def test_empty_y(self):
         """Empty y raises ValueError."""
         with pytest.raises(ValueError):
-            permutation_test(np.array([1.0]), np.array([]), mean_diff, R=10)
+            permutation_test(np.array([1.0]), np.array([]), mean_diff, n_resamples=10)

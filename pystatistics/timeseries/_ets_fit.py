@@ -19,6 +19,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.core.validation import check_array, check_1d, check_finite
 from pystatistics.timeseries._ets_models import (
     ETSSpec,
@@ -29,13 +30,12 @@ from pystatistics.timeseries._ets_models import (
 
 
 # ---------------------------------------------------------------------------
-# Result dataclass
+# Result dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class ETSResult:
-    """
-    Result from fitting an ETS model.
+class ETSParams:
+    """Immutable parameter payload for a fitted ETS model.
 
     Attributes
     ----------
@@ -102,6 +102,115 @@ class ETSResult:
     n_params: int
     converged: bool
 
+
+@dataclass
+class ETSSolution(SolutionReprMixin):
+    """
+    Result from fitting an ETS model.
+
+    Wraps a :class:`Result` ``[ETSParams]`` envelope; every datum is
+    exposed via a read-only ``@property`` so the public attribute surface
+    is unchanged from the previous flat dataclass.
+    """
+
+    _result: Result[ETSParams]
+
+    @property
+    def spec(self) -> ETSSpec:
+        return self._result.params.spec
+
+    @property
+    def alpha(self) -> float:
+        return self._result.params.alpha
+
+    @property
+    def beta(self) -> float | None:
+        return self._result.params.beta
+
+    @property
+    def gamma(self) -> float | None:
+        return self._result.params.gamma
+
+    @property
+    def phi(self) -> float | None:
+        return self._result.params.phi
+
+    @property
+    def init_level(self) -> float:
+        return self._result.params.init_level
+
+    @property
+    def init_trend(self) -> float | None:
+        return self._result.params.init_trend
+
+    @property
+    def init_season(self) -> NDArray | None:
+        return self._result.params.init_season
+
+    @property
+    def fitted_values(self) -> NDArray:
+        return self._result.params.fitted_values
+
+    @property
+    def residuals(self) -> NDArray:
+        return self._result.params.residuals
+
+    @property
+    def states(self) -> NDArray:
+        return self._result.params.states
+
+    @property
+    def log_likelihood(self) -> float:
+        return self._result.params.log_likelihood
+
+    @property
+    def aic(self) -> float:
+        return self._result.params.aic
+
+    @property
+    def aicc(self) -> float:
+        return self._result.params.aicc
+
+    @property
+    def bic(self) -> float:
+        return self._result.params.bic
+
+    @property
+    def mse(self) -> float:
+        return self._result.params.mse
+
+    @property
+    def mae(self) -> float:
+        return self._result.params.mae
+
+    @property
+    def n_obs(self) -> int:
+        return self._result.params.n_obs
+
+    @property
+    def n_params(self) -> int:
+        return self._result.params.n_params
+
+    @property
+    def converged(self) -> bool:
+        return self._result.params.converged
+
+    @property
+    def info(self) -> dict:
+        return self._result.info
+
+    @property
+    def timing(self) -> dict[str, float] | None:
+        return self._result.timing
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
+
     def summary(self) -> str:
         """
         Return a human-readable summary matching R's ``forecast::ets()`` style.
@@ -146,6 +255,7 @@ class ETSResult:
             f"  Converged: {self.converged}",
         ])
         return "\n".join(lines)
+
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +475,7 @@ def ets(
     phi: float | None = None,
     tol: float = 1e-8,
     max_iter: int = 1000,
-) -> ETSResult:
+) -> ETSSolution:
     """
     Fit an ETS (ExponenTial Smoothing) state space model.
 
@@ -392,7 +502,7 @@ def ets(
 
     Returns
     -------
-    ETSResult
+    ETSSolution
         Fitted model with diagnostics.
 
     Raises
@@ -588,25 +698,33 @@ def ets(
     if spec.season in ("A", "M"):
         result_init_s = np.array(init_states_opt[idx : idx + spec.period])
 
-    return ETSResult(
-        spec=spec,
-        alpha=a_opt,
-        beta=b_opt,
-        gamma=g_opt,
-        phi=p_opt,
-        init_level=result_init_l,
-        init_trend=result_init_b,
-        init_season=result_init_s,
-        fitted_values=fitted_vals,
-        residuals=resid,
-        states=states,
-        log_likelihood=float(ll),
-        aic=float(aic),
-        aicc=float(aicc),
-        bic=float(bic),
-        mse=mse,
-        mae=mae,
-        n_obs=n,
-        n_params=k,
-        converged=converged,
+    return ETSSolution(
+        _result=Result(
+            params=ETSParams(
+                spec=spec,
+                alpha=a_opt,
+                beta=b_opt,
+                gamma=g_opt,
+                phi=p_opt,
+                init_level=result_init_l,
+                init_trend=result_init_b,
+                init_season=result_init_s,
+                fitted_values=fitted_vals,
+                residuals=resid,
+                states=states,
+                log_likelihood=float(ll),
+                aic=float(aic),
+                aicc=float(aicc),
+                bic=float(bic),
+                mse=mse,
+                mae=mae,
+                n_obs=n,
+                n_params=k,
+                converged=converged,
+            ),
+            info={"model": spec.name, "converged": converged},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

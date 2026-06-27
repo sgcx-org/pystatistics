@@ -110,7 +110,7 @@ class TestMissvalsDataset:
     """
 
     def test_loglikelihood(self, missvals_ref):
-        result = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        result = mlest(datasets.missvals, method='em', backend='cpu',
                        tol=1e-8, max_iter=100000)
         assert result.converged
         expected_loglik = missvals_ref['loglik']
@@ -120,14 +120,14 @@ class TestMissvalsDataset:
         )
 
     def test_mean_estimates(self, missvals_ref):
-        result = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        result = mlest(datasets.missvals, method='em', backend='cpu',
                        tol=1e-8, max_iter=100000)
         expected_mu = np.array(missvals_ref['muhat'])
         np.testing.assert_allclose(result.muhat, expected_mu, rtol=1e-6,
                                    err_msg="Mean estimates differ from R")
 
     def test_covariance_symmetric(self):
-        result = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        result = mlest(datasets.missvals, method='em', backend='cpu',
                        tol=1e-8, max_iter=100000)
         np.testing.assert_allclose(
             result.sigmahat, result.sigmahat.T,
@@ -136,13 +136,13 @@ class TestMissvalsDataset:
         )
 
     def test_covariance_positive_definite(self):
-        result = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        result = mlest(datasets.missvals, method='em', backend='cpu',
                        tol=1e-8, max_iter=100000)
         eigenvals = np.linalg.eigvalsh(result.sigmahat)
         assert np.all(eigenvals > 0), f"Not PD: min eigenvalue = {eigenvals.min()}"
 
     def test_dimensions(self):
-        result = mlest(datasets.missvals, algorithm='em', backend='cpu',
+        result = mlest(datasets.missvals, method='em', backend='cpu',
                        tol=1e-8, max_iter=100000)
         assert result.muhat.shape == (5,)
         assert result.sigmahat.shape == (5, 5)
@@ -166,7 +166,7 @@ class TestDirectReachesOptimumOnMissvals:
     """
 
     def test_direct_missvals_matches_r_reference(self, missvals_ref):
-        result = mlest(datasets.missvals, algorithm='direct', backend='cpu',
+        result = mlest(datasets.missvals, method='direct', backend='cpu',
                        max_iter=2000)
         assert abs(result.loglik - missvals_ref['loglik']) < 1e-5, (
             f"loglik {result.loglik} != R reference {missvals_ref['loglik']}"
@@ -203,7 +203,7 @@ class TestConvergenceFlag:
         """A clean, well-conditioned fit with a large summed objective must
         report ``converged=True``."""
         X = self._clean_data(n=5000)
-        result = mlest(X, backend='cpu', algorithm='direct')
+        result = mlest(X, backend='cpu', method='direct')
         assert result.converged, (
             "Clean well-conditioned fit should converge; a False flag here is "
             "the objective-scale false negative this fix addresses."
@@ -216,7 +216,7 @@ class TestConvergenceFlag:
         must still report ``converged=False`` — the fix must not blanket-suppress
         the flag."""
         X = self._clean_data(n=5000)
-        result = mlest(X, backend='cpu', algorithm='direct', max_iter=2)
+        result = mlest(X, backend='cpu', method='direct', max_iter=2)
         assert not result.converged, (
             "A 2-iteration fit is far from the optimum and must report "
             "non-convergence."

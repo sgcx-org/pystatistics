@@ -13,6 +13,7 @@ Dunnett:
 """
 
 from typing import Any
+from pystatistics.core.exceptions import ValidationError
 
 import numpy as np
 from numpy.typing import NDArray
@@ -215,7 +216,7 @@ def dunnett_test(
     levels = sorted(set(group_str))
 
     if control not in levels:
-        raise ValueError(
+        raise ValidationError(
             f"Control group {control!r} not found in levels: {levels}"
         )
 

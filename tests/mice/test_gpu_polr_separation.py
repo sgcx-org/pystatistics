@@ -181,7 +181,7 @@ class TestSeparatedFitCPU:
         """The GPU fit lands on the CPU penalised MLE (same scale-aware slope
         ridge), threshold-by-threshold and slope-by-slope."""
         y, X, K = _separated_dataset(seed=0)
-        fit = polr(y, X, ridge=_slope_ridge(X.astype(np.float64)))
+        fit = polr(y, X, l2=_slope_ridge(X.astype(np.float64)))
         alpha, beta = _gpu_fit(y, X, K, torch.device("cpu"), torch.float64)
         np.testing.assert_allclose(
             alpha.numpy(), fit.threshold_values, atol=1e-2, rtol=1e-3
@@ -300,7 +300,7 @@ class TestNearEmptyCategoryCPU:
 
     def test_fit_matches_cpu_ridged(self):
         y, X, K = _near_empty_dataset(seed=0)
-        fit = polr(y, X, ridge=_slope_ridge(X.astype(np.float64)))
+        fit = polr(y, X, l2=_slope_ridge(X.astype(np.float64)))
         alpha, beta = _gpu_fit(y, X, K, torch.device("cpu"), torch.float64)
         np.testing.assert_allclose(
             alpha.numpy(), fit.threshold_values, atol=1e-2, rtol=1e-3

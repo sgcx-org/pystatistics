@@ -15,13 +15,13 @@ class TestOneSampleTTest:
     """One-sample t-test: H0: mean(x) = mu."""
 
     def test_basic(self):
-        """t.test(1:5, mu=3) -> t=0, df=4, p=1."""
-        result = t_test([1, 2, 3, 4, 5], mu=3)
+        """t.test(1:5, pop_mean=3) -> t=0, df=4, p=1."""
+        result = t_test([1, 2, 3, 4, 5], pop_mean=3)
         assert result.statistic == pytest.approx(0.0, abs=1e-15)
         assert result.parameter == {"df": 4.0}
         assert result.p_value == pytest.approx(1.0, abs=1e-15)
         assert result.method == "One Sample t-test"
-        assert result.alternative == "two.sided"
+        assert result.alternative == "two-sided"
         assert result.estimate == {"mean of x": pytest.approx(3.0)}
         assert result.null_value == {"mean": 3.0}
 
@@ -34,12 +34,12 @@ class TestOneSampleTTest:
 
     def test_ci(self):
         """Confidence interval matches R."""
-        result = t_test([1, 2, 3, 4, 5], mu=3)
+        result = t_test([1, 2, 3, 4, 5], pop_mean=3)
         assert_allclose(result.conf_int, [1.036757, 4.963243], rtol=1e-5)
 
     def test_alternative_greater(self):
         """One-sided greater."""
-        result = t_test([1, 2, 3, 4, 5], mu=0, alternative="greater")
+        result = t_test([1, 2, 3, 4, 5], pop_mean=0, alternative="greater")
         assert result.statistic == pytest.approx(4.242640687119285, rel=1e-10)
         assert result.p_value == pytest.approx(0.0066177997818413, rel=1e-10)
         assert result.conf_int[0] == pytest.approx(1.492556680937677, rel=1e-5)
@@ -47,7 +47,7 @@ class TestOneSampleTTest:
 
     def test_alternative_less(self):
         """One-sided less."""
-        result = t_test([1, 2, 3, 4, 5], mu=0, alternative="less")
+        result = t_test([1, 2, 3, 4, 5], pop_mean=0, alternative="less")
         assert result.statistic == pytest.approx(4.242640687119285, rel=1e-10)
         assert result.p_value == pytest.approx(0.99338220021815871, rel=1e-10)
         assert np.isinf(result.conf_int[0]) and result.conf_int[0] < 0
@@ -55,15 +55,15 @@ class TestOneSampleTTest:
 
     def test_nan_removal(self):
         """NaN values are silently removed."""
-        result = t_test([1, 2, np.nan, 4, 5], mu=3)
-        # Should behave like t_test([1, 2, 4, 5], mu=3)
-        result2 = t_test([1, 2, 4, 5], mu=3)
+        result = t_test([1, 2, np.nan, 4, 5], pop_mean=3)
+        # Should behave like t_test([1, 2, 4, 5], pop_mean=3)
+        result2 = t_test([1, 2, 4, 5], pop_mean=3)
         assert result.statistic == pytest.approx(result2.statistic, rel=1e-10)
         assert result.p_value == pytest.approx(result2.p_value, rel=1e-10)
 
     def test_summary_format(self):
         """summary() produces R-style output."""
-        result = t_test([1, 2, 3, 4, 5], mu=3)
+        result = t_test([1, 2, 3, 4, 5], pop_mean=3)
         s = result.summary()
         assert "One Sample t-test" in s
         assert "data:  x" in s
@@ -99,7 +99,7 @@ class TestTwoSampleTTest:
     def test_pooled(self):
         """t.test(1:5, 4:8, var.equal=TRUE) -> pooled."""
         result = t_test(
-            [1, 2, 3, 4, 5], [4, 5, 6, 7, 8], var_equal=True
+            [1, 2, 3, 4, 5], [4, 5, 6, 7, 8], equal_var=True
         )
         assert result.statistic == pytest.approx(-3.0, rel=1e-10)
         assert result.parameter == {"df": pytest.approx(8.0, rel=1e-10)}
@@ -118,7 +118,7 @@ class TestTwoSampleTTest:
 
     def test_mu_nonzero(self):
         """Two-sample with non-zero mu (testing difference != mu)."""
-        result = t_test([1, 2, 3, 4, 5], [4, 5, 6, 7, 8], mu=-3)
+        result = t_test([1, 2, 3, 4, 5], [4, 5, 6, 7, 8], pop_mean=-3)
         # Under H0: mean(x) - mean(y) = -3, actual diff = -3
         assert result.statistic == pytest.approx(0.0, abs=1e-15)
         assert result.p_value == pytest.approx(1.0, abs=1e-15)

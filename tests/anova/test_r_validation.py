@@ -307,7 +307,7 @@ class TestLeveneValidation:
 
     def test_brown_forsythe_f_matches_r(self):
         meta, r = _load_fixture("levene")
-        result = levene_test(meta["y"], meta["group"], center="median")
+        result = levene_test(meta["y"], meta["group"], location="median")
         assert_allclose(
             result.f_value, r["bf_f"], rtol=1e-8,
             err_msg="Brown-Forsythe F mismatch",
@@ -315,7 +315,7 @@ class TestLeveneValidation:
 
     def test_brown_forsythe_p_matches_r(self):
         meta, r = _load_fixture("levene")
-        result = levene_test(meta["y"], meta["group"], center="median")
+        result = levene_test(meta["y"], meta["group"], location="median")
         assert_allclose(
             result.p_value, r["bf_p"], rtol=1e-6,
             err_msg="Brown-Forsythe p mismatch",
@@ -323,13 +323,13 @@ class TestLeveneValidation:
 
     def test_brown_forsythe_df_matches_r(self):
         meta, r = _load_fixture("levene")
-        result = levene_test(meta["y"], meta["group"], center="median")
+        result = levene_test(meta["y"], meta["group"], location="median")
         assert result.df_between == r["bf_df1"]
         assert result.df_within == r["bf_df2"]
 
     def test_levene_mean_f_matches_r(self):
         meta, r = _load_fixture("levene")
-        result = levene_test(meta["y"], meta["group"], center="mean")
+        result = levene_test(meta["y"], meta["group"], location="mean")
         assert_allclose(
             result.f_value, r["levene_f"], rtol=1e-8,
             err_msg="Levene (mean) F mismatch",
@@ -337,7 +337,7 @@ class TestLeveneValidation:
 
     def test_levene_mean_p_matches_r(self):
         meta, r = _load_fixture("levene")
-        result = levene_test(meta["y"], meta["group"], center="mean")
+        result = levene_test(meta["y"], meta["group"], location="mean")
         assert_allclose(
             result.p_value, r["levene_p"], rtol=1e-6,
             err_msg="Levene (mean) p mismatch",

@@ -21,7 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.result import Result
-from pystatistics.core.exceptions import NumericalError
+from pystatistics.core.exceptions import NumericalError, ValidationError
 from pystatistics.core.compute.timing import Timer
 from pystatistics.regression.design import Design
 from pystatistics.regression.families import Family
@@ -64,17 +64,14 @@ class GPUIRLSBackend:
 
         elif device == 'mps':
             if use_fp64:
-                raise RuntimeError(
-                    "backend='gpu_fp64' requires CUDA: Apple Silicon (Metal/MPS) "
-                    "has no float64. Use backend='gpu' (float32) on Apple Silicon, "
-                    "or backend='cpu' for a double-precision fit."
-                )
+                from pystatistics.core.compute.backend import FP64_REQUIRES_CUDA_MSG
+                raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
             self.device = torch.device('mps')
             self.dtype = torch.float32
             self.device_name = 'Apple Silicon GPU (MPS)'
 
         else:
-            raise ValueError(
+            raise ValidationError(
                 f"Unknown GPU device: {device!r}. Use 'cuda' or 'mps'."
             )
         self.use_fp64 = use_fp64

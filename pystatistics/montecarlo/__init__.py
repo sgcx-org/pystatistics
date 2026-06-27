@@ -8,8 +8,8 @@ Usage:
     from pystatistics.montecarlo import boot, boot_ci, permutation_test
 
     # Bootstrap
-    result = boot(data, statistic, R=999, seed=42)
-    ci_result = boot_ci(result, type="perc")
+    result = boot(data, statistic, n_resamples=999, seed=42)
+    ci_result = boot_ci(result, ci_type="perc")
 
     # Permutation test
     result = permutation_test(x, y, statistic, R=9999)

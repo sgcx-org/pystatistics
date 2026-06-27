@@ -12,8 +12,9 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
-from pystatistics.timeseries._common import StationarityResult
+from pystatistics.timeseries._common import StationarityParams, StationaritySolution
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +153,7 @@ def adf_test(
     *,
     n_lags: int | None = None,
     regression: str = "c",
-) -> StationarityResult:
+) -> StationaritySolution:
     """
     Augmented Dickey-Fuller test for unit root.
 
@@ -183,7 +184,7 @@ def adf_test(
 
     Returns
     -------
-    StationarityResult
+    StationaritySolution
         Test result with statistic, p-value, and critical values.
 
     Raises
@@ -302,14 +303,22 @@ def adf_test(
     critical_values = _adf_critical_values_for_n(regression, n_eff)
     p_value = _adf_pvalue(float(tau), regression, n_eff)
 
-    return StationarityResult(
-        statistic=float(tau),
-        p_value=p_value,
-        method="Augmented Dickey-Fuller",
-        alternative="stationary",
-        n_lags=n_lags,
-        n_obs=n_eff,
-        critical_values=critical_values,
+    return StationaritySolution(
+        _result=Result(
+            params=StationarityParams(
+                statistic=float(tau),
+                p_value=p_value,
+                method="Augmented Dickey-Fuller",
+                alternative="stationary",
+                n_lags=n_lags,
+                n_obs=n_eff,
+                critical_values=critical_values,
+            ),
+            info={"method": "adf", "regression": regression},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )
 
 
@@ -386,7 +395,7 @@ def kpss_test(
     *,
     regression: str = "c",
     n_lags: int | None = None,
-) -> StationarityResult:
+) -> StationaritySolution:
     """
     KPSS test for stationarity.
 
@@ -417,7 +426,7 @@ def kpss_test(
 
     Returns
     -------
-    StationarityResult
+    StationaritySolution
         Test result with statistic, p-value, and critical values.
 
     Raises
@@ -505,12 +514,20 @@ def kpss_test(
 
     p_value = _kpss_pvalue(float(eta), regression)
 
-    return StationarityResult(
-        statistic=float(eta),
-        p_value=p_value,
-        method=f"KPSS Test for {'Level' if regression == 'c' else 'Trend'} Stationarity",
-        alternative="unit root",
-        n_lags=n_lags,
-        n_obs=n,
-        critical_values=critical_values,
+    return StationaritySolution(
+        _result=Result(
+            params=StationarityParams(
+                statistic=float(eta),
+                p_value=p_value,
+                method=f"KPSS Test for {'Level' if regression == 'c' else 'Trend'} Stationarity",
+                alternative="unit root",
+                n_lags=n_lags,
+                n_obs=n,
+                critical_values=critical_values,
+            ),
+            info={"method": "kpss", "regression": regression},
+            timing=None,
+            backend_name="cpu",
+            warnings=(),
+        )
     )

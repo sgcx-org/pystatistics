@@ -11,15 +11,20 @@ from typing import Literal
 import numpy as np
 from numpy.typing import ArrayLike
 
-from pystatistics.core.compute.device import select_device
+from pystatistics.core.compute.backend import resolve_backend
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.descriptive.design import DescriptiveDesign
 from pystatistics.descriptive.solution import DescriptiveSolution
 from pystatistics.descriptive.backends.cpu import CPUDescriptiveBackend
 
 
-UseMethod = Literal['everything', 'complete.obs', 'pairwise.complete.obs']
+NaAction = Literal['everything', 'complete', 'pairwise']
+# Public na_action values map to the backends' internal R-style codes.
+_NA_CODE = {'everything': 'everything', 'complete': 'complete.obs',
+            'pairwise': 'pairwise.complete.obs'}
 CorMethod = Literal['pearson', 'spearman', 'kendall']
+# Descriptive stats have no GPU float64 path (the win is bandwidth-bound moment
+# reductions, not precision); the honest subset omits 'gpu_fp64'.
 BackendChoice = Literal['auto', 'cpu', 'gpu']
 
 
@@ -31,32 +36,19 @@ def _ensure_design(data: ArrayLike | DescriptiveDesign) -> DescriptiveDesign:
 
 
 def _get_backend(backend: BackendChoice | None):
-    """Select backend based on preference. None → 'cpu'."""
-    if backend is None or backend == 'cpu':
+    """Select backend from the resolved (device, precision) target."""
+    target = resolve_backend(backend, supports_fp64=False)
+    if target.device_type == 'cpu':
         return CPUDescriptiveBackend()
 
-    if backend == 'auto':
-        device = select_device('auto')
-        if device.device_type in ('cuda', 'mps'):
-            try:
-                from pystatistics.descriptive.backends.gpu import GPUDescriptiveBackend
-                return GPUDescriptiveBackend(device=device)
-            except ImportError:
-                return CPUDescriptiveBackend()
-        return CPUDescriptiveBackend()
-
-    if backend == 'gpu':
-        device = select_device('gpu')
-        from pystatistics.descriptive.backends.gpu import GPUDescriptiveBackend
-        return GPUDescriptiveBackend(device=device)
-
-    raise ValidationError(f"Unknown backend: {backend!r}")
+    from pystatistics.descriptive.backends.gpu import GPUDescriptiveBackend
+    return GPUDescriptiveBackend(device=target.device)
 
 
 def describe(
     data: ArrayLike | DescriptiveDesign,
     *,
-    use: UseMethod = 'everything',
+    na_action: NaAction = 'everything',
     quantile_type: int = 7,
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
@@ -71,10 +63,10 @@ def describe(
     ----------
     data : array-like or DescriptiveDesign
         1D or 2D data matrix.
-    use : str
+    na_action : str
         Missing data handling. 'everything' (propagate NaN),
-        'complete.obs' (listwise deletion),
-        'pairwise.complete.obs' (pairwise deletion for cor/cov).
+        'complete' (listwise deletion),
+        'pairwise' (pairwise deletion for cor/cov).
     quantile_type : int
         R quantile type (1-9). Default 7 matches R default.
     backend : str or None
@@ -96,7 +88,7 @@ def describe(
     result = be.solve(
         design,
         compute=compute,
-        use=use,
+        use=_NA_CODE[na_action],
         quantile_probs=np.array([0.0, 0.25, 0.5, 0.75, 1.0]),
         quantile_type=quantile_type,
     )
@@ -109,7 +101,7 @@ def cor(
     y: ArrayLike | None = None,
     *,
     method: CorMethod = 'pearson',
-    use: UseMethod = 'everything',
+    na_action: NaAction = 'everything',
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
@@ -124,7 +116,7 @@ def cor(
         stacking as a 2-column matrix.
     method : str
         'pearson', 'spearman', 'kendall'.
-    use : str
+    na_action : str
         Missing data handling.
     backend : str or None
         Default None → 'cpu' (R-reference path). Explicit: 'cpu',
@@ -153,7 +145,7 @@ def cor(
     result = be.solve(
         design,
         compute={compute_key},
-        use=use,
+        use=_NA_CODE[na_action],
         cor_method=method,
     )
 
@@ -164,7 +156,7 @@ def cov(
     x: ArrayLike | DescriptiveDesign,
     y: ArrayLike | None = None,
     *,
-    use: UseMethod = 'everything',
+    na_action: NaAction = 'everything',
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
@@ -176,7 +168,7 @@ def cov(
         2D data matrix (columns are variables).
     y : array-like, optional
         Second variable (1D).
-    use : str
+    na_action : str
         Missing data handling.
     backend : str or None
         Default None → 'cpu' (R-reference path). Explicit: 'cpu',
@@ -195,7 +187,7 @@ def cov(
 
     be = _get_backend(backend)
 
-    result = be.solve(design, compute={'cov'}, use=use)
+    result = be.solve(design, compute={'cov'}, use=_NA_CODE[na_action])
 
     return DescriptiveSolution(_result=result, _design=design)
 
@@ -203,7 +195,7 @@ def cov(
 def var(
     x: ArrayLike | DescriptiveDesign,
     *,
-    use: UseMethod = 'everything',
+    na_action: NaAction = 'everything',
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
@@ -216,7 +208,7 @@ def var(
     ----------
     x : array-like or DescriptiveDesign
         1D or 2D data.
-    use : str
+    na_action : str
         Missing data handling.
     backend : str or None
         Default None → 'cpu' (R-reference path). Explicit: 'cpu',
@@ -231,9 +223,9 @@ def var(
 
     # R var() on a matrix returns cov(), but we always populate variance too
     if design.p > 1:
-        result = be.solve(design, compute={'var', 'cov'}, use=use)
+        result = be.solve(design, compute={'var', 'cov'}, use=_NA_CODE[na_action])
     else:
-        result = be.solve(design, compute={'var'}, use=use)
+        result = be.solve(design, compute={'var'}, use=_NA_CODE[na_action])
 
     return DescriptiveSolution(_result=result, _design=design)
 
@@ -242,8 +234,8 @@ def quantile(
     x: ArrayLike | DescriptiveDesign,
     probs: ArrayLike | None = None,
     *,
-    type: int = 7,
-    use: UseMethod = 'everything',
+    quantile_type: int = 7,
+    na_action: NaAction = 'everything',
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
@@ -255,9 +247,9 @@ def quantile(
         1D or 2D data.
     probs : array-like, optional
         Probabilities in [0, 1]. Default (0, 0.25, 0.5, 0.75, 1.0).
-    type : int
+    quantile_type : int
         R quantile type 1-9. Default 7 (R default).
-    use : str
+    na_action : str
         Missing data handling.
     backend : str or None
         Default None → 'cpu' (R-reference path). Explicit: 'cpu',
@@ -267,8 +259,8 @@ def quantile(
     -------
     DescriptiveSolution with quantiles populated.
     """
-    if type not in range(1, 10):
-        raise ValidationError(f"Quantile type must be 1-9, got {type}")
+    if quantile_type not in range(1, 10):
+        raise ValidationError(f"Quantile type must be 1-9, got {quantile_type}")
 
     design = _ensure_design(x)
     be = _get_backend(backend)
@@ -281,9 +273,9 @@ def quantile(
     result = be.solve(
         design,
         compute={'quantiles'},
-        use=use,
+        use=_NA_CODE[na_action],
         quantile_probs=q_probs,
-        quantile_type=type,
+        quantile_type=quantile_type,
     )
 
     return DescriptiveSolution(_result=result, _design=design)
@@ -292,7 +284,7 @@ def quantile(
 def summary(
     x: ArrayLike | DescriptiveDesign,
     *,
-    use: UseMethod = 'everything',
+    na_action: NaAction = 'everything',
     backend: BackendChoice | None = None,
 ) -> DescriptiveSolution:
     """
@@ -304,7 +296,7 @@ def summary(
     ----------
     x : array-like or DescriptiveDesign
         1D or 2D data.
-    use : str
+    na_action : str
         Missing data handling.
     backend : str or None
         Default None → 'cpu' (R-reference path). Explicit: 'cpu',
@@ -317,6 +309,6 @@ def summary(
     design = _ensure_design(x)
     be = _get_backend(backend)
 
-    result = be.solve(design, compute={'summary', 'mean'}, use=use)
+    result = be.solve(design, compute={'summary', 'mean'}, use=_NA_CODE[na_action])
 
     return DescriptiveSolution(_result=result, _design=design)

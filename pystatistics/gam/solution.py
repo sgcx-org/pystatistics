@@ -14,12 +14,12 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy import stats as sp_stats
 
-from pystatistics.core.result import Result
+from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.gam._common import GAMParams, SmoothInfo
 from pystatistics.regression._formatting import significance_stars
 
 
-class GAMSolution:
+class GAMSolution(SolutionReprMixin):
     """User-facing GAM result with convenient properties and R-style output.
 
     Wraps a ``Result[GAMParams]`` and provides:

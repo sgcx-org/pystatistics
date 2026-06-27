@@ -13,7 +13,7 @@ from numpy.testing import assert_allclose
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.timeseries._ets_models import ETSSpec, ets_recursion, parse_ets_spec
-from pystatistics.timeseries._ets_fit import ETSResult, ets
+from pystatistics.timeseries._ets_fit import ETSSolution, ets
 from pystatistics.timeseries._ets_forecast import ETSForecast, forecast_ets
 
 

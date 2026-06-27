@@ -203,14 +203,14 @@ class TestPolrLogistic:
     def test_basic_fit(self, simple_data):
         """polr fits and returns an OrdinalSolution."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         assert isinstance(sol, OrdinalSolution)
         assert sol.converged
 
     def test_coefficient_recovery(self, simple_data):
         """Recovered betas are close to true values [1.0, -0.5]."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic', names=['x1', 'x2'])
+        sol = polr(y, X, link='logistic', names=['x1', 'x2'])
 
         # With n=500, we expect reasonable recovery
         assert_allclose(sol.coefficients[0], 1.0, atol=0.25)
@@ -219,7 +219,7 @@ class TestPolrLogistic:
     def test_threshold_recovery(self, simple_data):
         """Recovered thresholds are close to true values [-1.0, 1.0]."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
 
         assert_allclose(sol.threshold_values[0], -1.0, atol=0.3)
         assert_allclose(sol.threshold_values[1], 1.0, atol=0.3)
@@ -227,14 +227,14 @@ class TestPolrLogistic:
     def test_threshold_ordering(self, simple_data):
         """Thresholds are strictly ordered."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         alpha = sol.threshold_values
         assert np.all(np.diff(alpha) > 0)
 
     def test_coef_dict(self, simple_data):
         """coef property returns correctly named dictionary."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic', names=['age', 'income'])
+        sol = polr(y, X, link='logistic', names=['age', 'income'])
         coef = sol.coef
         assert 'age' in coef
         assert 'income' in coef
@@ -244,8 +244,8 @@ class TestPolrLogistic:
         """thresholds property returns correctly labeled dictionary."""
         y, X = simple_data
         sol = polr(
-            y, X, method='logistic',
-            level_names=['low', 'medium', 'high'],
+            y, X, link='logistic',
+            category_names=['low', 'medium', 'high'],
         )
         thresh = sol.thresholds
         assert 'low|medium' in thresh
@@ -254,14 +254,14 @@ class TestPolrLogistic:
     def test_standard_errors_positive(self, simple_data):
         """Standard errors are all positive."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         assert np.all(sol.standard_errors > 0)
         assert np.all(sol.threshold_standard_errors > 0)
 
     def test_z_and_p_values(self, simple_data):
         """z-values and p-values are computed correctly."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
 
         z = sol.z_values
         p = sol.p_values
@@ -276,7 +276,7 @@ class TestPolrLogistic:
     def test_deviance_and_aic(self, simple_data):
         """Deviance and AIC are consistent."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
 
         assert sol.deviance == pytest.approx(-2 * sol.log_likelihood)
         n_params = 2 + 2  # 2 thresholds + 2 betas
@@ -285,7 +285,7 @@ class TestPolrLogistic:
     def test_n_obs(self, simple_data):
         """n_obs matches input size."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         assert sol.n_obs == len(y)
 
 
@@ -299,14 +299,14 @@ class TestPolrProbit:
     def test_probit_fits(self, simple_data):
         """polr with probit link converges."""
         y, X = simple_data
-        sol = polr(y, X, method='probit')
+        sol = polr(y, X, link='probit')
         assert sol.converged
-        assert sol.method == 'probit'
+        assert sol.link == 'probit'
 
     def test_probit_coefficients_reasonable(self, simple_data):
         """Probit coefficients have correct sign and approximate magnitude."""
         y, X = simple_data
-        sol = polr(y, X, method='probit')
+        sol = polr(y, X, link='probit')
 
         # Probit coefficients are roughly logistic / 1.7
         assert sol.coefficients[0] > 0  # positive for x1
@@ -323,9 +323,9 @@ class TestPolrCLogLog:
     def test_cloglog_fits(self, simple_data):
         """polr with cloglog link converges."""
         y, X = simple_data
-        sol = polr(y, X, method='cloglog')
+        sol = polr(y, X, link='cloglog')
         assert sol.converged
-        assert sol.method == 'cloglog'
+        assert sol.link == 'cloglog'
 
 
 # =========================================================================
@@ -339,9 +339,9 @@ class TestPolrFourLevels:
         """Fits a 4-level model correctly."""
         y, X = four_level_data
         sol = polr(
-            y, X, method='logistic',
+            y, X, link='logistic',
             names=['x1', 'x2', 'x3'],
-            level_names=['none', 'mild', 'moderate', 'severe'],
+            category_names=['none', 'mild', 'moderate', 'severe'],
         )
         assert sol.converged
         assert len(sol.threshold_values) == 3
@@ -350,15 +350,15 @@ class TestPolrFourLevels:
     def test_four_level_threshold_ordering(self, four_level_data):
         """Four thresholds are strictly ordered."""
         y, X = four_level_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         assert np.all(np.diff(sol.threshold_values) > 0)
 
     def test_four_level_threshold_labels(self, four_level_data):
         """Threshold dict has correct labels for 4 levels."""
         y, X = four_level_data
         sol = polr(
-            y, X, method='logistic',
-            level_names=['A', 'B', 'C', 'D'],
+            y, X, link='logistic',
+            category_names=['A', 'B', 'C', 'D'],
         )
         thresh = sol.thresholds
         assert 'A|B' in thresh
@@ -420,14 +420,14 @@ class TestPolrValidation:
         y = np.array([0, 1, 0, 1])
         X = np.ones((4, 1))
         with pytest.raises(ValidationError, match="level_names length"):
-            polr(y, X, level_names=['a', 'b', 'c'])
+            polr(y, X, category_names=['a', 'b', 'c'])
 
     def test_invalid_method_raises(self):
         """Unknown method raises ValidationError."""
         y = np.array([0, 1, 0, 1])
         X = np.ones((4, 1))
         with pytest.raises(ValidationError, match="Unknown method"):
-            polr(y, X, method='invalid')
+            polr(y, X, link='invalid')
 
     def test_nan_in_X_raises(self):
         """NaN in X raises ValidationError."""
@@ -460,7 +460,7 @@ class TestSummary:
     def test_summary_contains_sections(self, simple_data):
         """Summary contains Coefficients, Intercepts, Deviance, AIC."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic', names=['x1', 'x2'])
+        sol = polr(y, X, link='logistic', names=['x1', 'x2'])
         text = sol.summary()
 
         assert 'Coefficients:' in text
@@ -471,7 +471,7 @@ class TestSummary:
     def test_summary_contains_variable_names(self, simple_data):
         """Summary shows the provided variable names."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic', names=['age', 'income'])
+        sol = polr(y, X, link='logistic', names=['age', 'income'])
         text = sol.summary()
         assert 'age' in text
         assert 'income' in text
@@ -480,8 +480,8 @@ class TestSummary:
         """Summary shows threshold labels from level_names."""
         y, X = simple_data
         sol = polr(
-            y, X, method='logistic',
-            level_names=['low', 'medium', 'high'],
+            y, X, link='logistic',
+            category_names=['low', 'medium', 'high'],
         )
         text = sol.summary()
         assert 'low|medium' in text
@@ -490,7 +490,7 @@ class TestSummary:
     def test_repr(self, simple_data):
         """repr includes key information."""
         y, X = simple_data
-        sol = polr(y, X, method='logistic')
+        sol = polr(y, X, link='logistic')
         r = repr(sol)
         assert 'OrdinalSolution' in r
         assert 'logistic' in r
@@ -563,7 +563,7 @@ class TestPolrGPU:
         y, X = simple_data
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             polr(y, X, backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(
@@ -585,7 +585,7 @@ class TestPolrGPU:
             pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
         y, X = four_level_data
         r_cpu = polr(y, X, backend="cpu")
-        r_gpu = polr(y, X, backend="gpu", use_fp64=True)
+        r_gpu = polr(y, X, backend="gpu_fp64")
         # The CPU reference is not the exact MLE to 1e-8 in coefficient
         # space: the CPU path stops on the half-Newton-decrement criterion
         # (_DECREMENT_TOL=1e-8 in _solver.py), which bounds the remaining
@@ -614,7 +614,7 @@ class TestPolrGPU:
             pytest.skip("no GPU available")
         y, X = four_level_data
         r_cpu = polr(y, X, backend="cpu")
-        r_gpu = polr(y, X, backend="gpu", use_fp64=False)
+        r_gpu = polr(y, X, backend="gpu")
         assert r_cpu.log_likelihood == pytest.approx(
             r_gpu.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
         )
@@ -636,8 +636,8 @@ class TestPolrGPU:
             pytest.skip("no GPU available")
         y, X = four_level_data
         gds = DataSource.from_arrays(X=X, y=y).to(self._gpu_device())
-        r_numpy = polr(y, X, backend="gpu", use_fp64=False)
-        r_tensor = polr(gds["y"], gds["X"], use_fp64=False)  # inferred
+        r_numpy = polr(y, X, backend="gpu")
+        r_tensor = polr(gds["y"], gds["X"])  # inferred
         assert r_numpy.log_likelihood == pytest.approx(
             r_tensor.log_likelihood, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
         )
@@ -685,7 +685,7 @@ class TestConvergenceGuard:
             y, X = self._near_separation(seed)
             if len(np.unique(y)) < 4:
                 continue
-            sol = polr(y, X, method="logistic")  # must not raise
+            sol = polr(y, X, link="logistic")  # must not raise
             assert sol.converged
 
     def test_polished_estimate_is_stationary(self):
@@ -708,7 +708,7 @@ class TestConvergenceGuard:
         y = np.where(x < -1, 0, np.where(x < 1, 1, 2)).astype(np.intp)
         X = x.reshape(-1, 1)
         with pytest.raises(ConvergenceError):
-            polr(y, X, method="logistic")
+            polr(y, X, link="logistic")
 
 
 # =========================================================================
@@ -734,18 +734,18 @@ class TestRidgePenalty:
 
     def test_unpenalized_runs_to_max_iter_and_is_rejected(self):
         """Baseline: without the ridge the same data exhausts the optimizer
-        budget and is rejected (documents the issue and that ridge=0 — the
+        budget and is rejected (documents the issue and that l2=0 — the
         R-validated default — is unchanged)."""
         y, X = self._separated()
         with pytest.raises(ConvergenceError) as exc:
-            polr(y, X, method="logistic", max_iter=200)
+            polr(y, X, link="logistic", max_iter=200)
         assert exc.value.iterations == 200
 
     def test_ridge_converges_well_below_max_iter(self):
         """With the ridge the fit converges in a small fraction of the budget
         (issue #7 performance goal: no longer runs to max_iter)."""
         y, X = self._separated()
-        sol = polr(y, X, method="logistic", ridge=0.05, max_iter=200)
+        sol = polr(y, X, link="logistic", l2=0.05, max_iter=200)
         assert sol.converged
         # Far below the 200-iteration limit the unpenalized fit exhausts.
         assert sol._result.params.n_iter < 80
@@ -754,7 +754,7 @@ class TestRidgePenalty:
         """The penalized estimate is finite with a positive-definite vcov —
         usable for the MICE posterior draw (issue #7 correctness goal)."""
         y, X = self._separated()
-        sol = polr(y, X, method="logistic", ridge=0.05)
+        sol = polr(y, X, link="logistic", l2=0.05)
         assert np.all(np.isfinite(sol.coefficients))
         assert np.all(np.isfinite(sol.vcov))
         assert np.linalg.eigvalsh(sol.vcov).min() > 0.0
@@ -767,17 +767,17 @@ class TestRidgePenalty:
         u = 0.8 * X[:, 0] - 0.4 * X[:, 1] + rng.logistic(size=2000)
         y = np.digitize(u, np.quantile(u, [0.4, 0.7])).astype(np.intp)
         c0 = polr(y, X).coefficients
-        c1 = polr(y, X, ridge=1e-5 * X.shape[0]).coefficients
+        c1 = polr(y, X, l2=1e-5 * X.shape[0]).coefficients
         assert_allclose(c1, c0, rtol=1e-3)
 
     def test_ridge_zero_matches_default(self):
-        """Passing ridge=0.0 explicitly is identical to the default fit."""
+        """Passing l2=0.0 explicitly is identical to the default fit."""
         rng = np.random.default_rng(3)
         X = rng.standard_normal((600, 2))
         u = X[:, 0] - 0.5 * X[:, 1] + rng.logistic(size=600)
         y = np.digitize(u, np.quantile(u, [0.4, 0.7])).astype(np.intp)
         a = polr(y, X)
-        b = polr(y, X, ridge=0.0)
+        b = polr(y, X, l2=0.0)
         assert_allclose(a.coefficients, b.coefficients, rtol=0, atol=0)
 
     def test_negative_or_nonfinite_ridge_rejected(self):
@@ -785,11 +785,11 @@ class TestRidgePenalty:
         y, X = self._separated(n=400)
         for bad in (-1.0, -1e-9, np.inf, np.nan):
             with pytest.raises(ValidationError):
-                polr(y, X, ridge=bad)
+                polr(y, X, l2=bad)
 
     def test_positive_ridge_on_gpu_backend_rejected(self):
         """ridge>0 is CPU-only; requesting it on the GPU backend fails loudly
         rather than silently ignoring the penalty (Rule 1)."""
         y, X = self._separated(n=400)
         with pytest.raises((ValidationError, RuntimeError)):
-            polr(y, X, ridge=0.1, backend="gpu")
+            polr(y, X, l2=0.1, backend="gpu")

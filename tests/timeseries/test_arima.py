@@ -13,7 +13,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
-from pystatistics.timeseries._arima_fit import ARIMAResult, arima
+from pystatistics.timeseries._arima_fit import ARIMASolution, arima
 from pystatistics.timeseries._arima_forecast import (
     ARIMAForecast,
     forecast_arima,
@@ -21,7 +21,7 @@ from pystatistics.timeseries._arima_forecast import (
     _undifference,
 )
 from pystatistics.timeseries._arima_order import (
-    AutoARIMAResult,
+    AutoARIMASolution,
     auto_arima,
     _determine_d,
 )
@@ -210,7 +210,7 @@ class TestARIMAFitting:
         assert len(result.fitted_values) == len(result.residuals)
 
     def test_result_is_frozen(self, ar1_series):
-        """ARIMAResult is a frozen dataclass."""
+        """ARIMASolution is a frozen dataclass."""
         result = arima(ar1_series, order=(1, 0, 0))
         with pytest.raises(AttributeError):
             result.sigma2 = 999.0  # type: ignore[misc]
@@ -414,7 +414,7 @@ class TestAutoARIMA:
     def test_ar1_selects_ar(self, ar1_series):
         """AR(1) data: auto_arima selects p >= 1."""
         result = auto_arima(ar1_series, max_p=3, max_q=3, stepwise=True)
-        assert isinstance(result, AutoARIMAResult)
+        assert isinstance(result, AutoARIMASolution)
         p, d, q = result.best_order
         # Should select some AR component
         assert p >= 1 or d >= 1
@@ -473,7 +473,7 @@ class TestAutoARIMA:
         assert "Best model" in s
 
     def test_auto_arima_result_is_frozen(self, ar1_series):
-        """AutoARIMAResult is a frozen dataclass."""
+        """AutoARIMASolution is a frozen dataclass."""
         result = auto_arima(ar1_series, max_p=2, max_q=2, stepwise=True)
         with pytest.raises(AttributeError):
             result.best_aic = 0.0  # type: ignore[misc]
@@ -535,7 +535,7 @@ class TestValidation:
             forecast_arima(result, np.array([]), h=5)
 
     def test_forecast_wrong_fitted_type(self, ar1_series):
-        """Passing non-ARIMAResult raises ValidationError."""
+        """Passing non-ARIMASolution raises ValidationError."""
         with pytest.raises(ValidationError):
             forecast_arima("not a result", ar1_series, h=5)  # type: ignore[arg-type]
 
@@ -721,7 +721,7 @@ class TestArimaWhittleGPU:
         y = _ar2_ma1_series(500)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             arima(y, order=(2, 0, 1), method="Whittle", backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
@@ -740,7 +740,7 @@ class TestArimaWhittleGPU:
         y = _ar2_ma1_series(2000)
         r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
         r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
-                      backend="gpu", use_fp64=True)
+                      backend="gpu_fp64")
         np.testing.assert_allclose(r_cpu.ar, r_gpu.ar,
                                    rtol=1e-6, atol=1e-8)
         np.testing.assert_allclose(r_cpu.ma, r_gpu.ma,
@@ -754,7 +754,7 @@ class TestArimaWhittleGPU:
         y = _ar2_ma1_series(2000)
         r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
         r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
-                      backend="gpu", use_fp64=False)
+                      backend="gpu")
         assert r_cpu.sigma2 == pytest.approx(
             r_gpu.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
         )
@@ -770,11 +770,11 @@ class TestArimaWhittleGPU:
             pytest.skip("no GPU available")
         y = _ar2_ma1_series(2000)
         r_numpy = arima(y, order=(2, 0, 1), method="Whittle",
-                        backend="gpu", use_fp64=False)
+                        backend="gpu")
         # Repeat the numpy-input GPU fit — should be deterministic
         # and match its own previous run.
         r_numpy_2 = arima(y, order=(2, 0, 1), method="Whittle",
-                          backend="gpu", use_fp64=False)
+                          backend="gpu")
         assert r_numpy.sigma2 == pytest.approx(
             r_numpy_2.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
         )
@@ -788,7 +788,7 @@ class TestArimaWhittleGPU:
             pytest.skip("no GPU available")
         y = _ar2_ma1_series(100_000)
         r = arima(y, order=(2, 0, 1), method="Whittle",
-                  backend="gpu", use_fp64=False)
+                  backend="gpu")
         assert r.converged
         assert np.isfinite(r.sigma2)
         assert r.sigma2 > 0
@@ -893,17 +893,17 @@ class TestArimaBatchGPU:
         import torch
         return "cuda" if torch.cuda.is_available() else "mps"
 
-    def _gpu_use_fp64(self) -> bool:
-        """FP64 only on CUDA; MPS has no float64, so FP32 there."""
+    def _gpu_backend(self) -> str:
+        """gpu_fp64 on CUDA; MPS has no float64, so plain gpu (fp32) there."""
         import torch
-        return torch.cuda.is_available()
+        return "gpu_fp64" if torch.cuda.is_available() else "gpu"
 
     def test_gpu_unavailable_raises_explicitly(self, monkeypatch):
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=5, n=500)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="no GPU"):
+        with pytest.raises(RuntimeError, match="No GPU available"):
             arima_batch(Y, order=(1, 0, 0), method="Whittle", backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
@@ -927,7 +927,7 @@ class TestArimaBatchGPU:
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=30, n=3000, seed=1)
         r_gpu = arima_batch(Y, order=(1, 0, 0), method="Whittle",
-                            backend="gpu", use_fp64=self._gpu_use_fp64())
+                            backend=self._gpu_backend())
         gpu_phi = []
         cpu_phi = []
         for k in range(30):
@@ -961,7 +961,7 @@ class TestArimaBatchGPU:
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=50, n=2000, seed=2)
         r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
-                        backend="gpu", use_fp64=True)
+                        backend="gpu_fp64")
         assert r.converged.sum() >= 48  # allow at most two stragglers
         assert np.all(np.isfinite(r.sigma2))
         assert np.all(r.sigma2 > 0)
@@ -975,8 +975,7 @@ class TestArimaBatchGPU:
         from pystatistics.timeseries import arima_batch
         Y_np, _ = _ar1_batch(K=10, n=1000, seed=3)
         Y_t = torch.as_tensor(Y_np, device=self._gpu_device(), dtype=torch.float32)
-        r = arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
-                        use_fp64=False)
+        r = arima_batch(Y_t, order=(1, 0, 0), method="Whittle")
         assert "GPU" in r.method
         assert r.ar.shape == (10, 1)
 

@@ -23,6 +23,8 @@ solution accordingly (see ``solvers``).
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 
 import numpy as np
@@ -119,7 +121,7 @@ def augmented_ridge_solve(Z: NDArray[np.float64], y_c: NDArray[np.float64],
     ``weights`` (the IRLS working weights) default to 1 (ordinary ridge).
     """
     if l2 < 0:
-        raise ValueError(f"l2 penalty must be non-negative, got {l2}")
+        raise ValidationError(f"l2 penalty must be non-negative, got {l2}")
     n, k = Z.shape
     if weights is not None:
         sw = np.sqrt(np.maximum(weights, 0.0))

@@ -11,6 +11,7 @@ Corrections:
 """
 
 from typing import Any
+from pystatistics.core.exceptions import ValidationError
 
 import numpy as np
 from numpy.typing import NDArray
@@ -48,7 +49,7 @@ def repeated_measures_anova(
         AnovaRMParams with table, sphericity tests, and corrected p-values
     """
     if correction not in ('none', 'gg', 'hf', 'auto'):
-        raise ValueError(f"correction must be 'none', 'gg', 'hf', or 'auto', got {correction!r}")
+        raise ValidationError(f"correction must be 'none', 'gg', 'hf', or 'auto', got {correction!r}")
 
     if len(within) != 1:
         raise NotImplementedError(
@@ -74,7 +75,7 @@ def repeated_measures_anova(
         Y_wide[i, j] = y[idx]
 
     if np.any(np.isnan(Y_wide)):
-        raise ValueError(
+        raise ValidationError(
             "Missing data detected after reshaping to wide format. "
             "Ensure each subject has exactly one observation per condition."
         )

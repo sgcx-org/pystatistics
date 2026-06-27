@@ -18,14 +18,14 @@ the CPU and GPU (CUDA / Apple Silicon MPS) backends.
 """
 
 from pystatistics.mice.design import MICEDesign
-from pystatistics.mice.pooling import PooledResult, pool
+from pystatistics.mice.pooling import PooledSolution, pool
 from pystatistics.mice.solution import MICESolution
 from pystatistics.mice.solvers import mice
 
 __all__ = [
     "MICEDesign",
     "MICESolution",
-    "PooledResult",
+    "PooledSolution",
     "mice",
     "pool",
 ]

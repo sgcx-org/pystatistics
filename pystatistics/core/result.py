@@ -98,3 +98,19 @@ class Result(Generic[P]):
     def has_warning(self, substring: str) -> bool:
         """Check if any warning contains the given substring."""
         return any(substring in w for w in self.warnings)
+
+
+class SolutionReprMixin:
+    """Shared Jupyter HTML repr for every public ``*Solution`` object.
+
+    Renders the object's text ``summary()`` inside a ``<pre>`` block so
+    notebooks display the same report users see from ``print(result.summary())``.
+    Every Solution mixes this in (CONVENTIONS.md, result-object section), so the
+    notebook surface is uniform library-wide with no per-class duplication.
+
+    Requires the host class to implement ``summary() -> str``.
+    """
+
+    def _repr_html_(self) -> str:
+        import html as _html
+        return f"<pre>{_html.escape(self.summary())}</pre>"

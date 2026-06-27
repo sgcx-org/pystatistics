@@ -17,11 +17,16 @@ class PyStatisticsError(Exception):
     pass
 
 
-class ValidationError(PyStatisticsError):
+class ValidationError(PyStatisticsError, ValueError):
     """
     Input validation failed.
-    
+
     Raised when user-provided inputs fail validation checks.
+
+    Subclasses both :class:`PyStatisticsError` (so the whole library's errors
+    can be caught uniformly) and the builtin :class:`ValueError` (so callers
+    migrating from numpy/scipy who write ``except ValueError`` keep working).
+    An invalid argument genuinely *is* a value error.
     """
     pass
 

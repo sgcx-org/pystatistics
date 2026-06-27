@@ -146,7 +146,7 @@ def mlest_monotone_closed_form(data) -> tuple[NDArray, NDArray, int]:
         raise ValidationError(
             "Data are not monotone — no column permutation makes each "
             "observation's missing entries a contiguous suffix. Use "
-            "algorithm='em' or 'direct' for general missingness."
+            "method='em' or 'direct' for general missingness."
         )
 
     # Reorder columns into the monotone-compatible sequence.

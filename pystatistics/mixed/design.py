@@ -8,6 +8,8 @@ effect specifications.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
@@ -62,31 +64,31 @@ class MixedDesign:
         n = len(y)
 
         if n < 3:
-            raise ValueError(f"Need at least 3 observations, got {n}")
+            raise ValidationError(f"Need at least 3 observations, got {n}")
 
         X = np.asarray(X, dtype=np.float64)
         if X.ndim == 1:
             X = X.reshape(-1, 1)
         if X.shape[0] != n:
-            raise ValueError(
+            raise ValidationError(
                 f"X has {X.shape[0]} rows, expected {n} (matching y)"
             )
         p = X.shape[1]
 
         if not groups:
-            raise ValueError("At least one grouping factor required")
+            raise ValidationError("At least one grouping factor required")
 
         # Validate each grouping factor
         groups_validated = {}
         for name, g in groups.items():
             g = np.asarray(g)
             if g.shape[0] != n:
-                raise ValueError(
+                raise ValidationError(
                     f"Group '{name}' has {g.shape[0]} elements, expected {n}"
                 )
             unique = np.unique(g)
             if len(unique) < 2:
-                raise ValueError(
+                raise ValidationError(
                     f"Group '{name}' has only {len(unique)} level(s), "
                     f"need at least 2"
                 )
@@ -96,7 +98,7 @@ class MixedDesign:
         if random_effects is not None:
             for name in random_effects:
                 if name not in groups:
-                    raise ValueError(
+                    raise ValidationError(
                         f"Random effect group '{name}' not found in groups dict. "
                         f"Available: {list(groups.keys())}"
                     )
@@ -106,15 +108,15 @@ class MixedDesign:
             for name, data in random_data.items():
                 data = np.asarray(data, dtype=np.float64)
                 if data.shape[0] != n:
-                    raise ValueError(
+                    raise ValidationError(
                         f"Random data '{name}' has {data.shape[0]} elements, "
                         f"expected {n}"
                     )
 
         if not np.all(np.isfinite(y)):
-            raise ValueError("y contains non-finite values (NaN or Inf)")
+            raise ValidationError("y contains non-finite values (NaN or Inf)")
         if not np.all(np.isfinite(X)):
-            raise ValueError("X contains non-finite values (NaN or Inf)")
+            raise ValidationError("X contains non-finite values (NaN or Inf)")
 
         return MixedDesign(
             y=y,

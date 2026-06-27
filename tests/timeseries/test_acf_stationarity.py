@@ -18,8 +18,8 @@ from pystatistics.timeseries import (
     ndiffs,
     adf_test,
     kpss_test,
-    ACFResult,
-    StationarityResult,
+    ACFSolution,
+    StationaritySolution,
 )
 
 
@@ -136,9 +136,9 @@ class TestACF:
         assert result.type == "correlation"
 
     def test_result_is_acfresult(self, white_noise):
-        """Return type should be ACFResult."""
+        """Return type should be ACFSolution."""
         result = acf(white_noise)
-        assert isinstance(result, ACFResult)
+        assert isinstance(result, ACFSolution)
 
     def test_n_obs_matches(self, white_noise):
         """n_obs should match input length."""
@@ -394,9 +394,9 @@ class TestADFTest:
             assert result.n_lags == expected_lags
 
     def test_result_is_stationarity_result(self, white_noise):
-        """Return type should be StationarityResult."""
+        """Return type should be StationaritySolution."""
         result = adf_test(white_noise)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_method_name(self, white_noise):
         """Method name should indicate ADF."""
@@ -426,12 +426,12 @@ class TestADFTest:
         rng = np.random.default_rng(42)
         x = rng.normal(0, 1, size=20)
         result = adf_test(x)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_regression_nc(self, white_noise):
         """regression='nc' should work."""
         result = adf_test(white_noise, regression="nc")
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_invalid_regression_raises(self, white_noise):
         """Invalid regression type should raise."""
@@ -466,9 +466,9 @@ class TestKPSSTest:
         )
 
     def test_result_is_stationarity_result(self, white_noise):
-        """Return type should be StationarityResult."""
+        """Return type should be StationaritySolution."""
         result = kpss_test(white_noise)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_method_name(self, white_noise):
         """Method should contain 'KPSS'."""
@@ -526,7 +526,7 @@ class TestKPSSTest:
         rng = np.random.default_rng(42)
         x = rng.normal(0, 1, size=20)
         result = kpss_test(x)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_invalid_regression_raises(self, white_noise):
         """Invalid regression type should raise."""
@@ -565,23 +565,23 @@ class TestEdgeCases:
         rng = np.random.default_rng(42)
         x = rng.normal(0, 1, size=20)
         result = adf_test(x)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_very_short_kpss(self):
         """n=20 KPSS test should complete without error."""
         rng = np.random.default_rng(42)
         x = rng.normal(0, 1, size=20)
         result = kpss_test(x)
-        assert isinstance(result, StationarityResult)
+        assert isinstance(result, StationaritySolution)
 
     def test_frozen_dataclass_acf(self, white_noise):
-        """ACFResult should be immutable."""
+        """ACFSolution should be immutable."""
         result = acf(white_noise, max_lag=5)
         with pytest.raises(AttributeError):
             result.n_obs = 999  # type: ignore[misc]
 
     def test_frozen_dataclass_stationarity(self, white_noise):
-        """StationarityResult should be immutable."""
+        """StationaritySolution should be immutable."""
         result = adf_test(white_noise)
         with pytest.raises(AttributeError):
             result.p_value = 0.999  # type: ignore[misc]

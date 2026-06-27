@@ -17,6 +17,8 @@ GPU path: torch Cholesky + triangular solve (batched)
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -50,15 +52,15 @@ def batched_ols_solve(
     Y = np.asarray(Y, dtype=np.float64)
 
     if X.ndim != 2:
-        raise ValueError(f"X must be 2D, got {X.ndim}D")
+        raise ValidationError(f"X must be 2D, got {X.ndim}D")
     if Y.ndim == 1:
         Y = Y[:, np.newaxis]
     if Y.ndim != 2:
-        raise ValueError(f"Y must be 1D or 2D, got {Y.ndim}D")
+        raise ValidationError(f"Y must be 1D or 2D, got {Y.ndim}D")
 
     n, p = X.shape
     if Y.shape[0] != n:
-        raise ValueError(
+        raise ValidationError(
             f"X has {n} rows but Y has {Y.shape[0]} rows"
         )
 

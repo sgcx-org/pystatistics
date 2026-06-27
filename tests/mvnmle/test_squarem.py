@@ -26,7 +26,7 @@ from pystatistics.mvnmle import datasets, mlest
 
 def test_squarem_matches_plain_em_to_convergence_tolerance():
     """Accelerated EM and plain EM land on the same MLE on apple."""
-    accelerated = mlest(datasets.apple, algorithm="em")
+    accelerated = mlest(datasets.apple, method="em")
     # Work around the fact that ``accelerate`` is a backend-level flag.
     # We reach into the backend by constructing one directly.
     from pystatistics.mvnmle.backends.em import EMBackend
@@ -78,7 +78,7 @@ def test_squarem_monotonicity_is_respected():
     caps = [5, 10, 20, 50, 100, 500]
     logliks = []
     for cap in caps:
-        r = mlest(datasets.missvals, algorithm="em", max_iter=cap)
+        r = mlest(datasets.missvals, method="em", max_iter=cap)
         logliks.append(r.loglik)
 
     # Log-likelihood should be monotonically non-decreasing in

@@ -137,14 +137,14 @@ class TestGPUNoSilentFallback:
         from pystatistics.hypothesis import t_test
 
         with pytest.raises(NotImplementedError, match="GPU acceleration"):
-            t_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
+            t_test([1, 2, 3, 4, 5], pop_mean=3, backend='gpu')
 
     def test_wilcox_raises(self):
         """Wilcoxon with backend='gpu' raises NotImplementedError."""
         from pystatistics.hypothesis import wilcox_test
 
         with pytest.raises(NotImplementedError, match="GPU acceleration"):
-            wilcox_test([1, 2, 3, 4, 5], mu=3, backend='gpu')
+            wilcox_test([1, 2, 3, 4, 5], null_value=3, backend='gpu')
 
     def test_var_test_raises(self):
         """var.test with backend='gpu' raises NotImplementedError."""

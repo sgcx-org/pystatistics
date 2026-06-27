@@ -93,15 +93,15 @@ class TestVar:
         assert result.covariance_matrix.shape == (2, 2)
 
     def test_var_with_nan_everything(self):
-        """use='everything' propagates NaN."""
+        """na_action='everything' propagates NaN."""
         data = np.array([1.0, 2.0, np.nan, 4.0, 5.0])
-        result = var(data, use='everything', backend='cpu')
+        result = var(data, na_action='everything', backend='cpu')
         assert np.isnan(result.variance[0])
 
     def test_var_with_nan_complete_obs(self):
-        """use='complete.obs' ignores NaN rows."""
+        """na_action='complete' ignores NaN rows."""
         data = np.array([1.0, 2.0, np.nan, 4.0, 5.0])
-        result = var(data, use='complete.obs', backend='cpu')
+        result = var(data, na_action='complete', backend='cpu')
         expected = np.var([1.0, 2.0, 4.0, 5.0], ddof=1)
         np.testing.assert_allclose(result.variance, [expected], rtol=1e-12)
 
@@ -130,7 +130,7 @@ class TestMeanBasic:
         np.testing.assert_allclose(r.params.mean, [2.0, 20.0], rtol=1e-12)
 
     def test_mean_with_nan_everything(self):
-        """use='everything' propagates NaN in mean."""
+        """na_action='everything' propagates NaN in mean."""
         data = np.array([1.0, 2.0, np.nan, 4.0])
         from pystatistics.descriptive.backends.cpu import CPUDescriptiveBackend
         design = DescriptiveDesign.from_array(data)

@@ -7,6 +7,8 @@ Validated against R to rtol=1e-10.
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
 from pystatistics.hypothesis._common import HTestParams
@@ -65,7 +67,7 @@ class CPUHypothesisBackend:
                 from pystatistics.hypothesis.backends._var_test import var_test
                 params, warnings_list = var_test(design)
             else:
-                raise ValueError(f"Unknown test_type: {test_type!r}")
+                raise ValidationError(f"Unknown test_type: {test_type!r}")
 
         timer.stop()
 

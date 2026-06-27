@@ -9,6 +9,8 @@ FP32 by default. Spearman/Kendall fall back to CPU (scipy-dependent).
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from typing import Any
 import numpy as np
 from numpy.typing import NDArray
@@ -55,7 +57,7 @@ class GPUDescriptiveBackend:
                 self.dtype = torch.float32
                 self.device_name = 'Apple Silicon GPU (MPS)'
             else:
-                raise ValueError(f"GPUDescriptiveBackend requires GPU device, got {device.device_type}")
+                raise ValidationError(f"GPUDescriptiveBackend requires GPU device, got {device.device_type}")
         else:
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')

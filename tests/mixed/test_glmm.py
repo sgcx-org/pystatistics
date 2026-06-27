@@ -84,7 +84,7 @@ class TestGLMMBinomial:
         )
         # z = coef / se
         np.testing.assert_allclose(
-            result.z_values, result.coefficients / result.se, atol=1e-10
+            result.z_values, result.coefficients / result.standard_errors, atol=1e-10
         )
 
     def test_p_values_defined(self, glmm_binomial):

@@ -1,7 +1,7 @@
 """
 Routing/API tests for the direct MVN MLE CPU backends.
 
-Covers the dispatch contract that ``mlest(algorithm='direct')`` exposes:
+Covers the dispatch contract that ``mlest(method='direct')`` exposes:
 - the default / ``backend='cpu'`` path is the fast PyTorch forward-Cholesky
   FP64 estimator,
 - ``backend='cpu-reference'`` forces the numpy inverse-Cholesky reference
@@ -73,8 +73,8 @@ class TestReferencePath:
 
     @pytest.mark.parametrize('algorithm', ['em', 'monotone'])
     def test_cpu_reference_rejected_for_non_direct(self, algorithm):
-        with pytest.raises(ValueError, match="only valid with algorithm='direct'"):
-            mlest(datasets.apple, backend='cpu-reference', algorithm=algorithm)
+        with pytest.raises(ValueError, match="only valid with method='direct'"):
+            mlest(datasets.apple, backend='cpu-reference', method=algorithm)
 
 
 class TestTorchFreeFallback:
@@ -117,5 +117,5 @@ class TestAutoWithoutCuda:
         import torch
         if torch.cuda.is_available():
             pytest.skip("auto prefers CUDA when present; covered in test_gpu.py")
-        result = mlest(datasets.apple, algorithm='direct', backend='auto')
+        result = mlest(datasets.apple, method='direct', backend='auto')
         assert result.backend_name == 'cpu_cholesky_fp64'

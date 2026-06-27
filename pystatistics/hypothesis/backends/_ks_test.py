@@ -9,6 +9,8 @@ Supports:
 
 from __future__ import annotations
 
+from pystatistics.core.exceptions import ValidationError
+
 from typing import TYPE_CHECKING
 import numpy as np
 from scipy import stats as sp_stats
@@ -55,7 +57,7 @@ def _ks_two_sample(
     stat, p_value = sp_stats.ks_2samp(x, y, alternative=scipy_alt)
 
     # R uses D, D+, D- for the statistic name
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         stat_name = "D"
     elif alternative == "less":
         stat_name = "D^-"
@@ -98,7 +100,7 @@ def _ks_one_sample(
     scipy_alt = alternative.replace(".", "-")
     stat, p_value = sp_stats.kstest(x, cdf, alternative=scipy_alt)
 
-    if alternative == "two.sided":
+    if alternative == "two-sided":
         stat_name = "D"
     elif alternative == "less":
         stat_name = "D^-"
@@ -136,7 +138,7 @@ def _get_cdf(distribution: str, params: dict):
 
     dist_name = distribution.lower()
     if dist_name not in dist_map:
-        raise ValueError(
+        raise ValidationError(
             f"Unknown distribution: {distribution!r}. "
             f"Supported: {list(dist_map.keys())}"
         )

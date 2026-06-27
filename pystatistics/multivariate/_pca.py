@@ -11,7 +11,12 @@ from numpy.typing import ArrayLike, NDArray
 
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.validation import check_2d, check_finite, check_array
-from pystatistics.multivariate._common import PCAResult
+from pystatistics.core.compute.backend import (
+    resolve_backend, valid_backends, unknown_backend_message,
+    FP64_REQUIRES_CUDA_MSG,
+)
+from pystatistics.core.result import Result
+from pystatistics.multivariate._common import PCASolution, PCAParams
 
 
 def _fix_sign_convention(rotation: NDArray) -> NDArray:
@@ -41,11 +46,10 @@ def pca(
     n_components: int | None = None,
     names: list[str] | None = None,
     backend: str | None = None,
-    use_fp64: bool = False,
-    method: str = "svd",
+    solver: str = "svd",
     force: bool = False,
     device_resident: bool = False,
-) -> PCAResult:
+) -> PCASolution:
     """Principal Component Analysis via SVD.
 
     Matches R's ``stats::prcomp()``.
@@ -76,21 +80,22 @@ def pca(
                   opt-in to the GPU path, so we don't demand the user
                   repeat the choice with an explicit ``backend='gpu'``.
             Explicit values:
-                - ``'cpu'``: force the numpy reference path. Raises if
-                  given a GPU tensor (no silent device migration —
-                  Rule 1).
-                - ``'gpu'``: force GPU; raises if no GPU is available.
-                - ``'auto'``: prefer GPU when available, else CPU.
-        use_fp64: Only relevant when actually running on GPU. Default
-            False: the GPU path uses FP32 and results match the CPU
-            path at the ``GPU_FP32`` tolerance tier (rtol ≈ 1e-4) —
-            statistically equivalent, not bitwise-equivalent. Set True
-            on CUDA (MPS lacks FP64) to get CPU-matching precision at
-            the cost of performance; note consumer NVIDIA parts have
-            FP64 throughput ~1/64× FP32, so FP64-on-GPU is usually
-            slower than CPU LAPACK.
-        method: Algorithm to use. Only matters when actually running
-            on GPU (the CPU path always uses SVD).
+                - ``'cpu'``: force the numpy reference path (float64).
+                  Raises if given a GPU tensor (no silent device
+                  migration — Rule 1).
+                - ``'gpu'``: force GPU, float32. Raises if no GPU is
+                  available. Results match the CPU path at the
+                  ``GPU_FP32`` tolerance tier (rtol ≈ 1e-4) —
+                  statistically equivalent, not bitwise-equivalent.
+                - ``'gpu_fp64'``: force GPU, float64. CUDA only (MPS
+                  lacks float64; raises on Apple Silicon). CPU-matching
+                  precision at a performance cost — consumer NVIDIA
+                  parts run FP64 at ~1/64× FP32, so this is usually
+                  slower than CPU LAPACK.
+                - ``'auto'``: prefer GPU (float32) when CUDA is
+                  available, else CPU.
+        solver: Numerical algorithm to use. Only matters when actually
+            running on GPU (the CPU path always uses SVD).
             ``'svd'`` (default): SVD of X. Always safe. Moderate
                 (~3–4×) speedup over CPU LAPACK.
             ``'gram'``: Eigendecomposition of X'X — turns PCA into a
@@ -110,7 +115,7 @@ def pca(
             — use only when you understand the data is well-conditioned
             despite the automated estimator disagreeing.
         device_resident: When ``True`` and the GPU backend runs, the
-            returned :class:`PCAResult` holds its numeric fields
+            returned :class:`PCASolution` holds its numeric fields
             (``sdev``, ``rotation``, ``center``, ``scale``, ``x``) as
             ``torch.Tensor`` instances on the fit's device rather than
             materialising them as numpy arrays. This saves the ~150 ms
@@ -122,7 +127,7 @@ def pca(
             there). Default ``False`` preserves 1.8.0 behavior.
 
     Returns:
-        PCAResult with sdev, rotation (loadings), scores, etc.
+        PCASolution with sdev, rotation (loadings), scores, etc.
 
     Raises:
         ValidationError: If inputs are invalid.
@@ -163,7 +168,7 @@ def pca(
         # But if they DID say ``backend='cpu'`` explicitly, we still
         # raise — that's a contradiction between the input and the
         # explicit ask, not an implicit choice on our part.
-        if backend is None:
+        if backend in (None, "auto"):
             backend = "gpu" if X.device.type != "cpu" else "cpu"
         if backend == "cpu":
             raise ValidationError(
@@ -172,15 +177,29 @@ def pca(
                 "CPU DataSource to the CPU backend, or call `.to('cpu')` "
                 "on the DataSource explicitly to move it back."
             )
+        if backend not in ("gpu", "gpu_fp64"):
+            raise ValidationError(
+                unknown_backend_message(backend, valid_backends(True))
+            )
+        # Precision lives in the backend string. The tensor's own device is
+        # authoritative here (resolve_backend would detect the *ambient* GPU,
+        # not this tensor's), so the fp64-needs-CUDA guard checks the tensor.
+        use_fp64 = backend == "gpu_fp64"
+        if use_fp64 and X.device.type != "cuda":
+            raise RuntimeError(FP64_REQUIRES_CUDA_MSG)
 
         n, p = X.shape
         X_for_gpu = X        # tensor flows straight through to pca_gpu
+        gpu_device_type = X.device.type
         X_arr = None         # sentinel: "we're on the GPU path"
     else:
-        if backend is None:
-            # CPU default for numpy input — the regulated-industry
-            # contract: unspecified-backend means the R-reference path.
-            backend = "cpu"
+        # numpy input: the canonical resolver decides device + precision.
+        # backend=None -> 'cpu' (the regulated-industry default) without any
+        # GPU detection / torch import; 'auto' picks CUDA-fp32 if present.
+        target = resolve_backend(backend, supports_fp64=True)
+        backend = target.backend
+        use_fp64 = target.use_fp64
+        gpu_device_type = target.device_type
         X_arr = check_array(X, "X")
         if X_arr.ndim == 1:
             X_arr = X_arr.reshape(-1, 1)
@@ -285,64 +304,26 @@ def pca(
             scale_values = None
 
     # ---- Backend dispatch ----
-    # 'auto' prefers GPU when available (matches the design philosophy in
-    # the README) but falls back to CPU cleanly. 'cpu' forces the numpy
-    # reference path below; 'gpu' raises if no GPU is available rather
-    # than silently falling back (Rule 1).
-    if backend not in ("auto", "cpu", "gpu"):
-        raise ValidationError(
-            f"backend: must be 'auto', 'cpu', or 'gpu', got {backend!r}"
-        )
-    # If X arrived as a GPU tensor, GPU is the only sensible route (we
-    # already rejected backend='cpu' above). Bypass the device-
-    # detection logic — we know the device from the tensor itself.
-    if X_arr is None:
+    # Device + precision were resolved above: tensor input -> the tensor's own
+    # device; numpy input -> resolve_backend (which already raised if 'gpu'
+    # had no GPU, and downgraded 'auto' to CPU when no CUDA is present). So a
+    # non-'cpu' backend here always means "run on the GPU".
+    if backend != "cpu":
         from pystatistics.multivariate.backends.gpu_pca import pca_gpu
         return pca_gpu(
-            X_for_gpu,
+            X_for_gpu if X_arr is None else X_arr,
             center=center,
             scale=scale,
             n_components=n_components,
             col_means_cpu=col_means,
             scale_values_cpu=scale_values,
             var_names=var_names,
-            device=str(X_for_gpu.device.type),
+            device=gpu_device_type,
             use_fp64=use_fp64,
-            method=method,
+            method=solver,
             force=force,
             device_resident=device_resident,
         )
-
-    if backend != "cpu":
-        from pystatistics.core.compute.device import select_device
-        dev = select_device("gpu" if backend == "gpu" else "auto")
-        # backend='auto' must not select MPS: it is FP32-only and not the
-        # R-validated default. MPS runs only on explicit backend='gpu';
-        # 'auto' uses the GPU only for CUDA (matches the regression and
-        # mvnmle dispatch policy).
-        if dev.is_gpu and (backend == "gpu" or dev.device_type == "cuda"):
-            from pystatistics.multivariate.backends.gpu_pca import pca_gpu
-            return pca_gpu(
-                X_arr,
-                center=center,
-                scale=scale,
-                n_components=n_components,
-                col_means_cpu=col_means,
-                scale_values_cpu=scale_values,
-                var_names=var_names,
-                device=dev.device_type,
-                use_fp64=use_fp64,
-                method=method,
-                force=force,
-                device_resident=device_resident,
-            )
-        if backend == "gpu":
-            raise RuntimeError(
-                "backend='gpu' requested but no GPU is available. "
-                "Install PyTorch with CUDA/MPS support or use backend='cpu'."
-            )
-        # backend == 'auto' and no GPU: fall through to CPU (uses SVD;
-        # 'method' and 'force' only matter on GPU).
 
     # ---- SVD (CPU reference path) ----
     U, S, Vt = np.linalg.svd(X_centered, full_matrices=False)
@@ -365,7 +346,7 @@ def pca(
     rotation = rotation[:, :n_components]
     scores = scores[:, :n_components]
 
-    return PCAResult(
+    params = PCAParams(
         sdev=sdev,
         rotation=rotation,
         center=col_means,
@@ -374,4 +355,13 @@ def pca(
         n_obs=n,
         n_vars=p,
         var_names=var_names,
+    )
+    return PCASolution(
+        _result=Result(
+            params=params,
+            info={"method": "svd", "center": center, "scale": scale},
+            timing=None,
+            backend_name="cpu_svd",
+            warnings=(),
+        )
     )

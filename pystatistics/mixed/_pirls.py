@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.exceptions import NumericalError
 from pystatistics.mixed._pls import solve_pls, PLSResult
 
 
@@ -110,7 +111,7 @@ def solve_pirls(
         dev_old = dev_new
 
     if pls_result is None:
-        raise RuntimeError("PIRLS failed to produce a result")
+        raise NumericalError("PIRLS failed to produce a result")
 
     return PIRLSResult(
         pls=pls_result,

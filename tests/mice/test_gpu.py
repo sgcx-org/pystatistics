@@ -44,40 +44,40 @@ def miss():
 
 class TestGpuBasics:
     def test_runs_on_gpu(self, miss):
-        sol = mice(miss, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         assert "gpu" in sol.backend_name
         assert sol.info["device"] == "cuda"
         assert sol.info["precision"] == "fp32"
 
     def test_completed_no_nan(self, miss):
-        sol = mice(miss, m=4, maxit=5, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=4, max_iter=5, seed=0, backend="gpu")
         for d in sol.completed_datasets():
             assert not np.isnan(d).any()
             assert d.shape == miss.shape
 
     def test_observed_preserved(self, miss):
-        sol = mice(miss, m=3, maxit=4, seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=3, max_iter=4, seed=0, backend="gpu")
         observed = ~np.isnan(miss)
         for d in sol.completed_datasets():
             # FP32 round-trip: observed values preserved to single precision.
             np.testing.assert_allclose(d[observed], miss[observed], rtol=1e-5, atol=1e-5)
 
     def test_auto_selects_gpu_on_cuda(self, miss):
-        sol = mice(miss, m=3, maxit=3, seed=0, backend="auto")
+        sol = mice(miss, n_imputations=3, max_iter=3, seed=0, backend="auto")
         assert "gpu" in sol.backend_name
 
 
 class TestGpuReproducibility:
     def test_same_seed_reproducible(self, miss):
-        a = mice(miss, m=4, maxit=5, method="pmm", seed=11, backend="gpu")
-        b = mice(miss, m=4, maxit=5, method="pmm", seed=11, backend="gpu")
+        a = mice(miss, n_imputations=4, max_iter=5, method="pmm", seed=11, backend="gpu")
+        b = mice(miss, n_imputations=4, max_iter=5, method="pmm", seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             # Same seed + same device: identical up to FP32 kernel determinism.
             np.testing.assert_allclose(da, db, rtol=1e-5, atol=1e-6)
 
     def test_different_seed_differs(self, miss):
-        a = mice(miss, m=4, maxit=5, method="norm", seed=1, backend="gpu")
-        b = mice(miss, m=4, maxit=5, method="norm", seed=2, backend="gpu")
+        a = mice(miss, n_imputations=4, max_iter=5, method="norm", seed=1, backend="gpu")
+        b = mice(miss, n_imputations=4, max_iter=5, method="norm", seed=2, backend="gpu")
         assert any(
             not np.allclose(da, db)
             for da, db in zip(a.completed_datasets(), b.completed_datasets())
@@ -86,7 +86,7 @@ class TestGpuReproducibility:
 
 class TestGpuPmmDonorProperty:
     def test_fp32_imputes_near_observed(self, miss):
-        sol = mice(miss, m=5, maxit=5, method="pmm", seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=5, max_iter=5, method="pmm", seed=0, backend="gpu")
         for j in sol.incomplete_columns:
             observed = miss[~np.isnan(miss[:, j]), j]
             imp = sol.imputations(j).ravel()
@@ -95,7 +95,7 @@ class TestGpuPmmDonorProperty:
             assert dist.max() < 1e-4
 
     def test_fp64_imputes_exact_observed(self, miss):
-        sol = mice(miss, m=5, maxit=5, method="pmm", seed=0, backend="gpu", use_fp64=True)
+        sol = mice(miss, n_imputations=5, max_iter=5, method="pmm", seed=0, backend="gpu_fp64")
         for j in sol.incomplete_columns:
             observed = set(np.round(miss[~np.isnan(miss[:, j]), j], 10))
             for v in sol.imputations(j).ravel():
@@ -108,8 +108,8 @@ class TestGpuMatchesCpu:
         # Independent stochastic runs (different RNG, FP32 vs FP64) — agreement
         # is distributional, at the GPU/FP32 Monte-Carlo scale.
         m = 30
-        cpu = mice(miss, m=m, maxit=10, method=method, seed=100, backend="cpu")
-        gpu = mice(miss, m=m, maxit=10, method=method, seed=100, backend="gpu")
+        cpu = mice(miss, n_imputations=m, max_iter=10, method=method, seed=100, backend="cpu")
+        gpu = mice(miss, n_imputations=m, max_iter=10, method=method, seed=100, backend="gpu")
         for j in gpu.incomplete_columns:
             cc = cpu.imputations(j).ravel()
             cg = gpu.imputations(j).ravel()
@@ -132,8 +132,8 @@ class TestGpuMatchesCpu:
             return pool(np.array(est), np.array(var), dfcom=len(miss) - 3)
 
         m = 30
-        cpu = pooled(mice(miss, m=m, maxit=10, method=method, seed=7, backend="cpu"))
-        gpu = pooled(mice(miss, m=m, maxit=10, method=method, seed=7, backend="gpu"))
+        cpu = pooled(mice(miss, n_imputations=m, max_iter=10, method=method, seed=7, backend="cpu"))
+        gpu = pooled(mice(miss, n_imputations=m, max_iter=10, method=method, seed=7, backend="gpu"))
         np.testing.assert_allclose(
             np.asarray(gpu.estimate), np.asarray(cpu.estimate), atol=0.1
         )
@@ -150,7 +150,7 @@ class TestGpuScales:
         miss = datasets.make_mcar(complete, 0.2, seed=1)
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
-        sol = mice(miss, m=20, maxit=5, method="pmm", seed=0, backend="gpu")
+        sol = mice(miss, n_imputations=20, max_iter=5, method="pmm", seed=0, backend="gpu")
         peak_gb = torch.cuda.max_memory_allocated() / 1e9
 
         assert not np.isnan(sol.completed(0)).any()
@@ -162,8 +162,8 @@ class TestGpuScales:
         # Correctness preserved at scale: windowed GPU donors agree with CPU.
         complete = datasets.make_gaussian_complete(8000, seed=2)
         miss = datasets.make_mcar(complete, 0.2, seed=3)
-        cpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="cpu")
-        gpu = mice(miss, m=20, maxit=8, method="pmm", seed=5, backend="gpu")
+        cpu = mice(miss, n_imputations=20, max_iter=8, method="pmm", seed=5, backend="cpu")
+        gpu = mice(miss, n_imputations=20, max_iter=8, method="pmm", seed=5, backend="gpu")
         for j in gpu.incomplete_columns:
             assert abs(gpu.imputations(j).mean() - cpu.imputations(j).mean()) < 0.1
 
@@ -222,8 +222,8 @@ class TestGpuCategoricalTargets:
         d = builder(7)
         assert d.method_for(0) == kind
         m = 30
-        cpu = mice(d, m=m, maxit=10, seed=7, backend="cpu")
-        gpu = mice(d, m=m, maxit=10, seed=7, backend="gpu")
+        cpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="cpu")
+        gpu = mice(d, n_imputations=m, max_iter=10, seed=7, backend="gpu")
         assert gpu.info["device"] == "cuda"
         levels = d.levels_for(0)
         ci, gi = cpu.imputations(0).ravel(), gpu.imputations(0).ravel()
@@ -236,8 +236,8 @@ class TestGpuCategoricalTargets:
 
     def test_categorical_targets_reproducible(self):
         d = self._multi_design(ordered=True, seed=2)
-        a = mice(d, m=5, maxit=5, seed=11, backend="gpu")
-        b = mice(d, m=5, maxit=5, seed=11, backend="gpu")
+        a = mice(d, n_imputations=5, max_iter=5, seed=11, backend="gpu")
+        b = mice(d, n_imputations=5, max_iter=5, seed=11, backend="gpu")
         for da, db in zip(a.completed_datasets(), b.completed_datasets()):
             np.testing.assert_array_equal(da, db)
 
@@ -260,7 +260,7 @@ class TestGpuCategoricalMatchesR:
             matrix, column_kinds=["numeric", "binary", "categorical", "ordered"]
         )
         meta = ref["meta"]
-        sol = mice(design, m=meta["m"], maxit=meta["maxit"], seed=20260614, backend="gpu")
+        sol = mice(design, n_imputations=meta["m"], max_iter=meta["maxit"], seed=20260614, backend="gpu")
         return ref, sol
 
     @pytest.mark.parametrize("name", ["bin", "nom", "ord"])
@@ -279,14 +279,14 @@ class TestGpuCategoricalMatchesR:
 
 class TestGpuFp64:
     def test_fp64_runs(self, miss):
-        sol = mice(miss, m=3, maxit=4, seed=0, backend="gpu", use_fp64=True)
+        sol = mice(miss, n_imputations=3, max_iter=4, seed=0, backend="gpu_fp64")
         assert sol.info["precision"] == "fp64"
         for d in sol.completed_datasets():
             assert not np.isnan(d).any()
 
     def test_fp64_closer_to_cpu_observed(self, miss):
         # FP64 preserves observed values to (near) machine precision.
-        sol = mice(miss, m=2, maxit=3, seed=0, backend="gpu", use_fp64=True)
+        sol = mice(miss, n_imputations=2, max_iter=3, seed=0, backend="gpu_fp64")
         observed = ~np.isnan(miss)
         for d in sol.completed_datasets():
             np.testing.assert_allclose(d[observed], miss[observed], rtol=1e-12, atol=1e-12)
