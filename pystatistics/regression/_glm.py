@@ -173,6 +173,14 @@ class GLMSolution:
             return self._standard_errors
 
         p = len(self.coefficients)
+
+        # A penalized (ridge) GLM is a biased estimator; the (X'WX)^{-1} standard
+        # errors are not valid for it, so we report NaN (shows as NA in summary)
+        # rather than misleading numbers.
+        if self._result.info.get('penalized'):
+            self._standard_errors = np.full(p, np.nan, dtype=np.float64)
+            return self._standard_errors
+
         disp = self.dispersion
 
         pivot = self._result.info.get('pivot')

@@ -27,13 +27,14 @@ from pystatistics.regression.solution import (
     LinearSolution, LinearParams,
     GLMSolution, GLMParams,
 )
-from pystatistics.regression.solvers import fit
+from pystatistics.regression.solvers import fit, ridge
 from pystatistics.regression.families import (
     Family, Gaussian, Binomial, Poisson, GammaFamily, NegativeBinomial,
 )
 
 __all__ = [
     "fit",
+    "ridge",
     "Design",
     "C",
     "DataSource",

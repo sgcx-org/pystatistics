@@ -38,11 +38,16 @@ class GPUIRLSBackend:
     Standard errors are computed on CPU from X'WX after IRLS converges.
     """
 
-    def __init__(self, device: str = 'cuda'):
+    def __init__(self, device: str = 'cuda', use_fp64: bool = False):
         """Initialize GPU IRLS backend.
 
         Args:
             device: GPU device type ('cuda', 'cuda:0', 'mps')
+            use_fp64: Run the IRLS in float64. Valid only on CUDA (Metal/MPS has
+                no float64). This is a *correctness* path — numerically equivalent
+                to the CPU reference, but slow on consumer GPUs (fast double
+                precision needs a data-center card). The default float32 path is
+                the speed path. Selected via backend='gpu_fp64'.
         """
         import torch
 
@@ -53,15 +58,16 @@ class GPUIRLSBackend:
                     "or use backend='cpu'."
                 )
             self.device = torch.device(device)
-            self.dtype = torch.float32
+            self.dtype = torch.float64 if use_fp64 else torch.float32
             props = torch.cuda.get_device_properties(self.device)
             self.device_name = props.name
 
         elif device == 'mps':
-            if not (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()):
+            if use_fp64:
                 raise RuntimeError(
-                    "MPS not available. Requires macOS with Apple Silicon "
-                    "and PyTorch with MPS support."
+                    "backend='gpu_fp64' requires CUDA: Apple Silicon (Metal/MPS) "
+                    "has no float64. Use backend='gpu' (float32) on Apple Silicon, "
+                    "or backend='cpu' for a double-precision fit."
                 )
             self.device = torch.device('mps')
             self.dtype = torch.float32
@@ -71,10 +77,11 @@ class GPUIRLSBackend:
             raise ValueError(
                 f"Unknown GPU device: {device!r}. Use 'cuda' or 'mps'."
             )
+        self.use_fp64 = use_fp64
 
     @property
     def name(self) -> str:
-        return 'gpu_irls_fp32'
+        return 'gpu_irls_fp64' if self.use_fp64 else 'gpu_irls_fp32'
 
     def solve(
         self,
@@ -82,14 +89,27 @@ class GPUIRLSBackend:
         family: Family,
         tol: float = 1e-8,
         max_iter: int = 25,
+        force: bool = False,
+        penalty: 'NDArray[np.float64] | None' = None,
     ) -> Result[GLMParams]:
         """Run IRLS on GPU to fit the GLM.
+
+        ``penalty`` (optional, length p): an L2 ridge penalty added to the diagonal
+        of XᵀWX each iteration (``diag(penalty)``). It both regularizes the fit and
+        makes the float32 Cholesky well-conditioned — the intended way to run a
+        stable GLM on the GPU at very large scale. The caller is responsible for
+        standardizing the design and back-transforming coefficients (see
+        ``solvers._fit_glm_ridge``); the design passed here is the standardized one.
 
         Args:
             design: Design object with X and y
             family: GLM family specification
             tol: Convergence tolerance (relative deviance change)
             max_iter: Maximum IRLS iterations
+            force: If True, return the GPU result even when IRLS does not
+                converge in float32 (the caller accepts a possibly-inaccurate
+                fit). If False (default), a non-converged fit raises
+                NumericalError instead of returning unreliable coefficients.
 
         Returns:
             Result[GLMParams] with coefficients, deviance, residuals, etc.
@@ -114,6 +134,12 @@ class GPUIRLSBackend:
         with timer.section('data_transfer_to_gpu'):
             X_gpu = torch.from_numpy(X_np).to(device=self.device, dtype=self.dtype)
             y_gpu = torch.from_numpy(y_np).to(device=self.device, dtype=self.dtype)
+            # Optional ridge penalty added to the XᵀWX diagonal (stabilizes fp32).
+            pen_gpu = None
+            if penalty is not None:
+                pen_gpu = torch.from_numpy(
+                    np.asarray(penalty, dtype=np.float64)
+                ).to(device=self.device, dtype=self.dtype)
             wt_gpu = torch.ones(n, device=self.device, dtype=self.dtype)
 
         # ------------------------------------------------------------------
@@ -134,11 +160,33 @@ class GPUIRLSBackend:
         dev_old = family.deviance(y_np, mu_np, wt_np)
         dev_new = dev_old
 
+        # float64 host-side state for μ/η. The ridge path maintains these across
+        # iterations (mixed precision: float32 solve, float64 working quantities)
+        # so the convergence signal isn't degraded by a float32 GPU round-trip.
+        mu_cpu = mu_np.astype(np.float64)
+        eta_cpu = eta_np.astype(np.float64)
+
+        # Effective convergence tolerance. The deviance is a sum of n terms, so in
+        # float32 the relative change cannot fall below a round-off floor ~√n·eps —
+        # the fit then sits in a tiny benign 2-cycle around the true solution. For
+        # the RIDGE path the penalty guarantees the float32 fit is accurate, so we
+        # accept convergence at this float32 floor rather than demand an unreachable
+        # float64 tolerance. Unpenalized GLM (where float32 non-convergence signals
+        # a genuinely bad, ill-conditioned fit) keeps the strict tolerance and fails
+        # loud. float64 (CUDA) keeps the strict tolerance — it can reach it.
+        eff_tol = tol
+        if penalty is not None and self.dtype == torch.float32:
+            fp32_floor = float(np.sqrt(n)) * float(torch.finfo(torch.float32).eps)
+            eff_tol = max(tol, 2.0 * fp32_floor)
+
         with timer.section('irls'):
             for iteration in range(1, max_iter + 1):
-                # Transfer μ, η to CPU for family/link computations
-                mu_cpu = mu_gpu.cpu().numpy().astype(np.float64)
-                eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
+                # Transfer μ, η to CPU for family/link computations. The ridge path
+                # already holds them in float64 on the host (updated below), so it
+                # skips this float32 round-trip that would truncate them.
+                if pen_gpu is None:
+                    mu_cpu = mu_gpu.cpu().numpy().astype(np.float64)
+                    eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
 
                 # Working quantities (CPU, using family/link)
                 mu_eta_val = link.mu_eta(eta_cpu)    # dμ/dη
@@ -168,6 +216,10 @@ class GPUIRLSBackend:
                 wX_gpu = w_gpu.unsqueeze(1) * X_gpu          # W X  (n×p)
                 XtWX = X_gpu.T @ wX_gpu                       # p×p
                 XtWz = X_gpu.T @ (w_gpu * z_gpu)             # p
+                if pen_gpu is not None:
+                    # Ridge: add λ to the diagonal. Raises the smallest eigenvalue,
+                    # so the float32 Cholesky is well-conditioned and stable.
+                    XtWX = XtWX + torch.diag(pen_gpu)
                 try:
                     L = torch.linalg.cholesky(XtWX)
                     sol = torch.linalg.solve_triangular(
@@ -182,11 +234,24 @@ class GPUIRLSBackend:
                     solve_failed = True
                     break
 
-                # Update η = X @ β and μ = linkinv(η)
-                eta_gpu = X_gpu @ coef_gpu
+                # Update η = X @ β and μ = linkinv(η).
+                if pen_gpu is not None:
+                    # Ridge path: the penalty makes the float32 solve accurate, so
+                    # the coefficients are genuinely fp32-precision. Evaluate η in
+                    # float64 on the host (X is well-conditioned here) so the
+                    # convergence signal — the deviance — is not polluted by float32
+                    # matmul noise. This is what lets a ridge GLM converge cleanly
+                    # on the GPU at very large n. (Plain, unpenalized GLM keeps the
+                    # float32 η below, so an ill-conditioned fit still fails loud
+                    # rather than converging to a masked-wrong point.)
+                    coef_cpu = coef_gpu.detach().cpu().numpy().astype(np.float64)
+                    eta_cpu = X_np @ coef_cpu
+                    eta_gpu = torch.from_numpy(eta_cpu).to(
+                        device=self.device, dtype=self.dtype)
+                else:
+                    eta_gpu = X_gpu @ coef_gpu
+                    eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
 
-                # Transfer η to CPU for linkinv
-                eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
                 mu_cpu = link.linkinv(eta_cpu)
                 mu_gpu = torch.from_numpy(mu_cpu).to(
                     device=self.device, dtype=self.dtype
@@ -195,30 +260,53 @@ class GPUIRLSBackend:
                 # Compute deviance on CPU
                 dev_new = family.deviance(y_np, mu_cpu, wt_np)
 
-                # R's convergence criterion
-                if abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < tol:
+                # R's convergence criterion (eff_tol = strict tol, or the float32
+                # round-off floor for the ridge path — see eff_tol above).
+                if abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < eff_tol:
                     converged = True
                     break
 
                 dev_old = dev_new
 
-        if not converged:
+        # A broken inner solve leaves no usable coefficients, so it always raises
+        # (force cannot salvage it). Plain non-convergence raises unless force=True.
+        if solve_failed or (not converged and not force):
             # The float32 GPU IRLS did not reach the convergence tolerance, or the
             # inner solve broke down. This happens for log-link families
-            # (Poisson/Gamma) at large sample sizes, where float32 conditioning of
-            # XᵀWX is insufficient — most often on Apple Silicon (MPS), which has no
-            # float64. The non-converged float32 coefficients are NOT a usable fit;
-            # fail loud so the caller chooses the correct backend, rather than
-            # silently returning wrong numbers or silently switching to the CPU.
-            reason = ("the float32 inner solve broke down (XᵀWX not "
+            # (Poisson/Gamma) at large sample sizes, where the float32 Cholesky on
+            # the normal equations XᵀWX is not stable enough — most often on Apple
+            # Silicon (MPS), which has no float64. The non-converged float32
+            # coefficients are NOT a usable fit. Fail loud and lay out the honest
+            # options, rather than silently returning wrong numbers, silently
+            # switching to the CPU, or papering over it with numerical tricks.
+            # (This mirrors the GPU OLS backend's ill-conditioning message.)
+            reason = ("the float32 Cholesky inner solve broke down (XᵀWX not "
                       "positive-definite in float32)"
                       if solve_failed
-                      else f"it did not converge within {max_iter} iterations")
+                      else f"IRLS did not converge within {max_iter} iterations in "
+                           "float32")
             raise NumericalError(
-                f"GPU GLM IRLS failed: {reason}. This is expected for log-link "
-                f"families (Poisson/Gamma) at large sample sizes in float32, where "
-                f"the GPU backend cannot reach the required precision. Re-run with "
-                f"backend='cpu' for a correct double-precision fit."
+                f"GPU GLM did not produce a reliable fit: {reason}. This is "
+                f"expected for log-link families (Poisson/Gamma) at large sample "
+                f"sizes, where float32 Cholesky on the normal equations is "
+                f"unstable (especially on Apple Silicon / MPS, which has no "
+                f"float64).\n"
+                f"Options:\n"
+                f"  - Use backend='cpu' for a correct double-precision fit "
+                f"(slower)\n"
+                f"  - Use a ridge-penalized fit (a different, better-conditioned "
+                f"estimator)\n"
+                f"  - Pass force=True to return the float32 GPU fit anyway "
+                f"(fast, but may be inaccurate / unstable)"
+            )
+
+        if not converged:
+            # force=True: the caller explicitly accepts a possibly-inaccurate
+            # float32 fit. Return it, but flag it loudly on the result.
+            warnings_list.append(
+                f"GPU GLM IRLS did not converge in {max_iter} float32 iterations; "
+                f"force=True so the (possibly inaccurate) GPU fit is returned. "
+                f"Deviance={dev_new:.6f}."
             )
 
         n_iter = iteration if converged else max_iter
@@ -310,7 +398,8 @@ class GPUIRLSBackend:
         return Result(
             params=params,
             info={
-                'method': 'irls_lstsq_gpu',
+                'method': 'ridge_irls_gpu' if penalty is not None else 'irls_cholesky_gpu',
+                'penalized': penalty is not None,
                 'device': str(self.device),
                 'dtype': str(self.dtype),
                 'device_name': self.device_name,

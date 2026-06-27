@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.20.0
+
+- **Ridge (L2-penalized) regression.** New `fit(..., l2=lambda)` and a `ridge(X, y,
+  lam=lambda, family=...)` convenience wrapper, for linear models and all GLM
+  families. Predictors are standardized and the intercept is left unpenalized, so
+  the penalty strength is scale-invariant (matching `MASS::lm.ridge` and
+  `glmnet(alpha=0)`). Because a ridge fit is a deliberately biased estimator,
+  standard errors / t / p values are reported as `NA` rather than as misleading
+  numbers.
+- **Ridge fits run fast and stably on the GPU at very large scale.** A plain GLM on
+  the GPU can be ill-conditioned in single precision for log-link families at large
+  sample sizes; the ridge penalty fixes the conditioning, so `ridge(...,
+  backend='gpu')` fits a regularized GLM on the GPU where the unpenalized fit
+  cannot. Results match the CPU ridge fit to single-precision tolerance.
+- **New `backend='gpu_fp64'` for double-precision GPU fits.** Runs the GPU
+  computation in float64, giving results numerically equivalent to the CPU
+  reference. Available on CUDA hardware only (Apple Silicon has no float64 and
+  raises a clear error). This is a correctness option — fast double precision needs
+  a data-center GPU. Backend strings now name device and precision together: `cpu`
+  (double), `gpu` (single), `gpu_fp64` (CUDA double).
+- **Clearer guidance when a GPU GLM can't fit reliably.** If a plain GLM cannot
+  converge on the GPU in single precision, the error now lays out the options — use
+  `backend='cpu'`, use a ridge-penalized fit, or pass `force=True` to take the
+  single-precision fit anyway.
+
 ## 3.19.1
 
 - **GPU GLM now fails loudly instead of returning a wrong fit.** A generalized

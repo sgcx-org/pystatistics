@@ -120,9 +120,18 @@ class LinearSolution:
         if self._standard_errors is not None:
             return self._standard_errors
 
+        p = len(self.coefficients)
+
+        # A penalized (ridge) fit is a biased estimator; the ordinary
+        # (X'X)^{-1}σ² standard errors are not valid for it, so we do not report
+        # them. NaN here propagates to t-stats/p-values and shows as "NA" in the
+        # summary — honest rather than misleading.
+        if self._result.info.get('penalized'):
+            self._standard_errors = np.full(p, np.nan, dtype=np.float64)
+            return self._standard_errors
+
         df = self._result.params.df_residual
         rank = self._result.params.rank
-        p = len(self.coefficients)
 
         if df <= 0:
             self._standard_errors = np.full(p, np.nan, dtype=np.float64)

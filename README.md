@@ -366,6 +366,20 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 3.20.0 — Ridge regression, and double-precision GPU fits
+
+- Ridge (L2-penalized) regression: `fit(..., l2=lambda)` or `ridge(X, y, lam=lambda,
+  family=...)`, for linear models and all GLM families. Predictors are standardized
+  and the intercept unpenalized (scale-invariant penalty, matching `MASS::lm.ridge`
+  / `glmnet`). Ridge fits report `NA` standard errors, since penalized estimates
+  don't have valid frequentist inference.
+- Ridge runs fast and stably on the GPU at very large scale — where a plain GLM can
+  be ill-conditioned in single precision, the ridge penalty fixes the conditioning,
+  so `ridge(..., backend='gpu')` fits a regularized GLM the unpenalized fit can't.
+- New `backend='gpu_fp64'`: double-precision GPU fits, numerically equivalent to the
+  CPU reference. CUDA only (Apple Silicon has no float64). Backend strings now name
+  device and precision: `cpu` (double), `gpu` (single), `gpu_fp64` (CUDA double).
+
 ### 3.19.1 — Correctness fix for large GPU GLM fits
 
 - A GLM fit with `backend='gpu'` for a log-link family (Poisson/Gamma) at large

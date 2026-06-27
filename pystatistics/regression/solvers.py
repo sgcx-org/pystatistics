@@ -14,11 +14,13 @@ from numpy.typing import ArrayLike
 
 from pystatistics.core.compute.device import select_device
 from pystatistics.regression.design import Design
-from pystatistics.regression.solution import LinearSolution, GLMSolution
+from pystatistics.regression.solution import (
+    LinearSolution, LinearParams, GLMSolution, GLMParams,
+)
 from pystatistics.regression.backends.cpu import CPUQRBackend
 
 
-BackendChoice = Literal['auto', 'cpu', 'gpu', 'cpu_qr', 'cpu_svd', 'gpu_qr']
+BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64', 'cpu_qr', 'cpu_svd', 'gpu_qr']
 
 
 def fit(
@@ -31,6 +33,7 @@ def fit(
     tol: float = 1e-8,
     max_iter: int = 25,
     names: list[str] | None = None,
+    l2: float = 0.0,
 ) -> Union[LinearSolution, GLMSolution]:
     """
     Fit a linear or generalized linear model.
@@ -52,8 +55,10 @@ def fit(
             path, validated for regulated-industry use). Explicit values:
             'cpu', 'gpu', 'cpu_qr', 'cpu_svd', 'gpu_qr', or 'auto' to
             prefer GPU when available and fall back to CPU.
-        force: If True, proceed with GPU Cholesky even on ill-conditioned
-            matrices. Has no effect on CPU backends.
+        force: If True, proceed with the GPU float32 Cholesky path even when it
+            is unreliable — for OLS, on ill-conditioned designs; for GLM, when
+            IRLS does not converge in float32 (returns the possibly-inaccurate
+            fit instead of raising). Has no effect on CPU backends.
         tol: Convergence tolerance for IRLS (GLM only). Default 1e-8
             matches R's glm.control().
         max_iter: Maximum IRLS iterations (GLM only). Default 25
@@ -62,6 +67,12 @@ def fit(
             If len(names) == p - 1 (one fewer than columns in X),
             "(Intercept)" is prepended automatically.
             If len(names) == p, used as-is.
+        l2: L2 (ridge) penalty strength. Default 0.0 (unpenalized). When > 0,
+            fits a ridge-penalized model: predictors are standardized, the
+            intercept is left unpenalized, and ``l2`` is the penalty added on the
+            standardized scale (matching ``MASS::lm.ridge``'s lambda). A penalized
+            fit does not report standard errors / t / p values (not valid for a
+            biased estimator). See the ``ridge()`` convenience wrapper.
 
     Returns:
         LinearSolution when family is None.
@@ -101,9 +112,37 @@ def fit(
 
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:
-        return _fit_glm(design, family, backend, tol, max_iter, resolved_names)
+        return _fit_glm(design, family, backend, tol, max_iter, resolved_names, force, l2)
     else:
-        return _fit_lm(design, backend, force, resolved_names)
+        return _fit_lm(design, backend, force, resolved_names, l2)
+
+
+def ridge(
+    X_or_design: ArrayLike | Design,
+    y: ArrayLike | None = None,
+    *,
+    lam: float,
+    family: 'str | Family | None' = None,
+    backend: BackendChoice | None = None,
+    tol: float = 1e-8,
+    max_iter: int = 25,
+    names: list[str] | None = None,
+) -> Union[LinearSolution, GLMSolution]:
+    """Ridge (L2-penalized) regression — a thin wrapper over ``fit(..., l2=lam)``.
+
+    ``ridge(X, y, lam=λ)`` fits an L2-penalized linear model; pass ``family=`` for
+    a penalized GLM (e.g. logistic ridge). Predictors are standardized and the
+    intercept is unpenalized; ``lam`` is the penalty on the standardized scale,
+    matching ``MASS::lm.ridge``. Penalized fits do not report standard errors.
+
+    Equivalent to ``fit(X_or_design, y, family=family, l2=lam, ...)``; provided
+    for discoverability. (Future: ``lasso`` / ``elastic_net`` wrappers will sit
+    alongside this once the coordinate-descent solver exists.)
+    """
+    if lam < 0:
+        raise ValueError(f"ridge penalty lam must be non-negative, got {lam}")
+    return fit(X_or_design, y, family=family, backend=backend, tol=tol,
+               max_iter=max_iter, names=names, l2=lam)
 
 
 def _resolve_names(
@@ -133,8 +172,12 @@ def _fit_lm(
     backend: BackendChoice,
     force: bool,
     names: tuple[str, ...] | None,
+    l2: float = 0.0,
 ) -> LinearSolution:
-    """Fit ordinary least squares (existing LM path, unchanged)."""
+    """Fit ordinary least squares, or ridge when l2 > 0."""
+    if l2 > 0:
+        return _fit_lm_ridge(design, l2, names)
+
     backend_impl = _get_lm_backend(backend, design)
 
     # Solve — pass force to GPU backends, CPU ignores it
@@ -146,6 +189,55 @@ def _fit_lm(
     return LinearSolution(_result=result, _design=design, _names=names)
 
 
+def _fit_lm_ridge(
+    design: Design,
+    l2: float,
+    names: tuple[str, ...] | None,
+) -> LinearSolution:
+    """Fit an L2-penalized linear model (ridge), matching MASS::lm.ridge.
+
+    Predictors are standardized and the intercept left unpenalized; ``l2`` is
+    added on the standardized scale via a backward-stable augmented solve, then
+    coefficients are mapped back to the original units. Penalized fits do not
+    carry valid frequentist standard errors (the solution marks itself
+    ``penalized`` so they read as NA).
+    """
+    from pystatistics.core.result import Result
+    from pystatistics.regression._penalty import (
+        standardize, back_transform, augmented_ridge_solve,
+    )
+
+    X, y = np.asarray(design.X, dtype=np.float64), np.asarray(design.y, dtype=np.float64)
+    n, p = design.n, design.p
+
+    Z, y_c, info = standardize(X, y)
+    beta_z = augmented_ridge_solve(Z, y_c, l2)
+    coefficients = back_transform(beta_z, info, p)
+
+    fitted = X @ coefficients
+    residuals = y - fitted
+    rss = float(residuals @ residuals)
+    tss = float(np.sum((y - np.mean(y)) ** 2))
+
+    params = LinearParams(
+        coefficients=coefficients,
+        residuals=residuals,
+        fitted_values=fitted,
+        rss=rss,
+        tss=tss,
+        rank=p,
+        df_residual=n - p,
+    )
+    result = Result(
+        params=params,
+        info={'method': 'ridge', 'penalized': True, 'l2': float(l2)},
+        timing=None,
+        backend_name='cpu_ridge',
+        warnings=(),
+    )
+    return LinearSolution(_result=result, _design=design, _names=names)
+
+
 def _fit_glm(
     design: Design,
     family: 'str | Family',
@@ -153,8 +245,14 @@ def _fit_glm(
     tol: float,
     max_iter: int,
     names: tuple[str, ...] | None,
+    force: bool = False,
+    l2: float = 0.0,
 ) -> GLMSolution:
-    """Fit GLM via IRLS.
+    """Fit GLM via IRLS, or ridge-penalized IRLS when l2 > 0.
+
+    ``force`` is passed to GPU backends only: when True it returns a
+    non-converged float32 GPU fit instead of raising (the CPU backend, which is
+    always stable, ignores it).
 
     For NegativeBinomial with unknown theta (theta=None), runs the
     alternating estimation loop matching R's MASS::glm.nb():
@@ -168,15 +266,168 @@ def _fit_glm(
     )
 
     family_obj = resolve_family(family) if not isinstance(family, Family) else family
+
+    if l2 > 0:
+        if isinstance(family_obj, NegativeBinomial) and family_obj.theta is None:
+            raise NotImplementedError(
+                "Ridge (l2 > 0) is not supported for negative-binomial with "
+                "auto-estimated theta. Fix theta (NegativeBinomial(theta=...)) to "
+                "use a penalized fit.")
+        return _fit_glm_ridge(design, family_obj, backend, tol, max_iter, names, l2)
+
     backend_impl = _get_glm_backend(backend)
 
     # NB with unknown theta: alternating estimation loop
     if isinstance(family_obj, NegativeBinomial) and family_obj.theta is None:
-        return _fit_nb(design, family_obj, backend_impl, tol, max_iter, names)
+        return _fit_nb(design, family_obj, backend_impl, tol, max_iter, names, force=force)
 
-    result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter)
+    # Pass force to GPU backends (which accept it); CPU backend does not.
+    if 'force' in backend_impl.solve.__code__.co_varnames:
+        result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter, force=force)
+    else:
+        result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter)
 
     return GLMSolution(_result=result, _design=design, _names=names)
+
+
+def _fit_glm_ridge(
+    design: Design,
+    family: 'Family',
+    backend: BackendChoice,
+    tol: float,
+    max_iter: int,
+    names: tuple[str, ...] | None,
+    l2: float,
+) -> GLMSolution:
+    """Fit an L2-penalized GLM via ridge-penalized IRLS.
+
+    On the GPU this is the headline path: the ridge penalty makes the float32
+    Cholesky on XᵀWX well-conditioned, so a GLM that is unstable/ill-conditioned
+    in plain float32 fits *fast and stably* on the GPU at very large scale. The
+    CPU path (fp64) is the correctness reference. Both standardize the design
+    (intercept unpenalized) and back-transform; penalized fits carry no SEs.
+    """
+    backend_impl = _get_glm_backend(backend)
+    if 'penalty' in backend_impl.solve.__code__.co_varnames:
+        return _fit_glm_ridge_via_backend(
+            design, family, backend_impl, tol, max_iter, names, l2)
+
+    from pystatistics.core.result import Result
+    from pystatistics.regression._penalty import (
+        standardized_design, weighted_augmented_solve, back_transform_in_design,
+    )
+    from pystatistics.regression.backends.cpu_glm import CPUIRLSBackend
+
+    X = np.asarray(design.X, dtype=np.float64)
+    y = np.asarray(design.y, dtype=np.float64)
+    n, p = design.n, design.p
+    link = family.link
+    wt = np.ones(n)
+
+    A, center, scale, icol = standardized_design(X)
+    pen = np.full(p, float(l2))
+    if icol is not None:
+        pen[icol] = 0.0
+
+    mu = family.initialize(y)
+    eta = link.link(mu)
+    dev_old = family.deviance(y, mu, wt)
+    converged = False
+    iteration = 0
+    beta_A = np.zeros(p)
+    for iteration in range(1, max_iter + 1):
+        mu_eta = link.mu_eta(eta)
+        var_mu = family.variance(mu)
+        z = eta + (y - mu) / mu_eta
+        w = np.maximum(wt * (mu_eta ** 2) / var_mu, 1e-30)
+        beta_A = weighted_augmented_solve(A, z, pen, w)
+        eta = A @ beta_A
+        mu = link.linkinv(eta)
+        dev_new = family.deviance(y, mu, wt)
+        if abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < tol:
+            converged = True
+            break
+        dev_old = dev_new
+
+    coefficients = back_transform_in_design(beta_A, center, scale, icol)
+    eta_final = X @ coefficients
+    mu_final = link.linkinv(eta_final)
+    dev = family.deviance(y, mu_final, wt)
+
+    resid_response = y - mu_final
+    resid_pearson = resid_response / np.sqrt(family.variance(mu_final))
+    resid_deviance = CPUIRLSBackend._deviance_residuals(y, mu_final, wt, family)
+    mu_eta_final = link.mu_eta(eta_final)
+    resid_working = (y - mu_final) / mu_eta_final
+    null_deviance = CPUIRLSBackend._null_deviance(y, wt, family)
+
+    df_residual = n - p
+    dispersion = 1.0 if family.dispersion_is_fixed else (
+        dev / df_residual if df_residual > 0 else float('nan'))
+    aic = family.aic(y, mu_final, wt, p, dispersion)
+
+    params = GLMParams(
+        coefficients=coefficients, fitted_values=mu_final,
+        linear_predictor=eta_final, residuals_working=resid_working,
+        residuals_deviance=resid_deviance, residuals_pearson=resid_pearson,
+        residuals_response=resid_response, deviance=dev,
+        null_deviance=null_deviance, aic=aic, dispersion=dispersion,
+        rank=p, df_residual=df_residual, df_null=n - 1,
+        n_iter=iteration, converged=converged,
+        family_name=family.name, link_name=link.name,
+    )
+    result = Result(
+        params=params,
+        info={'method': 'ridge_irls', 'penalized': True, 'l2': float(l2)},
+        timing=None, backend_name='cpu_ridge_irls', warnings=(),
+    )
+    return GLMSolution(_result=result, _design=design, _names=names)
+
+
+def _fit_glm_ridge_via_backend(
+    design: Design,
+    family: 'Family',
+    backend_impl: object,
+    tol: float,
+    max_iter: int,
+    names: tuple[str, ...] | None,
+    l2: float,
+) -> GLMSolution:
+    """Ridge GLM on a penalty-aware backend (the GPU path).
+
+    Standardizes the design, runs the backend's penalized IRLS on the standardized
+    design (so the float32 XᵀWX + λI Cholesky is well-conditioned), then maps the
+    coefficients back to the original scale. Everything else the backend computes
+    (fitted/residuals/deviance) is η-based and so already correct, since
+    η = A·β_std = X·β_raw.
+    """
+    from dataclasses import replace
+    from pystatistics.core.result import Result
+    from pystatistics.regression._penalty import (
+        standardized_design, back_transform_in_design,
+    )
+
+    X = np.asarray(design.X, dtype=np.float64)
+    p = design.p
+    A, center, scale, icol = standardized_design(X)
+    pen = np.full(p, float(l2))
+    if icol is not None:
+        pen[icol] = 0.0
+
+    std_design = Design.from_arrays(A, np.asarray(design.y, dtype=np.float64))
+    result = backend_impl.solve(std_design, family, tol=tol, max_iter=max_iter,
+                                penalty=pen)
+
+    beta_raw = back_transform_in_design(
+        result.params.coefficients, center, scale, icol)
+    new_params = replace(result.params, coefficients=beta_raw)
+    new_info = {**result.info, 'penalized': True, 'l2': float(l2),
+                'method': 'ridge_irls_gpu'}
+    new_result = Result(
+        params=new_params, info=new_info, timing=result.timing,
+        backend_name=result.backend_name, warnings=result.warnings,
+    )
+    return GLMSolution(_result=new_result, _design=design, _names=names)
 
 
 def _fit_nb(
@@ -188,23 +439,30 @@ def _fit_nb(
     names: tuple[str, ...] | None,
     theta_max_iter: int = 25,
     theta_tol: float = 1e-6,
+    force: bool = False,
 ) -> GLMSolution:
     """Fit negative binomial GLM with theta estimation.
 
     Alternates between GLM fitting (given theta) and theta estimation
-    (given mu), matching R's MASS::glm.nb() algorithm.
+    (given mu), matching R's MASS::glm.nb() algorithm. ``force`` is forwarded
+    to each inner GLM solve (GPU backends only).
     """
     from pystatistics.core.exceptions import ConvergenceError
     from pystatistics.regression.families import NegativeBinomial, Poisson
     from pystatistics.regression._nb_theta import theta_ml
 
+    accepts_force = 'force' in backend_impl.solve.__code__.co_varnames
+
+    def _solve(fam):
+        if accepts_force:
+            return backend_impl.solve(design, fam, tol=tol, max_iter=max_iter, force=force)
+        return backend_impl.solve(design, fam, tol=tol, max_iter=max_iter)
+
     y = design.y
     wt = np.ones(design.n)
 
     # Step 1: Initial Poisson fit for starting mu
-    poisson_result = backend_impl.solve(
-        design, Poisson(), tol=tol, max_iter=max_iter,
-    )
+    poisson_result = _solve(Poisson())
     mu = poisson_result.params.fitted_values
 
     # Step 2: Initial theta from Poisson mu
@@ -213,18 +471,14 @@ def _fit_nb(
     # Step 3: Iterate: refit NB with new theta → re-estimate theta
     for iteration in range(theta_max_iter):
         nb_family = NegativeBinomial(theta=theta, link=family._link)
-        result = backend_impl.solve(
-            design, nb_family, tol=tol, max_iter=max_iter,
-        )
+        result = _solve(nb_family)
         mu = result.params.fitted_values
         theta_new = theta_ml(y, mu, wt)
 
         if abs(theta_new - theta) / (theta + 1e-10) < theta_tol:
             # Converged — final result uses the converged theta
             nb_final = NegativeBinomial(theta=theta_new, link=family._link)
-            result = backend_impl.solve(
-                design, nb_final, tol=tol, max_iter=max_iter,
-            )
+            result = _solve(nb_final)
             return GLMSolution(_result=result, _design=design, _names=names)
 
         theta = theta_new
@@ -271,6 +525,13 @@ def _get_lm_backend(choice: BackendChoice, design: Design):
         from pystatistics.regression.backends.gpu import GPUQRBackend
         return GPUQRBackend(device=device.device_type)
 
+    elif choice == 'gpu_fp64':
+        # float64 GPU OLS — CUDA only (GPUQRBackend raises on MPS, which has no
+        # float64). A correctness path, not a speed path.
+        device = select_device('gpu')
+        from pystatistics.regression.backends.gpu import GPUQRBackend
+        return GPUQRBackend(device=device.device_type, use_fp64=True)
+
     else:
         raise ValueError(f"Unknown backend: {choice!r}")
 
@@ -305,6 +566,18 @@ def _get_glm_backend(choice: BackendChoice):
         try:
             from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
             return GPUIRLSBackend(device=device.device_type)
+        except ImportError:
+            raise ImportError(
+                "GPU GLM backend requires PyTorch. "
+                "Install with: pip install torch"
+            )
+
+    elif choice == 'gpu_fp64':
+        # float64 GPU — CUDA only (the backend raises a clear error on MPS).
+        device = select_device('gpu')
+        try:
+            from pystatistics.regression.backends.gpu_glm import GPUIRLSBackend
+            return GPUIRLSBackend(device=device.device_type, use_fp64=True)
         except ImportError:
             raise ImportError(
                 "GPU GLM backend requires PyTorch. "
