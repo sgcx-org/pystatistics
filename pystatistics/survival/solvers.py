@@ -307,7 +307,7 @@ def discrete_time(
     *,
     names: list[str] | None = None,
     intervals=None,
-    backend: Literal["auto", "cpu", "gpu"] | None = None,
+    backend: Literal["auto", "cpu", "gpu", "gpu_fp64"] | None = None,
 ) -> DiscreteTimeSolution:
     """Discrete-time survival via person-period logistic regression.
 
@@ -325,9 +325,11 @@ def discrete_time(
     intervals : array-like or None
         Time interval boundaries. If None, uses unique event times.
     backend : str or None
-        Backend for the person-period logistic regression. Default
-        None → 'cpu' (R-reference path). Explicit values: "cpu", "gpu",
-        or "auto" to prefer GPU when available.
+        Backend for the person-period logistic regression, forwarded to
+        ``regression.fit``. Default None → 'cpu' (the R-reference path).
+        Explicit values: "cpu" (float64), "gpu" (float32, CUDA or Apple
+        Silicon), "gpu_fp64" (float64, CUDA only — the exact double-precision
+        GPU path), or "auto" (GPU-fp32 if CUDA present, else CPU).
 
     Returns
     -------
@@ -364,7 +366,7 @@ def discrete_time(
             "person_period_n": params.person_period_n,
         },
         timing=timer.result(),
-        backend_name=f"{'gpu' if backend == 'gpu' else 'cpu'}_discrete",
+        backend_name=f"{'cpu' if backend == 'cpu' else 'gpu'}_discrete",
         warnings=(),
     )
 

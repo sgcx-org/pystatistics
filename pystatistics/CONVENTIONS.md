@@ -425,3 +425,38 @@ Non-reserved legacy spellings on private fields (e.g.
 accessor already exposes as `category_names`) collide with nothing and are
 tolerated as internal detail; migrating them is encouraged for tidiness but not
 mandatory, and is not done where it would only churn private plumbing.
+
+### A6 — PyStatistics does not "help": the exact request, or a loud failure
+
+PyStatistics never silently substitutes a different device, precision,
+algorithm, or estimator to "get an answer out." An explicit request is either
+honored as asked, or it fails loud with a specific reason and the available
+remedies. This is the generalization of the "fail loud, no silent defaults"
+rule in the Errors section, made binding library-wide.
+
+This principle has **two symmetric obligations**, and violating either is the
+same mistake — substituting the library's judgement for the user's explicit
+choice:
+
+1. **Do not silently help.** A request that cannot be honored fails loud; it
+   does **not** quietly degrade to something that happens to work. If
+   `backend='gpu'` cannot produce a reliable fit, it raises and names the
+   options — it does **not** silently fall back to CPU, silently downgrade
+   precision, or silently swap estimators. "I asked for discrete-time survival
+   on MPS" must yield exactly that, or a clear explanation of why it cannot be
+   done — never a CPU result handed back as if it were what was asked for.
+
+2. **Do not falsely refuse.** A request that *can* be honored must be honored.
+   Rejecting a result that is actually correct is as much a violation as
+   silently helping — both override the user's explicit choice. In particular,
+   correctness checks are calibrated to the **requested precision**: a float32
+   fit is judged against the float32 round-off floor, not an unreachable float64
+   tolerance. A genuinely-converged float32 fit (a stationary point at the
+   float32 floor) is accepted; only a genuinely-unreliable fit (non-stationary,
+   diverged, or a broken solve) fails. Calibrating an fp32 path's acceptance to
+   an fp64 tolerance — so that correct fp32 fits are rejected — is a latent
+   violation of this rule and is fixed where found. (Resolved on the GPU GLM
+   IRLS path: the unpenalized float32 convergence gate held the strict float64
+   tolerance and rejected correct, well-conditioned fits that had reached the
+   float32 floor; it now accepts a stationary fp32 optimum and fails loud only
+   on a non-stationary one.)
