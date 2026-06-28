@@ -13,6 +13,86 @@ Authors of new modules: read this first, then mirror the reference modules
 
 ---
 
+## The Prime Directive — why PyStatistics exists
+
+This is the reason the library exists. It **predates and governs every rule
+below**, including §0 and the numbered/lettered rules. When any rule, habit, or
+convenience is in tension with this directive, the directive wins. The other
+rules are the *means*; this is the *end*.
+
+> **A working statistician must be able to reach for PyStatistics _instead of R_
+> and give up nothing.**
+
+Two tests decide whether we are meeting it:
+
+1. **Methods-section credibility.** A researcher can write "analysis performed in
+   PyStatistics" in a paper and not feel they need to apologize for, hedge, or
+   hide it. The numbers withstand a reviewer who checks them against R.
+2. **No regret.** Having used PyStatistics, the statistician never has cause to
+   think *"I would have been better off had I just used R."* Not in correctness,
+   not in speed, not in the credibility of the result.
+
+This directive has three standing obligations:
+
+- **Correctness parity (non-negotiable).** Results match a trusted reference (R,
+  and where relevant scipy) to the appropriate numerical tolerance. This is the
+  subject of §0 below and of the validation program.
+- **Performance: on the CPU path, speed parity with R is a _requirement_, not a
+  goal.** The CPU path is where PyStatistics stands in as the R/SAS replacement in
+  Python, so a statistician must never wait longer for the same answer than R
+  would take. If a CPU path is slower than R, we make every effort to close the
+  gap; "slower than R on CPU" is a **defect**, tracked as a regression by the
+  validation suite (`ratio_pystat_over_r` / `speedup_vs_r`), never reported as
+  neutral information. Faster than R is a welcome bonus; **parity is the line.**
+  - **There is no escape hatch on the CPU path.** We do not get to hand the user a
+    tradeoff ("it's slower, but…") — because R hands them none. (Contrast the GPU
+    path, which is *itself* a compensating benefit R cannot offer; there a faster
+    method with a **loud** escape hatch is acceptable — e.g. OLS/GLM on GPU default
+    to Cholesky and route genuine ill-conditioning to ridge / QR / `force=True` /
+    `gpu_fp64`. That hatch is a GPU affordance, not a CPU one.)
+- **Coherence & trust.** The library reads as one coherent work and fails loud
+  rather than returning a quietly-wrong answer (the naming law, the result/error
+  conventions, and A6). A statistician trusts a tool that is consistent and that
+  refuses rather than misleads.
+
+**How a CPU speed gap is closed — in this order.** When a CPU path is slower than
+R, we investigate and exhaust these, in order, before reaching for the next:
+
+1. **Fix the algorithm** — choose a lighter but equally-sound method (e.g.
+   non-pivoted Householder QR with the factor applied implicitly, rather than
+   full column-pivoting QR). Note: optimize the *sound* method; do not downgrade
+   to a weaker one (QR is the least-squares default precisely because it does not
+   square the condition number — genuine ill-conditioning is answered by a
+   better-posed *estimator* like ridge, not a less-stable *solver*).
+2. **Exploit mathematical structure** — sparsity, symmetry, the problem's special
+   form.
+3. **Vectorize** — remove Python-level loops; one BLAS call instead of many.
+4. **Use optimized BLAS/LAPACK** — call the right compiled primitive; avoid
+   materializing temporaries.
+5. **Improve the implementation** — allocation, memory traffic, dtype, buffer
+   reuse.
+6. **Only then**, if the gap remains because the underlying native routine itself
+   is the bottleneck — R wins only because it ships a compiled routine we lack —
+   **write our own native implementation** (Cython/C), reimplemented **clean-room
+   from the algorithm**. R was chosen as the reference partly because its sources
+   are inspectable: read them to understand the *math*, then write it fresh. Never
+   transliterate R's (GPL) source line-for-line — that would make our code a GPL
+   derivative, and is a craftsmanship failure besides.
+
+Reaching step 6 is neither a failure nor optional: if a native implementation is
+the only thing that brings the CPU path to parity, that is what we build. *"That
+is a lot of engineering effort"* is **never** a reason to leave a CPU path slower
+than R. The earlier steps exist so we don't reach for C prematurely — not so we
+can stop short of parity. (Switching the *method or parameterization itself* —
+as opposed to optimizing it — is justified only by necessity, not convenience:
+MVNMLE adopted the forward-Cholesky parameterization because it was *required* to
+make the estimator viable on a GPU, not merely because it was faster.)
+
+Every numbered rule that follows exists to earn one of these three. If a rule
+ever works against the directive, fix the rule.
+
+---
+
 ## 0. Governing philosophy
 
 PyStatistics guarantees **statistical and numerical parity with R** (and, where
