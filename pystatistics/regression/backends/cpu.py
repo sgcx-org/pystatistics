@@ -1,7 +1,8 @@
 """
 CPU reference backend for linear regression.
 
-Uses pivoted QR decomposition to match R's lm() exactly.
+Uses the single-pass, rank-revealing QR least-squares solver (`qr_solve`) to
+match R's lm() exactly — see core/compute/linalg/qr.py.
 """
 
 from typing import Any
@@ -54,7 +55,7 @@ class CPUQRBackend:
         return Result(
             params=params,
             info={
-                'method': 'qr_pivoted',
+                'method': 'qr_rank_revealing',
                 'rank': qr_result.rank,
                 'pivot': qr_result.pivot.tolist(),
                 'R': qr_result.R,

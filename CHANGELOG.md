@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.2.2
+
+Performance. **Fully backward compatible** — no API change, and every reported
+number (coefficients, standard errors, deviance, rank) is unchanged.
+
+- **CPU linear and generalized linear models now match or beat R's speed on every
+  input, including rank-deficient designs.** The CPU least-squares core was
+  rewritten from a column-pivoted QR (run on every solve) to a single-pass,
+  rank-revealing QR equivalent to the method R uses in `lm.fit`/`glm.fit`: it
+  reveals rank and solves in one factorization, and aliases collinear columns to
+  `NA` exactly as R does. This speeds up ordinary regression (`fit`), all GLM
+  families (`fit(family=...)`), and survival's discrete-time models, which share
+  the same solver. On a 320,000-row design: full-rank OLS ~220 ms vs R's ~270 ms,
+  and a rank-deficient design ~228 ms vs R's ~288 ms; a 1,000,000-row logistic
+  GLM fits in ~1.9 s vs R's ~2.2 s. Coefficients match R to machine precision.
+
 ## 4.2.1
 
 - **`discrete_time` now reports confidence intervals.** `DiscreteTimeSolution`
