@@ -443,11 +443,14 @@ class DiscreteTimeSolution(SolutionReprMixin):
     Properties mirror the logistic regression on person-period data.
     """
 
-    __slots__ = ('_result', '_names')
+    __slots__ = ('_result', '_names', '_conf_level')
 
-    def __init__(self, _result: Result[DiscreteTimeParams], _names: tuple[str, ...] | None = None) -> None:
+    def __init__(self, _result: Result[DiscreteTimeParams],
+                 _names: tuple[str, ...] | None = None,
+                 _conf_level: float = 0.95) -> None:
         self._result = _result
         self._names = _names
+        self._conf_level = _conf_level
 
     @property
     def coefficients(self):
@@ -476,6 +479,28 @@ class DiscreteTimeSolution(SolutionReprMixin):
     @property
     def p_values(self):
         return self._result.params.p_values
+
+    @property
+    def conf_level(self) -> float:
+        """Confidence level for ``conf_int`` (default 0.95)."""
+        return self._conf_level
+
+    @property
+    def conf_int(self):
+        """Wald confidence intervals for the covariate coefficients, shape (p, 2).
+
+        ``coef ± z * se`` on the (discrete-time log-hazard) coefficient scale,
+        with the normal quantile for ``conf_level`` (the person-period logistic
+        fit is asymptotic-normal). ``exp(conf_int)`` gives discrete-time
+        hazard-ratio intervals.
+        """
+        import numpy as np
+        from scipy import stats
+
+        z = stats.norm.ppf((1.0 + self._conf_level) / 2.0)
+        coef = self._result.params.coefficients
+        se = self._result.params.standard_errors
+        return np.column_stack([coef - z * se, coef + z * se])
 
     @property
     def hazard_ratios(self):

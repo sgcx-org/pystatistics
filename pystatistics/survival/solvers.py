@@ -310,6 +310,7 @@ def discrete_time(
     names: list[str] | None = None,
     intervals=None,
     backend: Literal["auto", "cpu", "gpu", "gpu_fp64"] | None = None,
+    conf_level: float = 0.95,
 ) -> DiscreteTimeSolution:
     """Discrete-time survival via person-period logistic regression.
 
@@ -332,6 +333,10 @@ def discrete_time(
         Explicit values: "cpu" (float64), "gpu" (float32, CUDA or Apple
         Silicon), "gpu_fp64" (float64, CUDA only — the exact double-precision
         GPU path), or "auto" (GPU-fp32 if CUDA present, else CPU).
+    conf_level : float
+        Confidence level for ``.conf_int`` (default 0.95). Wald intervals on the
+        covariate coefficient scale; ``exp(.conf_int)`` gives discrete-time
+        hazard-ratio intervals.
 
     Returns
     -------
@@ -339,6 +344,9 @@ def discrete_time(
     """
     if backend is None:
         backend = "cpu"
+
+    if conf_level <= 0 or conf_level >= 1:
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
 
     design = SurvivalDesign.for_survival(time, event, X)
 
@@ -383,4 +391,5 @@ def discrete_time(
             )
         resolved_names = tuple(names)
 
-    return DiscreteTimeSolution(_result=result, _names=resolved_names)
+    return DiscreteTimeSolution(_result=result, _names=resolved_names,
+                                _conf_level=conf_level)
