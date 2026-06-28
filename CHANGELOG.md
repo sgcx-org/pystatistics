@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.2.1
+
+- **`discrete_time` now reports confidence intervals.** `DiscreteTimeSolution`
+  gains `.conf_int` (Wald intervals for the covariate coefficients) and
+  `.conf_level`, and `discrete_time` gains a `conf_level=` argument (default
+  `0.95`) — completing the `.conf_int` accessor across the coefficient models.
+  `exp(.conf_int)` gives discrete-time hazard-ratio intervals. Backward
+  compatible.
+
 ## 4.2.0
 
 Performance and GPU-robustness improvements, plus small API additions. **Fully
