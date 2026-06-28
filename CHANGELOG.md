@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.2.3
+
+Correctness fix for float32 GPU GLMs. **Fully backward compatible.**
+
+- **A logistic/Poisson/Gamma GLM with `backend='gpu'` — and therefore
+  `survival.discrete_time(backend='gpu')` — no longer spuriously fails on
+  discrete-time person-period designs at moderate scale.** On a GPU the IRLS
+  iteration could stop just short of the optimum while low-baseline-hazard
+  interval terms were still converging, and the float32 reliability check then
+  rejected the fit even though float32 was perfectly capable of producing it (most
+  often on Apple Silicon). The float32 path now iterates until the fit is genuinely
+  stationary and damps overshooting steps, so these models converge and match the
+  CPU result to single-precision accuracy. Designs that float32 genuinely cannot
+  resolve (for example a very fine time grid whose conditioning exceeds what single
+  precision can handle) still raise a clear error pointing you to `backend='cpu'` or
+  `backend='gpu_fp64'`, rather than returning unreliable numbers. The CPU and
+  double-precision GPU paths are unchanged.
+
 ## 4.2.2
 
 Performance. **Fully backward compatible** — no API change, and every reported

@@ -13,6 +13,15 @@ Final coefficients, fitted values, and residuals are transferred back
 to CPU as float64 numpy arrays. All intermediate IRLS computations
 use float32 for performance on consumer GPUs.
 
+Convergence: the float64 (CUDA) and ridge-float32 paths stop on R's relative
+deviance-change criterion. The plain float32 path instead stops on the relative
+Newton decrement (stationarity), because the float32 deviance cannot fall to the
+strict tolerance — only to a √n·eps round-off floor that would stop the iteration
+early, leaving slowly-converging directions non-stationary. See ``_irls_step.py``.
+Whether a stopped float32 fit is ACCEPTED is decided by a strict float64 Newton-
+decrement gate after the loop (A6: accept the fits float32 can produce, refuse the
+rest loudly).
+
 Supports CUDA and MPS (Apple Silicon).
 """
 
@@ -23,6 +32,9 @@ from numpy.typing import NDArray
 from pystatistics.core.result import Result
 from pystatistics.core.exceptions import NumericalError, ValidationError
 from pystatistics.core.compute.timing import Timer
+from pystatistics.regression.backends._irls_step import (
+    relative_newton_decrement, step_halve,
+)
 from pystatistics.regression.design import Design
 from pystatistics.regression.families import Family
 from pystatistics.regression.solution import GLMParams
@@ -193,37 +205,41 @@ class GPUIRLSBackend:
         dev_old = family.deviance(y_np, mu_np, wt_np)
         dev_new = dev_old
 
-        # float64 host-side state for μ/η. The ridge path maintains these across
-        # iterations (mixed precision: float32 solve, float64 working quantities)
-        # so the convergence signal isn't degraded by a float32 GPU round-trip.
+        # float64 host-side state for μ/η. The mixed-precision paths (ridge and
+        # plain float32) maintain these across iterations (float32 solve, float64
+        # working quantities) so the convergence signal isn't degraded by a float32
+        # GPU round-trip. Only the pure float64 (CUDA) path reads μ/η back from the
+        # device each iteration.
         mu_cpu = mu_np.astype(np.float64)
         eta_cpu = eta_np.astype(np.float64)
 
-        # Effective convergence tolerance. The deviance is a sum of n terms, so in
-        # float32 the relative change cannot fall below a round-off floor ~√n·eps —
-        # the fit then sits in a tiny benign 2-cycle around the true solution. For
-        # the RIDGE path the penalty guarantees the float32 fit is accurate, so we
-        # accept convergence at this float32 floor rather than demand an unreachable
-        # float64 tolerance. Unpenalized GLM (where float32 non-convergence signals
-        # a genuinely bad, ill-conditioned fit) keeps the strict tolerance and fails
-        # loud. float64 (CUDA) keeps the strict tolerance — it can reach it.
+        # The plain (unpenalized) float32 path stops on a Newton-decrement
+        # stationarity test rather than a deviance-change tolerance — see the loop.
+        # ``coef_cur_np`` is the iterate that defines the current η (the point the
+        # decrement is measured at, and the step-halving target). None until the
+        # first step is taken; the stationarity test therefore runs from iteration 2.
+        plain_fp32 = self.dtype == torch.float32 and pen_gpu is None
+        coef_cur_np: 'NDArray[np.float64] | None' = None
+
+        # Effective convergence tolerance for the deviance-change paths (pure
+        # float64 → the strict tol it can reach; ridge float32 → the √n·eps
+        # round-off floor, where the penalty guarantees the stopped fit is
+        # accurate). The plain float32 path does NOT use eff_tol: the same √n·eps
+        # floor would stop it early, while slowly-converging low-hazard directions
+        # are still moving, leaving a non-stationary iterate that the strict gate
+        # then (correctly) refuses — a false negative on designs float32 can fit.
         eff_tol = tol
-        if self.dtype == torch.float32:
-            # The float32 deviance cannot fall below a √n·eps round-off floor, so
-            # the strict float64 tol is unreachable in float32. Stop iterating at
-            # the float32 floor on EVERY float32 path (not just ridge). Whether the
-            # stopped fit is accepted is then decided by a stationarity check after
-            # the loop — NOT by demanding an fp64 tolerance (A6: a correct float32
-            # fit at the float32 floor must not be falsely refused).
+        if self.dtype == torch.float32 and pen_gpu is not None:
             fp32_floor = float(np.sqrt(n)) * float(torch.finfo(torch.float32).eps)
             eff_tol = max(tol, 2.0 * fp32_floor)
 
         with timer.section('irls'):
             for iteration in range(1, max_iter + 1):
-                # Transfer μ, η to CPU for family/link computations. The ridge path
-                # already holds them in float64 on the host (updated below), so it
-                # skips this float32 round-trip that would truncate them.
-                if pen_gpu is None:
+                # Host float64 working state. Only the pure float64 (CUDA) path
+                # reads μ/η back from the device; the mixed-precision paths (ridge,
+                # plain float32) already hold them in float64 on the host (updated
+                # below), so they skip this round-trip that would truncate them.
+                if self.dtype == torch.float64:
                     mu_cpu = mu_gpu.cpu().numpy().astype(np.float64)
                     eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
 
@@ -259,6 +275,16 @@ class GPUIRLSBackend:
                     # Ridge: add λ to the diagonal. Raises the smallest eigenvalue,
                     # so the float32 Cholesky is well-conditioned and stable.
                     XtWX = XtWX + torch.diag(pen_gpu)
+
+                # The plain float32 path's stationarity stop needs XᵀWX / XᵀWz on the
+                # host. They were just formed at the CURRENT iterate (η = X·coef_cur),
+                # so the relative Newton decrement they give measures how stationary
+                # coef_cur is — evaluated below, AFTER taking this iteration's step,
+                # so the returned coefficients are the freshest (most converged) ones.
+                if plain_fp32 and iteration > 1:
+                    XtWX_h = XtWX.detach().cpu().numpy().astype(np.float64)
+                    XtWz_h = XtWz.detach().cpu().numpy().astype(np.float64)
+
                 try:
                     L = torch.linalg.cholesky(XtWX)
                     sol = torch.linalg.solve_triangular(
@@ -273,35 +299,71 @@ class GPUIRLSBackend:
                     solve_failed = True
                     break
 
-                # Update η = X @ β and μ = linkinv(η).
-                if pen_gpu is not None:
+                # Update η = X @ β, μ = linkinv(η), and the deviance.
+                if plain_fp32:
+                    # Stationarity of the PRE-step iterate (coef_cur), from the
+                    # XᵀWX / XᵀWz formed at it above. Computed here (after the solve)
+                    # so that if coef_cur is already stationary we still return the
+                    # fresher post-step coefficients rather than stopping one step
+                    # short — which previously landed slightly off the CPU fit.
+                    rel_decr = None
+                    if iteration > 1:
+                        rel_decr = relative_newton_decrement(
+                            XtWX_h, XtWz_h, coef_cur_np, dev_old)
+                    # R-style step-halving on the host (float64): damp a Newton step
+                    # that overshoots (float32 mode on extreme early iterates: μ→0/1,
+                    # tiny weights, large working responses) back toward the iterate
+                    # we stepped from. require_decrease enforces monotone descent from
+                    # iteration 2 (a valid predecessor); iteration 1 halves only on a
+                    # non-finite deviance. Keeping η/μ float64 gives a clean signal.
+                    coef_np = coef_gpu.detach().cpu().numpy().astype(np.float64)
+                    halve_target = (
+                        coef_cur_np if coef_cur_np is not None
+                        else np.zeros(p, dtype=np.float64)
+                    )
+                    coef_np, eta_cpu, mu_cpu, dev_new = step_halve(
+                        coef_np, halve_target, X_np, link, family, y_np, wt_np,
+                        dev_old, require_decrease=iteration > 1,
+                    )
+                    coef_gpu = torch.from_numpy(coef_np).to(
+                        device=self.device, dtype=self.dtype)
+                    eta_gpu = torch.from_numpy(eta_cpu).to(
+                        device=self.device, dtype=self.dtype)
+                    mu_gpu = torch.from_numpy(mu_cpu).to(
+                        device=self.device, dtype=self.dtype)
+                    coef_cur_np = coef_np   # defines next iteration's η
+                elif pen_gpu is not None:
                     # Ridge path: the penalty makes the float32 solve accurate, so
                     # the coefficients are genuinely fp32-precision. Evaluate η in
                     # float64 on the host (X is well-conditioned here) so the
                     # convergence signal — the deviance — is not polluted by float32
                     # matmul noise. This is what lets a ridge GLM converge cleanly
-                    # on the GPU at very large n. (Plain, unpenalized GLM keeps the
-                    # float32 η below, so an ill-conditioned fit still fails loud
-                    # rather than converging to a masked-wrong point.)
+                    # on the GPU at very large n.
                     coef_cpu = coef_gpu.detach().cpu().numpy().astype(np.float64)
                     eta_cpu = X_np @ coef_cpu
                     eta_gpu = torch.from_numpy(eta_cpu).to(
                         device=self.device, dtype=self.dtype)
+                    mu_cpu = link.linkinv(eta_cpu)
+                    mu_gpu = torch.from_numpy(mu_cpu).to(
+                        device=self.device, dtype=self.dtype)
+                    dev_new = family.deviance(y_np, mu_cpu, wt_np)
                 else:
+                    # Pure float64 (CUDA) path: η on-device, read back at float64.
                     eta_gpu = X_gpu @ coef_gpu
                     eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
+                    mu_cpu = link.linkinv(eta_cpu)
+                    mu_gpu = torch.from_numpy(mu_cpu).to(
+                        device=self.device, dtype=self.dtype)
+                    dev_new = family.deviance(y_np, mu_cpu, wt_np)
 
-                mu_cpu = link.linkinv(eta_cpu)
-                mu_gpu = torch.from_numpy(mu_cpu).to(
-                    device=self.device, dtype=self.dtype
-                )
-
-                # Compute deviance on CPU
-                dev_new = family.deviance(y_np, mu_cpu, wt_np)
-
-                # R's convergence criterion (eff_tol = strict tol, or the float32
-                # round-off floor for the ridge path — see eff_tol above).
-                if abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < eff_tol:
+                # Deviance-change convergence for the eff_tol paths. The plain
+                # float32 path stops once the pre-step iterate is stationary (its
+                # post-step refinement, coef_gpu, is then returned).
+                if plain_fp32:
+                    if rel_decr is not None and rel_decr < _FP32_REL_DECREMENT_TOL:
+                        converged = True
+                        break
+                elif abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < eff_tol:
                     converged = True
                     break
 
