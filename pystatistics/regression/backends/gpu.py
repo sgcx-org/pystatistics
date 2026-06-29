@@ -276,10 +276,17 @@ class GPUQRBackend:
                 'dtype': str(self.dtype),
                 'device_name': self.device_name,
                 'condition_number': cond,
-                # The (possibly weighted) Gram X'WX actually solved. The
-                # standard-error path uses this so weighted fits get (X'WX)⁻¹
-                # rather than the unweighted design Gram.
+                # The (possibly weighted) Gram X'WX actually solved, kept for
+                # diagnostics. NOTE: this is the float32 *device* Gram cast to
+                # float64 — its precision is already lost, so it must NOT be used
+                # to derive standard errors on ill-conditioned designs (it
+                # understates the variance). The SE path recomputes a float64
+                # Gram on the host from ``design.X`` (+ ``weights``) instead.
                 'gram': XtX.detach().cpu().numpy().astype(np.float64),
+                # Prior weights (float64) so the SE path can recompute X'WX
+                # accurately in float64; ``None`` for an ordinary (unweighted) fit.
+                'weights': (None if weights is None
+                            else np.asarray(weights, dtype=np.float64)),
             },
             timing=timer.result(),
             backend_name=self.name,

@@ -642,6 +642,7 @@ class GPUIRLSBackend:
             deviance=dev,
             null_deviance=null_deviance,
             aic=aic,
+            ic_param_count=final_rank + family.n_ic_dispersion_params,
             dispersion=dispersion,
             rank=final_rank,
             df_residual=df_residual,

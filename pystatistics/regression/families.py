@@ -27,6 +27,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+# Machine epsilon for float64 (~2.22e-16). Used as the lower/upper bound when
+# clipping binomial fitted probabilities in the deviance and log-likelihood, so
+# that those statistics match R's binomial()$dev.resids / linkinv, which bound
+# mu to .Machine$double.eps. log(eps) is finite, so there is no overflow risk.
+_FLOAT64_EPS = float(np.finfo(np.float64).eps)
+
+
 # =====================================================================
 # Link functions
 # =====================================================================
@@ -253,6 +260,22 @@ class Family(ABC):
         """
         return False
 
+    @property
+    def n_ic_dispersion_params(self) -> int:
+        """Number of ML-estimated dispersion/shape parameters the information
+        criteria penalize as free parameters, beyond the regression coefficients
+        counted in ``rank``.
+
+        R counts the dispersion of Gaussian (σ²) and Gamma (the shape) GLMs as a
+        free parameter in both AIC and BIC — its ``logLik`` reports
+        ``df = rank + 1``. The fixed-dispersion families (Binomial, Poisson) and
+        the fixed-θ negative binomial do not, so this returns 0 by default.
+        ``aic()`` of the affected families adds the ``+2`` for this parameter;
+        recording the count here lets ``GLMSolution.bic`` re-penalize it with
+        ``log(n)`` instead of leaving it at the AIC constant.
+        """
+        return 0
+
     @abstractmethod
     def log_likelihood(
         self, y: NDArray, mu: NDArray, wt: NDArray, dispersion: float
@@ -342,6 +365,11 @@ class Gaussian(Family):
     def dispersion_is_fixed(self) -> bool:
         return False
 
+    @property
+    def n_ic_dispersion_params(self) -> int:
+        # σ² is ML-estimated and counted by AIC (the +2 above) and BIC.
+        return 1
+
 
 class Binomial(Family):
     """Binomial family. Default link: logit.
@@ -369,8 +397,11 @@ class Binomial(Family):
         return (w * y + 0.5) / (w + 1.0)
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
-        # NUMERICAL GUARD: prevents log(0) in deviance computation
-        mu = np.clip(mu, 1e-10, 1 - 1e-10)
+        # NUMERICAL GUARD: prevents log(0) in deviance computation. Bound at
+        # machine epsilon (not 1e-10) to match R's binomial()$dev.resids, which
+        # clips mu to .Machine$double.eps; a coarser bound under-counts the
+        # deviance for models with very extreme fitted probabilities.
+        mu = np.clip(mu, _FLOAT64_EPS, 1 - _FLOAT64_EPS)
         # Unit deviance: 2 * [y*log(y/mu) + (1-y)*log((1-y)/(1-mu))]
         # with 0*log(0) = 0. np.where evaluates both branches, so
         # suppress harmless warnings from the unused branch.
@@ -384,8 +415,10 @@ class Binomial(Family):
     ) -> float:
         # Binomial log-likelihood for binary data:
         # Σ wt_i * [y_i * log(μ_i) + (1 - y_i) * log(1 - μ_i)]
-        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
-        mu = np.clip(mu, 1e-10, 1 - 1e-10)
+        # NUMERICAL GUARD: bound at machine epsilon (matching R, see deviance
+        # above) so the AIC/BIC log-likelihood uses the same clip as the
+        # deviance and stays consistent with R's binomial()$aic.
+        mu = np.clip(mu, _FLOAT64_EPS, 1 - _FLOAT64_EPS)
         ll = float(np.sum(wt * (y * np.log(mu) + (1 - y) * np.log(1 - mu))))
         return ll
 
@@ -541,6 +574,12 @@ class GammaFamily(Family):
     @property
     def dispersion_is_fixed(self) -> bool:
         return False
+
+    @property
+    def n_ic_dispersion_params(self) -> int:
+        # The Gamma shape (1/dispersion) is ML-estimated and counted by AIC
+        # (the +2 above) and BIC, matching R's Gamma()$aic / logLik df.
+        return 1
 
 
 class NegativeBinomial(Family):

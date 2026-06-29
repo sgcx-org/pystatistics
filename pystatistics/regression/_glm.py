@@ -133,9 +133,11 @@ class GLMSolution(SolutionReprMixin):
         """Bayesian Information Criterion.
 
         Derives −2·logL from the AIC using the same parameter count the AIC was
-        built with (``ic_param_count`` when set — e.g. coefficients + θ for an
-        auto-estimated negative binomial — otherwise ``rank``), then re-penalizes
-        with ``log(n)``.
+        built with (``ic_param_count`` — the coefficients in ``rank`` plus any
+        ML-estimated dispersion the AIC penalized: σ² for Gaussian, the shape for
+        Gamma, θ for an auto-estimated negative binomial), then re-penalizes with
+        ``log(n)``. Falls back to ``rank`` only for the legacy case where
+        ``ic_param_count`` was not recorded.
         """
         k = self._result.params.ic_param_count
         if k is None:

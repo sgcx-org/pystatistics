@@ -179,14 +179,22 @@ class LinearSolution(SolutionReprMixin):
 
             self._standard_errors = se
         else:
-            # NOT A FALLBACK: mathematically equivalent to QR path.
-            # GPU backends don't store QR factors, so we compute
-            # (X'WX)^{-1} directly. Same result, different route. The backend
-            # stores the exact Gram it solved (weighted X'WX for a WLS fit);
-            # use it so weighted fits get the right standard errors, falling
-            # back to the unweighted design Gram for an ordinary fit.
-            gram = self._result.info.get('gram')
-            XtX = gram if gram is not None else self._design.XtX()
+            # NOT A FALLBACK: mathematically equivalent to the QR path. GPU
+            # backends don't store QR factors, so we compute (X'WX)^{-1}
+            # directly — but from a float64-accurate Gram recomputed on the host,
+            # NEVER the backend's float32 device Gram (``info['gram']``). On an
+            # ill-conditioned design the float32 Gram has lost its smallest
+            # eigenvalue, so inverting it understates the variance and reports
+            # standard errors that are too small (a 4.3.0 regression). For an
+            # ordinary fit this is X'X (Design.XtX, float64); for a weighted fit
+            # it is X'WX recomputed from the float64 design and the prior weights.
+            weights = self._result.info.get('weights')
+            if weights is None:
+                XtX = self._design.XtX()
+            else:
+                X = self._design.X
+                w = np.asarray(weights, dtype=np.float64)
+                XtX = X.T @ (w[:, None] * X)
             try:
                 XtX_inv = np.linalg.inv(XtX)
                 self._standard_errors = np.sqrt(sigma_sq * np.diag(XtX_inv))
