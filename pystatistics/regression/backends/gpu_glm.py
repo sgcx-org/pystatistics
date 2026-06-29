@@ -22,6 +22,18 @@ Whether a stopped float32 fit is ACCEPTED is decided by a strict float64 Newton-
 decrement gate after the loop (A6: accept the fits float32 can produce, refuse the
 rest loudly).
 
+Inner solve: the WLS step (XᵀWX)β = Xᵀ(Wz) is solved by Cholesky of the
+on-device weighted normal-equations matrix — EXCEPT on the MPS plain-float32 path,
+which solves it matrix-free by conjugate gradient on the operator H v = Xᵀ(W(X v))
+so XᵀWX is never formed. Forming XᵀWX squares the condition number, and on a cold
+MPS context the float32 Gram matrix at person-period quarterly scale can come out
+not-positive-definite and crash Cholesky; the squaring-free CG step removes that
+failure at its root. CUDA Cholesky is robust and is left unchanged. See
+``_mps_cg_solve`` and ``docs`` for the design study. The MPS solver path is
+validated per shipped torch version (kernel behaviour is version-sensitive); the
+host float64 Newton-decrement acceptance gate is the version-independent guarantee
+that an unreliable fit fails loud rather than returning silently wrong.
+
 Supports CUDA and MPS (Apple Silicon).
 """
 
@@ -74,6 +86,60 @@ def _newton_decrement(X_np, y_np, wt_np, coef, link, family):
     except np.linalg.LinAlgError:
         return float("inf")
     return float(score @ step)
+
+
+def _mps_cg_solve(X_gpu, w_gpu, rhs_gpu, b_prev_gpu, tol=1e-7, max_iter=300):
+    """Matrix-free conjugate-gradient solve of (XᵀWX) b = Xᵀ(W z) on-device.
+
+    Solves the IRLS weighted normal-equations step WITHOUT ever forming XᵀWX,
+    using only the operator ``H v = Xᵀ(W(X v))``. Not squaring the design's
+    condition number is what keeps the float32 solve off the not-positive-definite
+    knife edge that crashes a cold MPS Cholesky context at person-period quarterly
+    scale (study §4 — a *reliability* improvement, not a correctness fix: the old
+    Cholesky path always failed loud, never silently wrong). Warm-started from
+    ``b_prev_gpu`` (the current IRLS iterate) so successive IRLS steps need few CG
+    iterations.
+
+    A non-converged or SPD-lost iterate is deliberately NOT special-cased here: it
+    is returned as-is and judged by the host float64 Newton-decrement acceptance
+    gate after the IRLS loop, which refuses it loudly (A6). CG never decides
+    acceptance; it only proposes a step.
+
+    Args:
+        X_gpu: Design matrix (n×p), device float32.
+        w_gpu: IRLS weights (n,), device float32.
+        rhs_gpu: Right-hand side Xᵀ(W z) (p,), device float32.
+        b_prev_gpu: Warm-start coefficients (p,), device float32.
+        tol: Relative-residual stop ‖rhs − H x‖ / ‖rhs‖.
+        max_iter: Iteration cap (≥ p guarantees convergence in exact arithmetic).
+
+    Returns:
+        Device float32 tensor (p,) — the warm-started CG iterate.
+    """
+    import torch
+
+    def matvec(v):
+        return X_gpu.T @ (w_gpu * (X_gpu @ v))   # H v = Xᵀ(W(X v)); XᵀWX never formed
+
+    x = b_prev_gpu.clone()
+    r = rhs_gpu - matvec(x)
+    pvec = r.clone()
+    rs = torch.dot(r, r)
+    rhs_norm = torch.linalg.vector_norm(rhs_gpu).clamp(min=1e-30)
+    for _ in range(max_iter):
+        Ap = matvec(pvec)
+        denom = torch.dot(pvec, Ap)
+        if float(denom.item()) <= 0.0:        # SPD lost in float32 — stop and let
+            break                              # the host gate refuse if it matters
+        alpha = rs / denom
+        x = x + alpha * pvec
+        r = r - alpha * Ap
+        rs_new = torch.dot(r, r)
+        if float((torch.sqrt(rs_new) / rhs_norm).item()) < tol:
+            break
+        pvec = r + (rs_new / rs) * pvec
+        rs = rs_new
+    return x
 
 
 class GPUIRLSBackend:
@@ -221,6 +287,17 @@ class GPUIRLSBackend:
         plain_fp32 = self.dtype == torch.float32 and pen_gpu is None
         coef_cur_np: 'NDArray[np.float64] | None' = None
 
+        # MPS plain-float32 inner solve: matrix-free conjugate gradient on the
+        # operator H v = Xᵀ(W(X v)) instead of Cholesky-of-XᵀWX. Squaring-free, so
+        # it removes the not-PD cold-context Cholesky crash at the quarterly knife
+        # edge at its root (study §4/§8). CUDA keeps Cholesky (robust there, 24/24);
+        # ridge and fp64 keep their existing paths. NOTE: MPS kernel behaviour is
+        # torch-version-sensitive, so this solver path is validated per shipped
+        # torch version; the host float64 acceptance gate after the loop is the
+        # version-INDEPENDENT guarantee that a wrong fit fails loud rather than
+        # returning silently wrong.
+        mps_cg = plain_fp32 and self.device.type == 'mps'
+
         # Effective convergence tolerance for the deviance-change paths (pure
         # float64 → the strict tol it can reach; ridge float32 → the √n·eps
         # round-off floor, where the penalty guarantees the stopped fit is
@@ -259,45 +336,77 @@ class GPUIRLSBackend:
                 z_gpu = torch.from_numpy(z_np).to(device=self.device, dtype=self.dtype)
                 w_gpu = torch.from_numpy(w_np).to(device=self.device, dtype=self.dtype)
 
-                # WLS via the weighted normal equations (Xᵀ W X) β = Xᵀ W z,
-                # solved by Cholesky + two triangular solves. This is
-                # mathematically the same weighted least-squares step as the
-                # √w·X / √w·z lstsq formulation, but uses only Cholesky and
-                # triangular solves — which ARE supported on MPS (lstsq is NOT,
-                # so the old path failed outright on Apple Silicon) and are far
-                # cheaper than a full lstsq on the n×p system on CUDA. The p×p
-                # Gram solve also stays on-device, removing the lstsq's larger
-                # work and (on MPS) its unsupported-op fallback.
-                wX_gpu = w_gpu.unsqueeze(1) * X_gpu          # W X  (n×p)
-                XtWX = X_gpu.T @ wX_gpu                       # p×p
-                XtWz = X_gpu.T @ (w_gpu * z_gpu)             # p
-                if pen_gpu is not None:
-                    # Ridge: add λ to the diagonal. Raises the smallest eigenvalue,
-                    # so the float32 Cholesky is well-conditioned and stable.
-                    XtWX = XtWX + torch.diag(pen_gpu)
+                # The plain float32 path's stationarity stop is the relative Newton
+                # decrement at the CURRENT iterate (η = X·coef_cur). On MPS it is
+                # recovered matrix-free from the CG result (mps_rel_decr below); on
+                # the other paths it uses the host-copied XᵀWX / XᵀWz formed here.
+                # Evaluated AFTER this iteration's step so the returned coefficients
+                # are the freshest (most converged) ones.
+                mps_rel_decr = None
+                if mps_cg:
+                    # Matrix-free CG solve of (XᵀWX) b = Xᵀ(W z) via H v = Xᵀ(W(X v)).
+                    # XᵀWX is NEVER formed → the float32 condition number is not
+                    # squared → no cold-context not-PD Cholesky crash. Warm-started
+                    # from the current iterate.
+                    b_prev_gpu = (
+                        torch.from_numpy(coef_cur_np).to(
+                            device=self.device, dtype=self.dtype)
+                        if coef_cur_np is not None
+                        else torch.zeros(p, device=self.device, dtype=self.dtype)
+                    )
+                    rhs_gpu = X_gpu.T @ (w_gpu * z_gpu)
+                    coef_gpu = _mps_cg_solve(X_gpu, w_gpu, rhs_gpu, b_prev_gpu)
 
-                # The plain float32 path's stationarity stop needs XᵀWX / XᵀWz on the
-                # host. They were just formed at the CURRENT iterate (η = X·coef_cur),
-                # so the relative Newton decrement they give measures how stationary
-                # coef_cur is — evaluated below, AFTER taking this iteration's step,
-                # so the returned coefficients are the freshest (most converged) ones.
-                if plain_fp32 and iteration > 1:
-                    XtWX_h = XtWX.detach().cpu().numpy().astype(np.float64)
-                    XtWz_h = XtWz.detach().cpu().numpy().astype(np.float64)
+                    # Relative Newton decrement of the pre-step iterate (coef_cur =
+                    # b_prev_gpu), recovered matrix-free from the CG result: the
+                    # score is U = rhs − H·coef_cur and the Newton step
+                    # Δ = coef_gpu − coef_cur = H⁻¹U, so λ² = UᵀΔ — algebraically the
+                    # SAME quantity relative_newton_decrement computes, but on-device
+                    # without forming XᵀWX. This is only the STOP signal; the
+                    # load-bearing acceptance decision is the host float64 gate after
+                    # the loop (unchanged).
+                    if iteration > 1:
+                        H_bprev = X_gpu.T @ (w_gpu * (X_gpu @ b_prev_gpu))
+                        score_gpu = rhs_gpu - H_bprev
+                        delta_gpu = coef_gpu - b_prev_gpu
+                        lam2 = max(float(torch.dot(score_gpu, delta_gpu).item()), 0.0)
+                        mps_rel_decr = lam2 / (abs(dev_old) + 0.1)
+                else:
+                    # WLS via the weighted normal equations (Xᵀ W X) β = Xᵀ W z,
+                    # solved by Cholesky + two triangular solves. This is
+                    # mathematically the same weighted least-squares step as the
+                    # √w·X / √w·z lstsq formulation, but uses only Cholesky and
+                    # triangular solves — which ARE supported on MPS (lstsq is NOT,
+                    # so the old path failed outright on Apple Silicon) and are far
+                    # cheaper than a full lstsq on the n×p system on CUDA. The p×p
+                    # Gram solve also stays on-device, removing the lstsq's larger
+                    # work and (on MPS) its unsupported-op fallback.
+                    wX_gpu = w_gpu.unsqueeze(1) * X_gpu          # W X  (n×p)
+                    XtWX = X_gpu.T @ wX_gpu                       # p×p
+                    XtWz = X_gpu.T @ (w_gpu * z_gpu)             # p
+                    if pen_gpu is not None:
+                        # Ridge: add λ to the diagonal. Raises the smallest
+                        # eigenvalue, so the float32 Cholesky is well-conditioned.
+                        XtWX = XtWX + torch.diag(pen_gpu)
 
-                try:
-                    L = torch.linalg.cholesky(XtWX)
-                    sol = torch.linalg.solve_triangular(
-                        L, XtWz.unsqueeze(1), upper=False)
-                    coef_gpu = torch.linalg.solve_triangular(
-                        L.T, sol, upper=True).squeeze(1)
-                except torch._C._LinAlgError:
-                    # The float32 weighted normal equations are not
-                    # positive-definite — typically an ill-conditioned design at
-                    # large n in float32. Stop and fall back to the exact CPU path
-                    # below rather than raising; the caller still gets a result.
-                    solve_failed = True
-                    break
+                    if plain_fp32 and iteration > 1:
+                        XtWX_h = XtWX.detach().cpu().numpy().astype(np.float64)
+                        XtWz_h = XtWz.detach().cpu().numpy().astype(np.float64)
+
+                    try:
+                        L = torch.linalg.cholesky(XtWX)
+                        sol = torch.linalg.solve_triangular(
+                            L, XtWz.unsqueeze(1), upper=False)
+                        coef_gpu = torch.linalg.solve_triangular(
+                            L.T, sol, upper=True).squeeze(1)
+                    except torch._C._LinAlgError:
+                        # The float32 weighted normal equations are not
+                        # positive-definite — typically an ill-conditioned design at
+                        # large n in float32. Stop and fall back to the exact CPU
+                        # path below rather than raising; the caller still gets a
+                        # result. (CUDA/ridge only — the MPS plain path uses CG.)
+                        solve_failed = True
+                        break
 
                 # Update η = X @ β, μ = linkinv(η), and the deviance.
                 if plain_fp32:
@@ -308,8 +417,11 @@ class GPUIRLSBackend:
                     # short — which previously landed slightly off the CPU fit.
                     rel_decr = None
                     if iteration > 1:
-                        rel_decr = relative_newton_decrement(
-                            XtWX_h, XtWz_h, coef_cur_np, dev_old)
+                        rel_decr = (
+                            mps_rel_decr if mps_cg
+                            else relative_newton_decrement(
+                                XtWX_h, XtWz_h, coef_cur_np, dev_old)
+                        )
                     # R-style step-halving on the host (float64): damp a Newton step
                     # that overshoots (float32 mode on extreme early iterates: μ→0/1,
                     # tiny weights, large working responses) back toward the iterate
@@ -400,6 +512,26 @@ class GPUIRLSBackend:
                           f"{_FP32_REL_DECREMENT_TOL:.0e})")
             else:
                 reason = f"IRLS did not converge within {max_iter} iterations"
+            # Explicit remedies. gpu_fp64 is CUDA-only (Metal/MPS has no float64),
+            # so on MPS it is omitted — suggesting it to an Apple-Silicon user would
+            # just produce a guaranteed "CUDA required" error. The only same-machine
+            # higher-precision fallback on MPS is backend='cpu'. We never substitute
+            # the device automatically (A6) — the user chooses.
+            options = [
+                "  - backend='cpu' for a correct double-precision fit (slower)"
+            ]
+            if self.device.type != 'mps':
+                options.append(
+                    "  - backend='gpu_fp64' on CUDA for an exact GPU fit"
+                )
+            options.append(
+                "  - a ridge-penalized fit (a different, better-conditioned "
+                "estimator)"
+            )
+            options.append(
+                "  - force=True to return the float32 fit anyway (fast, but may "
+                "be inaccurate / unstable)"
+            )
             raise NumericalError(
                 f"GPU GLM did not produce a reliable fit: {reason}. This happens "
                 f"for ill-conditioned designs at large n in float32 — typically a "
@@ -407,12 +539,7 @@ class GPUIRLSBackend:
                 f"locate the optimum (most often on Apple Silicon / MPS, which has "
                 f"no float64). PyStatistics does not silently substitute a CPU or "
                 f"lower-precision result; choose explicitly:\n"
-                f"  - backend='cpu' for a correct double-precision fit (slower)\n"
-                f"  - backend='gpu_fp64' on CUDA for an exact GPU fit\n"
-                f"  - a ridge-penalized fit (a different, better-conditioned "
-                f"estimator)\n"
-                f"  - force=True to return the float32 fit anyway (fast, but may "
-                f"be inaccurate / unstable)"
+                + "\n".join(options)
             )
 
         if not converged:
@@ -513,7 +640,11 @@ class GPUIRLSBackend:
         return Result(
             params=params,
             info={
-                'method': 'ridge_irls_gpu' if penalty is not None else 'irls_cholesky_gpu',
+                'method': (
+                    'ridge_irls_gpu' if penalty is not None
+                    else 'irls_cg_gpu' if mps_cg
+                    else 'irls_cholesky_gpu'
+                ),
                 'penalized': penalty is not None,
                 'device': str(self.device),
                 'dtype': str(self.dtype),

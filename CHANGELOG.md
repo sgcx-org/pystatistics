@@ -1,5 +1,29 @@
 # Changelog
 
+## 4.2.4
+
+Reliability fix for float32 GPU GLMs on Apple Silicon (MPS). **Fully backward
+compatible** — no API change, and accepted fits are unchanged.
+
+- **A logistic/Poisson/Gamma GLM with `backend='gpu'` — and therefore
+  `survival.discrete_time(backend='gpu')` — now fits on Apple Silicon where it
+  could previously fail at moderate scale.** On MPS the GPU fit solved each IRLS
+  step by factoring the weighted normal-equations matrix; forming that matrix
+  squares the design's conditioning, and on a freshly started GPU context a
+  discrete-time person-period design at quarterly resolution could push the
+  single-precision matrix just past the point where the factorization is possible
+  and abort. The GPU fit now solves each step with a matrix-free conjugate-gradient
+  method that never forms that matrix, so the conditioning is not squared and these
+  designs converge — matching the CPU result to single-precision accuracy. Previous
+  behavior was always a clear error, never a wrong answer; this change turns those
+  errors into successful fits. The CUDA and double-precision GPU paths are
+  unchanged.
+- **Clearer fallback guidance on Apple Silicon.** When a GPU GLM genuinely cannot
+  reach a reliable single-precision fit and raises, the message on Apple Silicon now
+  points you to `backend='cpu'` and no longer suggests `backend='gpu_fp64'` (which
+  needs CUDA and is unavailable on Apple Silicon). The fit never silently falls back
+  to the CPU — it raises and you choose. The CUDA guidance is unchanged.
+
 ## 4.2.3
 
 Correctness fix for float32 GPU GLMs. **Fully backward compatible.**
