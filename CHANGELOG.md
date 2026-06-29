@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.3.1
+
+A correctness fix for the information criteria of an auto-estimated
+negative-binomial fit, matching R's `MASS::glm.nb`.
+
+- **`fit(family='negative.binomial')` (with θ estimated) now counts θ as a
+  parameter in AIC and BIC, matching `MASS::glm.nb`.** When the dispersion θ is
+  estimated rather than supplied, it is a free parameter; the fit previously
+  reported the fixed-θ AIC, so its AIC was 2 too low and its BIC omitted θ's
+  `log(n)` term. AIC and BIC now match `glm.nb` to round-off. Coefficients,
+  standard errors, deviance, degrees of freedom and Wald statistics are
+  unchanged, and fixed-θ fits (`family=NegativeBinomial(theta=...)`) are
+  unaffected.
+- **The estimated θ is now available** on such a fit via `result.info['theta']`,
+  matching what `glm.nb` reports.
+
 ## 4.3.0
 
 Prior weights and offsets for regression, plus an R-matching Gamma AIC.
