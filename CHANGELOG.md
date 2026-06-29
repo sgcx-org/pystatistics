@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.3.3
+
+Discrete-time survival results now report whether the model fit converged.
+
+- **`survival.discrete_time(...)` results now expose `.converged` and
+  `.n_iter`.** The discrete-time model is fit by an iteratively reweighted
+  least squares (IRLS) logistic regression over a person-period expansion, but
+  the returned solution previously gave no way to see whether that fit
+  converged — unlike `coxph`, whose result already reports both. A
+  discrete-time result now carries `.converged` (bool) and `.n_iter` (int),
+  using the same accessor names as the Cox and GLM results, and `summary()`
+  prints a matching "Converged: … (N iterations)" line. A fit that fails to
+  converge (for example, a perfectly separated design) reports
+  `converged=False` with `n_iter` at the solver's iteration cap; a degenerate
+  all-censored fit, where no IRLS runs, reports `converged=False` with
+  `n_iter=0`. Additive — no existing attribute was removed or renamed.
+
 ## 4.3.2
 
 Correctness fixes for regression model-fit statistics and GPU standard errors.

@@ -174,6 +174,62 @@ class TestDiscreteTimeSolution:
         assert result.timing is not None
 
 
+class TestDiscreteTimeConvergence:
+    """Convergence signal surfaced from the person-period binomial GLM."""
+
+    def test_well_posed_fit_converges(self):
+        """A well-posed coarse-bin fit reports converged with few iterations."""
+        result = discrete_time(DT_TIME, DT_EVENT, DT_X, intervals=[1, 3, 5])
+
+        assert isinstance(result.converged, bool)
+        assert result.converged is True
+        assert isinstance(result.n_iter, int)
+        # A well-separated, well-conditioned IRLS settles quickly; it must at
+        # least not be pinned at the solver's iteration cap.
+        assert 0 < result.n_iter < 25
+
+    def test_convergence_in_summary(self):
+        """summary() reports the convergence line."""
+        result = discrete_time(DT_TIME, DT_EVENT, DT_X, intervals=[1, 3, 5])
+        s = result.summary()
+        assert "Converged:" in s
+        assert "iterations" in s
+
+    def test_separation_hits_iteration_cap(self):
+        """A perfectly-separated design fails to converge and reports the cap.
+
+        A binary covariate that perfectly predicts the event drives the logistic
+        MLE toward ±infinity. With a large sample the per-observation deviance
+        reaches the floating-point floor only after many steps, so IRLS keeps
+        moving past the solver's iteration cap and stops with converged=False
+        and n_iter pinned at the cap (rather than 0). This is exactly the
+        thrashing-at-the-cap case a caller needs ``converged`` to expose.
+        """
+        # 200 subjects with x=0 all event at t=3; 200 with x=1 all censored at
+        # t=3 → the covariate perfectly separates event from non-event.
+        n = 200
+        time = np.full(2 * n, 3.0, dtype=np.float64)
+        event = np.concatenate([np.ones(n), np.zeros(n)]).astype(np.float64)
+        X = np.concatenate([np.zeros(n), np.ones(n)]).astype(np.float64).reshape(-1, 1)
+
+        result = discrete_time(time, event, X)
+
+        assert result.converged is False
+        # Non-convergence is reported as the solver's iteration cap, not 0.
+        assert result.n_iter == 25
+
+    def test_no_events_reports_not_converged(self):
+        """All-censored degenerate fit: no IRLS ran → not converged, 0 iters."""
+        time = np.array([1, 2, 3, 4, 5], dtype=np.float64)
+        event = np.zeros(5, dtype=np.float64)
+        X = np.ones((5, 1), dtype=np.float64)
+
+        result = discrete_time(time, event, X)
+        assert result.n_events == 0
+        assert result.converged is False
+        assert result.n_iter == 0
+
+
 class TestDiscreteTimeValidation:
     """Input validation."""
 

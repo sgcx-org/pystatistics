@@ -539,6 +539,25 @@ class DiscreteTimeSolution(SolutionReprMixin):
         return self._result.params.glm_aic
 
     @property
+    def converged(self) -> bool:
+        """Whether the person-period binomial IRLS converged.
+
+        ``False`` means the underlying logistic fit hit the iteration cap (or,
+        for an all-censored design with no events, that no fit ran) — treat the
+        coefficients as unreliable. Mirrors ``CoxSolution.converged``.
+        """
+        return self._result.params.converged
+
+    @property
+    def n_iter(self) -> int:
+        """IRLS iterations used by the person-period binomial GLM.
+
+        Mirrors ``CoxSolution.n_iter``. A value at the solver's iteration cap
+        alongside ``converged == False`` indicates a fit that did not settle.
+        """
+        return self._result.params.n_iter
+
+    @property
     def backend_name(self) -> str:
         return self._result.backend_name
 
@@ -583,6 +602,7 @@ class DiscreteTimeSolution(SolutionReprMixin):
         lines.append("")
         lines.append(f"  Deviance: {self.glm_deviance:.4f}")
         lines.append(f"  AIC: {self.glm_aic:.4f}")
+        lines.append(f"  Converged: {self.converged} ({self.n_iter} iterations)")
 
         return "\n".join(lines)
 

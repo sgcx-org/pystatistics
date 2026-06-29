@@ -371,6 +371,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.3.3 — convergence signal for discrete-time survival
+
+- `survival.discrete_time(...)` results now expose `.converged` and `.n_iter`,
+  reporting whether the underlying person-period logistic (IRLS) fit converged
+  or stopped at the iteration cap — the same accessors `coxph` already provides.
+  `summary()` shows a matching "Converged: … (N iterations)" line. Additive; no
+  existing attribute changed.
+
 ### 4.3.2 — correctness fixes for fit statistics
 
 - GPU OLS standard errors no longer understate on ill-conditioned (near-collinear)

@@ -94,3 +94,5 @@ class DiscreteTimeParams:
     n_events: int
     glm_deviance: float          # deviance from logistic fit
     glm_aic: float               # AIC from logistic fit
+    converged: bool              # did the person-period IRLS converge
+    n_iter: int                  # IRLS iterations used by the binomial GLM

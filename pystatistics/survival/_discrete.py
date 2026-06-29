@@ -93,6 +93,12 @@ def discrete_time_fit(
             n_events=0,
             glm_deviance=0.0,
             glm_aic=0.0,
+            # No events → no person-period logistic fit ran. Report a
+            # non-converged signal rather than a vacuous True, so a caller
+            # inspecting `.converged` is not misled into trusting a fit that
+            # never happened.
+            converged=False,
+            n_iter=0,
         )
 
     n_intervals = len(interval_bounds)
@@ -202,4 +208,8 @@ def discrete_time_fit(
         n_events=n_events_total,
         glm_deviance=glm_result.deviance,
         glm_aic=glm_result.aic,
+        # Surface the person-period binomial IRLS convergence so the caller
+        # can tell whether the discrete-time fit converged or hit the cap.
+        converged=glm_result.converged,
+        n_iter=glm_result.n_iter,
     )
