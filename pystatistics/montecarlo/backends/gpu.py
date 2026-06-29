@@ -131,19 +131,19 @@ class GPUBootstrapBackend:
             if seed is not None:
                 torch.manual_seed(seed)
 
-            offset = 0
-            while offset < R:
-                batch = min(chunk_size, R - offset)
+            batch_start = 0
+            while batch_start < R:
+                batch = min(chunk_size, R - batch_start)
 
                 # Generate random indices via randint on GPU
                 idx = torch.randint(0, n, (batch, n), device=device)
                 sampled = data_t[idx]            # (batch, n)
                 means = sampled.mean(dim=1)      # (batch,)
 
-                t[offset:offset + batch, 0] = (
+                t[batch_start:batch_start + batch, 0] = (
                     means.cpu().numpy().astype(np.float64)
                 )
-                offset += batch
+                batch_start += batch
 
         with timer.section('summary_statistics'):
             bias = np.mean(t, axis=0) - t0
@@ -255,9 +255,9 @@ class GPUPermutationBackend:
             if seed is not None:
                 torch.manual_seed(seed)
 
-            offset = 0
-            while offset < R:
-                batch = min(chunk_size, R - offset)
+            batch_start = 0
+            while batch_start < R:
+                batch = min(chunk_size, R - batch_start)
 
                 # Random-key sort: generate uniform keys, argsort gives
                 # a random permutation per row — fully parallel on GPU.
@@ -270,10 +270,10 @@ class GPUPermutationBackend:
                 sum_g1 = gathered.sum(dim=1)               # (batch,)
                 stats_t = sum_g1 / n1 - (total_sum - sum_g1) / n2
 
-                perm_stats[offset:offset + batch] = (
+                perm_stats[batch_start:batch_start + batch] = (
                     stats_t.cpu().numpy().astype(np.float64)
                 )
-                offset += batch
+                batch_start += batch
 
         with timer.section('p_value'):
             if alternative == "two-sided":

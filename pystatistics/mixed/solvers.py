@@ -457,15 +457,15 @@ def _extract_var_components(
     extract variance, std dev, and correlations.
     """
     var_comps = []
-    theta_offset = 0
+    theta_start = 0
 
     for spec in specs:
         q = spec.n_terms
         n_theta = spec.theta_size
 
         # Reconstruct the q × q lower-triangular Cholesky factor
-        theta_k = theta[theta_offset:theta_offset + n_theta]
-        theta_offset += n_theta
+        theta_k = theta[theta_start:theta_start + n_theta]
+        theta_start += n_theta
 
         T = np.zeros((q, q), dtype=np.float64)
         idx = 0
@@ -519,10 +519,10 @@ def _extract_blups(b: np.ndarray, specs: list) -> dict[str, np.ndarray]:
     Returns dict: group_name → (J_k, q_k) array.
     """
     result = {}
-    offset = 0
+    block_start = 0
     for spec in specs:
         block_size = spec.n_groups * spec.n_terms
-        b_block = b[offset:offset + block_size]
+        b_block = b[block_start:block_start + block_size]
         # Reshape: columns are terms, rows are groups
         # b_block layout: [term0_g0, term0_g1, ..., term1_g0, term1_g1, ...]
         b_matrix = np.zeros((spec.n_groups, spec.n_terms), dtype=np.float64)
@@ -530,7 +530,7 @@ def _extract_blups(b: np.ndarray, specs: list) -> dict[str, np.ndarray]:
             start = t * spec.n_groups
             b_matrix[:, t] = b_block[start:start + spec.n_groups]
         result[spec.group_name] = b_matrix
-        offset += block_size
+        block_start += block_size
     return result
 
 

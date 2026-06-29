@@ -201,6 +201,8 @@ statistic, `solver` = which numerical routine, `backend` = where it runs,
 | response-category labels | `category_names` | replaces `level_names` / `class_names` |
 | GLM family | `family` | |
 | link function | `link` | when exposed outside `family` |
+| prior / observation weights | `weights` | per-observation weight vector `(n,)`; the model's prior weights (WLS weights for OLS, IRLS prior weights for GLM). Never a coefficient vector or a resampling probability. |
+| linear-predictor offset | `offset` | additive term in the linear predictor, η = Xβ + `offset`; a per-observation float vector `(n,)`, **not estimated**. Reserved library-wide: the token `offset` **never** means an array index, position cursor, or displacement — use `start` / `*_start` / `base_*` for those. |
 | L2 / ridge penalty | `l2` | |
 | RNG seed | `seed` | |
 | confidence level | `conf_level` | |
@@ -214,6 +216,12 @@ Anything not listed and genuinely local-and-clear (`order`, `seasonal`,
 `include_mean`, `center`, `scale`, `paired`, `strata`, `ties`, `reml`,
 `ss_type`, `quantile_type`, `correction`, `conf_type`, …) keeps its conventional
 name.
+
+**Reserved names govern _our_ identifiers, not external libraries' parameter
+spellings.** A reserved concept name (e.g. `offset`) binds every identifier we
+author. It does **not** reach into a third-party API we merely call: passing
+`torch.tril_indices(n, n, offset=-1)` uses PyTorch's diagonal-`offset` argument,
+which is upstream's name, not ours — those keep their original spelling.
 
 ---
 

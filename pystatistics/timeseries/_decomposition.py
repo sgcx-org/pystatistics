@@ -228,7 +228,7 @@ def _centered_ma(x: NDArray, m: int) -> NDArray:
     Compute a centered moving average matching R's ``decompose()``.
 
     For odd *m*: simple centered MA of length *m*.
-    For even *m*: 2x *m* MA -- average of two *m*-length MAs offset by 1,
+    For even *m*: 2x *m* MA -- average of two *m*-length MAs shifted by 1,
     equivalent to convolving with a symmetric filter of length *m* + 1
     whose endpoints are weighted 1/(2m) and interior weights are 1/m.
 

@@ -199,15 +199,15 @@ def build_design_matrix(
     term_names: list[str] = []
     term_df: dict[str, int] = {}
     factor_levels: dict[str, list[str]] = {}
-    col_offset = 0
+    col_start = 0
 
     # Intercept
     if include_intercept:
         columns.append(np.ones((n, 1), dtype=np.float64))
-        term_slices['Intercept'] = slice(col_offset, col_offset + 1)
+        term_slices['Intercept'] = slice(col_start, col_start + 1)
         term_names.append('Intercept')
         term_df['Intercept'] = 1
-        col_offset += 1
+        col_start += 1
 
     # Encode each factor
     factor_columns: dict[str, NDArray] = {}
@@ -225,20 +225,20 @@ def build_design_matrix(
         factor_columns[name] = X_coded
         ncols = X_coded.shape[1]
         columns.append(X_coded)
-        term_slices[name] = slice(col_offset, col_offset + ncols)
+        term_slices[name] = slice(col_start, col_start + ncols)
         term_names.append(name)
         term_df[name] = ncols
-        col_offset += ncols
+        col_start += ncols
 
     # Covariates (continuous predictors for ANCOVA)
     if covariates is not None:
         for name in sorted(covariates.keys()):
             cov = covariates[name].reshape(-1, 1).astype(np.float64)
             columns.append(cov)
-            term_slices[name] = slice(col_offset, col_offset + 1)
+            term_slices[name] = slice(col_start, col_start + 1)
             term_names.append(name)
             term_df[name] = 1
-            col_offset += 1
+            col_start += 1
 
     # Interactions
     if interactions is None and len(factors) > 1:
@@ -255,10 +255,10 @@ def build_design_matrix(
             int_name = f"{name_a}:{name_b}"
             ncols = X_int.shape[1]
             columns.append(X_int)
-            term_slices[int_name] = slice(col_offset, col_offset + ncols)
+            term_slices[int_name] = slice(col_start, col_start + ncols)
             term_names.append(int_name)
             term_df[int_name] = ncols
-            col_offset += ncols
+            col_start += ncols
 
     X = np.hstack(columns) if columns else np.empty((n, 0), dtype=np.float64)
 
@@ -268,7 +268,7 @@ def build_design_matrix(
         term_names=term_names,
         term_df=term_df,
         n=n,
-        p=col_offset,
+        p=col_start,
         coding=coding,
         factor_levels=factor_levels,
         has_intercept=include_intercept,

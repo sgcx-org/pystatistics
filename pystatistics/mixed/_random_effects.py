@@ -138,11 +138,11 @@ def _build_z_block(
     Z = np.zeros((n, n_groups * q), dtype=np.float64)
 
     for t_idx, term in enumerate(terms):
-        col_offset = t_idx * n_groups
+        base_col = t_idx * n_groups
         if term == '1':
             # Intercept: indicator columns
             for i in range(n):
-                Z[i, col_offset + group_ids[i]] = 1.0
+                Z[i, base_col + group_ids[i]] = 1.0
         else:
             # Slope: indicator × variable value
             if term not in random_data:
@@ -158,7 +158,7 @@ def _build_z_block(
                     f"expected {n}"
                 )
             for i in range(n):
-                Z[i, col_offset + group_ids[i]] = var_data[i]
+                Z[i, base_col + group_ids[i]] = var_data[i]
 
     return Z
 
@@ -212,8 +212,8 @@ def build_lambda(theta: NDArray, specs: list[RandomEffectSpec]) -> NDArray:
     total_q = sum(s.n_groups * s.n_terms for s in specs)
     Lambda = np.zeros((total_q, total_q), dtype=np.float64)
 
-    theta_offset = 0
-    col_offset = 0
+    theta_start = 0
+    base_col = 0
 
     for spec in specs:
         q = spec.n_terms
@@ -221,8 +221,8 @@ def build_lambda(theta: NDArray, specs: list[RandomEffectSpec]) -> NDArray:
         n_theta = spec.theta_size  # q*(q+1)/2
 
         # Extract theta elements for this grouping factor
-        theta_k = theta[theta_offset:theta_offset + n_theta]
-        theta_offset += n_theta
+        theta_k = theta[theta_start:theta_start + n_theta]
+        theta_start += n_theta
 
         # Form q × q lower-triangular Cholesky factor
         T = np.zeros((q, q), dtype=np.float64)
@@ -233,17 +233,17 @@ def build_lambda(theta: NDArray, specs: list[RandomEffectSpec]) -> NDArray:
                 idx += 1
 
         # T ⊗ I_J: for each pair of terms (r, c), place T[r,c] × I_J
-        # Term r's columns start at col_offset + r*J
-        # Term c's columns start at col_offset + c*J
+        # Term r's columns start at base_col + r*J
+        # Term c's columns start at base_col + c*J
         for r in range(q):
             for c in range(r + 1):  # T is lower triangular
                 if T[r, c] != 0.0:
-                    row_start = col_offset + r * J
-                    col_start = col_offset + c * J
+                    row_start = base_col + r * J
+                    col_start = base_col + c * J
                     for j in range(J):
                         Lambda[row_start + j, col_start + j] = T[r, c]
 
-        col_offset += J * q
+        base_col += J * q
 
     return Lambda
 
