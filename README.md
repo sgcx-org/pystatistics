@@ -371,6 +371,17 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.3.2 — correctness fixes for fit statistics
+
+- GPU OLS standard errors no longer understate on ill-conditioned (near-collinear)
+  designs — a regression since 4.3.0. `fit(..., backend='gpu')` now computes the
+  coefficient covariance in double precision, so its standard errors match the
+  CPU backend and R. Coefficients are unchanged.
+- Gamma and Gaussian `.bic` now count the estimated dispersion parameter with the
+  `log(n)` penalty, matching `BIC(glm(...))`.
+- Binomial `.deviance` (and the AIC/BIC derived from it) now matches `glm()` for
+  models with very extreme fitted probabilities.
+
 ### 4.3.0 — prior weights and offsets
 
 - `fit()` now takes `weights=` and `offset=`, matching R's `lm(..., weights=)`

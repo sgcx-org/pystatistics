@@ -1,5 +1,30 @@
 # Changelog
 
+## 4.3.2
+
+Correctness fixes for regression model-fit statistics and GPU standard errors.
+Coefficients are unchanged in all three; only reported uncertainty and
+information criteria are affected.
+
+- **GPU OLS standard errors are no longer understated on ill-conditioned
+  designs** (a regression introduced in 4.3.0). On a near-collinear design,
+  `fit(..., backend='gpu')` derived the coefficient covariance from a
+  single-precision Gram matrix whose smallest eigenvalue had been lost, so it
+  reported standard errors several times too small — a coefficient that looked
+  far more precise than it was, while `backend='cpu'` and R reported the correct
+  large errors. The covariance is now computed in double precision (`X'X`, or
+  `X'WX` for a weighted fit), so GPU standard errors match the CPU backend and R
+  on both well- and ill-conditioned designs.
+- **Gamma and Gaussian BIC now count the estimated dispersion parameter with the
+  `log(n)` penalty**, matching `BIC(glm(...))`. Their AIC already counted it, but
+  BIC was penalizing it with the AIC constant (2) instead of `log(n)`, leaving
+  BIC off by exactly `log(n) − 2`.
+- **Binomial deviance — and the AIC/BIC derived from it — now matches `glm()`
+  for models with very extreme fitted probabilities.** Fitted probabilities were
+  clamped at `1e-10` before the deviance was computed; R clamps at machine
+  epsilon. For models with fitted probabilities below `1e-10` this under-counted
+  the deviance. The bound is now machine epsilon, matching R to round-off.
+
 ## 4.3.1
 
 A correctness fix for the information criteria of an auto-estimated
