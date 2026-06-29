@@ -1,5 +1,30 @@
 # Changelog
 
+## 4.3.0
+
+Prior weights and offsets for regression, plus an R-matching Gamma AIC.
+
+- **`fit()` now accepts `weights=` and `offset=`, matching R's
+  `lm(..., weights=)` and `glm(..., weights=, offset=)`.**
+  - `weights` are per-observation prior weights: weighted least squares for an
+    ordinary (Gaussian) fit, and prior weights in the IRLS loop for every GLM
+    family (binomial, Poisson, Gamma, negative binomial). They are precision
+    weights, as in R — the residual degrees of freedom are `n − p`, so a
+    case-weighted fit and the equivalent row-replicated fit share coefficients
+    but not standard errors.
+  - `offset` is a fixed term added to the linear predictor (`η = Xβ + offset`)
+    and is not estimated — for example `offset=log(exposure)` for a Poisson
+    rate model. Fitted values, deviance, null deviance, residuals and standard
+    errors all account for it.
+  - Both are validated against R to round-off on the CPU path, and the GPU
+    (single-precision) backends support them as well. They are not currently
+    supported together with a ridge penalty (`l2 > 0`).
+- **Gamma GLM AIC now matches R's `glm.fit()`.** The Gamma AIC previously
+  disagreed with R because it used a different dispersion estimate and did not
+  count the dispersion as a free parameter; it now reproduces R's `Gamma()` AIC
+  to round-off. Coefficients, standard errors, and deviance are unchanged.
+  Fixed-θ negative-binomial AIC was already correct.
+
 ## 4.2.4
 
 Reliability fix for float32 GPU GLMs on Apple Silicon (MPS). **Fully backward

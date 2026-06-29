@@ -371,6 +371,19 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.3.0 — prior weights and offsets
+
+- `fit()` now takes `weights=` and `offset=`, matching R's `lm(..., weights=)`
+  and `glm(..., weights=, offset=)`. `weights` are per-observation prior
+  (precision) weights — weighted least squares for an OLS fit, IRLS prior
+  weights for every GLM family. `offset` is a fixed term in the linear predictor
+  (`η = Xβ + offset`), e.g. `log(exposure)` for a Poisson rate model. Both are
+  validated against R to round-off, and the GPU backends support them. Not
+  available together with a ridge penalty (`l2 > 0`).
+- Gamma GLM AIC now matches R's `glm.fit()` (a different dispersion convention
+  had made it disagree); coefficients, standard errors, and deviance are
+  unchanged.
+
 ### 4.0.0 — the consistency release (breaking)
 
 A library-wide pass so every module names parameters, selects its backend,
