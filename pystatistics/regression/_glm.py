@@ -42,6 +42,12 @@ class GLMParams:
     converged: bool
     family_name: str
     link_name: str
+    # Number of parameters counted by the information criteria (AIC/BIC). None ⇒
+    # use ``rank`` (the usual case). Set above ``rank`` when the fit estimates
+    # parameters beyond the coefficients that should be penalized by AIC/BIC but
+    # NOT counted in ``rank``/``df_residual`` — e.g. the dispersion θ of an
+    # auto-estimated negative binomial (matching R's MASS::glm.nb).
+    ic_param_count: int | None = None
 
 
 @dataclass
@@ -124,8 +130,17 @@ class GLMSolution(SolutionReprMixin):
 
     @property
     def bic(self) -> float:
-        """Bayesian Information Criterion."""
-        return self.aic - 2.0 * self.rank + self.rank * np.log(self._design.n)
+        """Bayesian Information Criterion.
+
+        Derives −2·logL from the AIC using the same parameter count the AIC was
+        built with (``ic_param_count`` when set — e.g. coefficients + θ for an
+        auto-estimated negative binomial — otherwise ``rank``), then re-penalizes
+        with ``log(n)``.
+        """
+        k = self._result.params.ic_param_count
+        if k is None:
+            k = self.rank
+        return self.aic - 2.0 * k + k * np.log(self._design.n)
 
     @property
     def dispersion(self) -> float:

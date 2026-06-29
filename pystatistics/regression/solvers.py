@@ -558,7 +558,7 @@ def _fit_nb(
             # Converged — final result uses the converged theta
             nb_final = NegativeBinomial(theta=theta_new, link=family._link)
             result = _solve(nb_final)
-            return GLMSolution(_result=result, _design=design, _names=names)
+            return _finalize_nb(result, design, names, theta_new)
 
         theta = theta_new
 
@@ -567,6 +567,38 @@ def _fit_nb(
         f"outer iterations. Last theta = {theta:.4f}.",
         details={'theta': theta, 'n_outer_iter': theta_max_iter},
     )
+
+
+def _finalize_nb(
+    result: 'Result',
+    design: Design,
+    names: tuple[str, ...] | None,
+    theta: float,
+) -> GLMSolution:
+    """Account for the estimated θ in an auto-θ negative-binomial fit.
+
+    The inner GLM solve computes the AIC for a *fixed*-θ NB (``-2·logL +
+    2·rank``). When θ is estimated, it is a free parameter that the information
+    criteria must penalize — R's ``MASS::glm.nb`` adds 2 to the AIC for it. We
+    add the same penalty and record ``ic_param_count = rank + 1`` so the BIC
+    counts θ too, while leaving ``rank`` / ``df_residual`` (and therefore the
+    standard errors and Wald tests) unchanged. The estimated θ is exposed in
+    ``info['theta']``.
+    """
+    from dataclasses import replace
+    from pystatistics.core.result import Result
+
+    params = replace(
+        result.params,
+        aic=result.params.aic + 2.0,
+        ic_param_count=result.params.rank + 1,
+    )
+    info = {**result.info, 'theta': float(theta), 'theta_estimated': True}
+    new_result = Result(
+        params=params, info=info, timing=result.timing,
+        backend_name=result.backend_name, warnings=result.warnings,
+    )
+    return GLMSolution(_result=new_result, _design=design, _names=names)
 
 
 # =====================================================================
