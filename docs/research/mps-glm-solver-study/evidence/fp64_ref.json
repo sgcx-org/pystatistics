@@ -1,0 +1,22 @@
+{
+  "yearly": {
+    "gpu_fp64_vs_cpu_fp64_max_rel_err": 2.640470981076139e-14,
+    "n_rows": 82919,
+    "n_cols": 21
+  },
+  "quarterly": {
+    "gpu_fp64_vs_cpu_fp64_max_rel_err": 3.3678482960715773e-13,
+    "n_rows": 319508,
+    "n_cols": 62
+  },
+  "monthly": {
+    "gpu_fp64_vs_cpu_fp64_max_rel_err": 1.4017211645632282e-12,
+    "n_rows": 951967,
+    "n_cols": 172
+  },
+  "biweekly": {
+    "gpu_fp64_vs_cpu_fp64_max_rel_err": 9.59399202162179e-13,
+    "n_rows": 1899947,
+    "n_cols": 336
+  }
+}
