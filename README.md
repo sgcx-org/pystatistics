@@ -162,6 +162,11 @@ y_binary = (X @ [1, -1, 0.5, 0, 0] + np.random.randn(1000) > 0).astype(float)
 result = fit(X, y_binary, family='binomial')
 print(result.summary())
 
+# Prior weights and offsets (like R's lm/glm weights= and offset=)
+result = fit(X, y, weights=w)                        # weighted least squares
+result = fit(X, counts, family='poisson',            # Poisson rate model:
+             offset=np.log(exposure))                #   log(exposure) offset
+
 # --- Categorical predictors & interactions ---
 # Describe a model as a list of terms (no R-style formula strings):
 #   "name"          -> numeric main effect

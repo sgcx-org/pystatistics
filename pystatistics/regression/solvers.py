@@ -18,6 +18,7 @@ from pystatistics.regression.solution import (
     LinearSolution, LinearParams, GLMSolution, GLMParams,
 )
 from pystatistics.regression.backends.cpu import CPUQRBackend
+from pystatistics.regression._inputs import resolve_weights, resolve_offset
 
 
 # backend = (device, precision); solver = the numerical routine (LM only).
@@ -38,6 +39,8 @@ def fit(
     max_iter: int = 25,
     names: list[str] | None = None,
     l2: float = 0.0,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
     conf_level: float = 0.95,
 ) -> Union[LinearSolution, GLMSolution]:
     """
@@ -81,6 +84,15 @@ def fit(
             standardized scale (matching ``MASS::lm.ridge``'s lambda). A penalized
             fit does not report standard errors / t / p values (not valid for a
             biased estimator). See the ``ridge()`` convenience wrapper.
+        weights: Per-observation prior weights (n,), matching R's
+            ``lm(..., weights=)`` / ``glm(..., weights=)``. For OLS this is
+            weighted least squares; for a GLM these are the IRLS prior weights.
+            Must be non-negative and not all zero. ``None`` ⇒ unit weights.
+            Not supported together with ``l2 > 0`` (raises).
+        offset: Additive term in the linear predictor, η = Xβ + offset (n,),
+            matching R's ``glm(..., offset=)``. Used as-is, never estimated —
+            e.g. ``log(exposure)`` for a Poisson rate model. ``None`` ⇒ no
+            offset. Not supported together with ``l2 > 0`` (raises).
 
     Returns:
         LinearSolution when family is None.
@@ -121,6 +133,17 @@ def fit(
     if conf_level <= 0 or conf_level >= 1:
         raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
 
+    # Validate prior weights / offset at the boundary (Rule 2). Returns
+    # float64 arrays or None (the unit-weight / no-offset fast path).
+    wt = resolve_weights(weights, design.n)
+    off = resolve_offset(offset, design.n)
+    if l2 > 0 and (wt is not None or off is not None):
+        raise NotImplementedError(
+            "weights= / offset= are not yet supported with a ridge penalty "
+            "(l2 > 0): MASS::lm.ridge takes neither, so there is no R reference "
+            "to validate against. Use them on the unpenalized fit (l2=0)."
+        )
+
     # Dispatch: GLM path if family specified, otherwise LM path
     if family is not None:
         if solver is not None:
@@ -128,9 +151,10 @@ def fit(
                 "solver= applies only to linear models (family=None); GLMs are "
                 "fit by IRLS. Remove solver=, or drop family= for an OLS fit."
             )
-        sol = _fit_glm(design, family, backend, tol, max_iter, resolved_names, force, l2)
+        sol = _fit_glm(design, family, backend, tol, max_iter, resolved_names,
+                       force, l2, wt, off)
     else:
-        sol = _fit_lm(design, backend, force, resolved_names, l2, solver)
+        sol = _fit_lm(design, backend, force, resolved_names, l2, solver, wt, off)
     sol._conf_level = conf_level   # uniform .conf_int level (internal field; A5)
     return sol
 
@@ -145,6 +169,8 @@ def ridge(
     tol: float = 1e-8,
     max_iter: int = 25,
     names: list[str] | None = None,
+    weights: ArrayLike | None = None,
+    offset: ArrayLike | None = None,
 ) -> Union[LinearSolution, GLMSolution]:
     """Ridge (L2-penalized) regression — a thin wrapper over ``fit(..., l2=lam)``.
 
@@ -160,7 +186,8 @@ def ridge(
     if lam < 0:
         raise ValidationError(f"ridge penalty lam must be non-negative, got {lam}")
     return fit(X_or_design, y, family=family, backend=backend, tol=tol,
-               max_iter=max_iter, names=names, l2=lam)
+               max_iter=max_iter, names=names, l2=lam,
+               weights=weights, offset=offset)
 
 
 def _resolve_names(
@@ -192,6 +219,8 @@ def _fit_lm(
     names: tuple[str, ...] | None,
     l2: float = 0.0,
     solver: SolverChoice | None = None,
+    weights: 'np.ndarray | None' = None,
+    offset: 'np.ndarray | None' = None,
 ) -> LinearSolution:
     """Fit ordinary least squares, or ridge when l2 > 0."""
     if l2 > 0:
@@ -203,14 +232,36 @@ def _fit_lm(
         return _fit_lm_ridge(design, l2, names)
 
     backend_impl = _get_lm_backend(backend, solver, design)
-
-    # Solve — pass force to GPU backends, CPU ignores it
-    if hasattr(backend_impl, 'solve') and 'force' in backend_impl.solve.__code__.co_varnames:
-        result = backend_impl.solve(design, force=force)
-    else:
-        result = backend_impl.solve(design)
-
+    result = _solve_with_inputs(backend_impl, (design,), weights, offset, force)
     return LinearSolution(_result=result, _design=design, _names=names)
+
+
+def _solve_with_inputs(backend_impl, solve_args, weights, offset, force,
+                       extra_kwargs=None):
+    """Call a backend ``solve`` forwarding only the kwargs it accepts.
+
+    Backends opt in to ``weights`` / ``offset`` / ``force`` by declaring them.
+    If prior weights or an offset were supplied but the chosen backend cannot
+    honor them, fail loud (Rule 1) rather than silently dropping them.
+    ``extra_kwargs`` carries always-passed parameters (e.g. tol, max_iter).
+    """
+    varnames = backend_impl.solve.__code__.co_varnames
+    kwargs = dict(extra_kwargs) if extra_kwargs else {}
+    if 'weights' in varnames:
+        kwargs['weights'] = weights
+    elif weights is not None:
+        raise NotImplementedError(
+            f"{backend_impl.name} does not support weights= yet"
+        )
+    if 'offset' in varnames:
+        kwargs['offset'] = offset
+    elif offset is not None:
+        raise NotImplementedError(
+            f"{backend_impl.name} does not support offset= yet"
+        )
+    if 'force' in varnames:
+        kwargs['force'] = force
+    return backend_impl.solve(*solve_args, **kwargs)
 
 
 def _fit_lm_ridge(
@@ -271,6 +322,8 @@ def _fit_glm(
     names: tuple[str, ...] | None,
     force: bool = False,
     l2: float = 0.0,
+    weights: 'np.ndarray | None' = None,
+    offset: 'np.ndarray | None' = None,
 ) -> GLMSolution:
     """Fit GLM via IRLS, or ridge-penalized IRLS when l2 > 0.
 
@@ -303,14 +356,13 @@ def _fit_glm(
 
     # NB with unknown theta: alternating estimation loop
     if isinstance(family_obj, NegativeBinomial) and family_obj.theta is None:
-        return _fit_nb(design, family_obj, backend_impl, tol, max_iter, names, force=force)
+        return _fit_nb(design, family_obj, backend_impl, tol, max_iter, names,
+                       force=force, weights=weights, offset=offset)
 
-    # Pass force to GPU backends (which accept it); CPU backend does not.
-    if 'force' in backend_impl.solve.__code__.co_varnames:
-        result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter, force=force)
-    else:
-        result = backend_impl.solve(design, family_obj, tol=tol, max_iter=max_iter)
-
+    result = _solve_with_inputs(
+        backend_impl, (design, family_obj), weights, offset, force,
+        extra_kwargs={'tol': tol, 'max_iter': max_iter},
+    )
     return GLMSolution(_result=result, _design=design, _names=names)
 
 
@@ -464,26 +516,29 @@ def _fit_nb(
     theta_max_iter: int = 25,
     theta_tol: float = 1e-6,
     force: bool = False,
+    weights: 'np.ndarray | None' = None,
+    offset: 'np.ndarray | None' = None,
 ) -> GLMSolution:
     """Fit negative binomial GLM with theta estimation.
 
     Alternates between GLM fitting (given theta) and theta estimation
     (given mu), matching R's MASS::glm.nb() algorithm. ``force`` is forwarded
-    to each inner GLM solve (GPU backends only).
+    to each inner GLM solve (GPU backends only); prior ``weights`` enter both
+    the inner GLM fits and the θ profile likelihood, and ``offset`` enters each
+    inner linear predictor.
     """
     from pystatistics.core.exceptions import ConvergenceError
     from pystatistics.regression.families import NegativeBinomial, Poisson
     from pystatistics.regression._nb_theta import theta_ml
 
-    accepts_force = 'force' in backend_impl.solve.__code__.co_varnames
-
     def _solve(fam):
-        if accepts_force:
-            return backend_impl.solve(design, fam, tol=tol, max_iter=max_iter, force=force)
-        return backend_impl.solve(design, fam, tol=tol, max_iter=max_iter)
+        return _solve_with_inputs(
+            backend_impl, (design, fam), weights, offset, force,
+            extra_kwargs={'tol': tol, 'max_iter': max_iter},
+        )
 
     y = design.y
-    wt = np.ones(design.n)
+    wt = np.ones(design.n) if weights is None else weights
 
     # Step 1: Initial Poisson fit for starting mu
     poisson_result = _solve(Poisson())

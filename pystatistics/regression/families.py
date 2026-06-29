@@ -234,10 +234,13 @@ class Family(ABC):
         ...
 
     @abstractmethod
-    def initialize(self, y: NDArray) -> NDArray:
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
         """Initialize μ from y for IRLS starting values.
 
         Must return values in the valid range for the link function.
+        ``weights`` are the per-observation prior weights (``None`` ⇒ unit
+        weights); only families whose R ``mustart`` depends on the prior
+        weights (Binomial) consult them.
         """
         ...
 
@@ -297,7 +300,7 @@ class Gaussian(Family):
     def variance(self, mu: NDArray) -> NDArray:
         return np.ones_like(mu)
 
-    def initialize(self, y: NDArray) -> NDArray:
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
         return y.copy()
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
@@ -359,9 +362,11 @@ class Binomial(Family):
         mu = np.clip(mu, 1e-10, 1 - 1e-10)
         return mu * (1.0 - mu)
 
-    def initialize(self, y: NDArray) -> NDArray:
-        # R's default: (y + 0.5) / 2 for binary data
-        return (y + 0.5) / 2.0
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
+        # R's default mustart: (weights * y + 0.5) / (weights + 1).
+        # With unit weights this is (y + 0.5) / 2.
+        w = np.ones_like(y) if weights is None else weights
+        return (w * y + 0.5) / (w + 1.0)
 
     def deviance(self, y: NDArray, mu: NDArray, wt: NDArray) -> float:
         # NUMERICAL GUARD: prevents log(0) in deviance computation
@@ -407,7 +412,7 @@ class Poisson(Family):
         # NUMERICAL GUARD: prevents zero variance in IRLS weights
         return np.maximum(mu, 1e-10)
 
-    def initialize(self, y: NDArray) -> NDArray:
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
         # R: y + 0.1 (to avoid log(0))
         return np.maximum(y, 0.1)
 
@@ -463,7 +468,7 @@ class GammaFamily(Family):
         # NUMERICAL GUARD: prevents zero variance when mu is near zero
         return np.maximum(mu, 1e-10) ** 2
 
-    def initialize(self, y: NDArray) -> NDArray:
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
         # NUMERICAL GUARD: Gamma requires positive μ
         return np.maximum(y, 1e-10)
 
@@ -551,7 +556,7 @@ class NegativeBinomial(Family):
         mu = np.maximum(mu, 1e-10)
         return mu + mu ** 2 / self.theta
 
-    def initialize(self, y: NDArray) -> NDArray:
+    def initialize(self, y: NDArray, weights: NDArray | None = None) -> NDArray:
         # Same as Poisson: y + 0.1 to avoid log(0)
         return np.maximum(y, 0.1)
 

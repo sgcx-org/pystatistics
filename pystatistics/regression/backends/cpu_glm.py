@@ -51,6 +51,8 @@ class CPUIRLSBackend:
         family: Family,
         tol: float = 1e-8,
         max_iter: int = 25,
+        weights: 'NDArray | None' = None,
+        offset: 'NDArray | None' = None,
     ) -> Result[GLMParams]:
         """Run IRLS to fit the GLM.
 
@@ -59,6 +61,9 @@ class CPUIRLSBackend:
             family: GLM family specification
             tol: Convergence tolerance (relative deviance change)
             max_iter: Maximum IRLS iterations
+            weights: Per-observation prior weights (n,); ``None`` ⇒ unit weights.
+            offset: Additive term in the linear predictor, η = Xβ + offset
+                (n,); ``None`` ⇒ no offset. Not estimated.
 
         Returns:
             Result[GLMParams] with coefficients, deviance, residuals, etc.
@@ -70,8 +75,9 @@ class CPUIRLSBackend:
         n, p = design.n, design.p
         link = family.link
 
-        # Prior weights (unit weights for now — extend later for trials)
-        wt = np.ones(n, dtype=np.float64)
+        # Prior weights and offset (the fast default is unit weights / no offset).
+        wt = np.ones(n, dtype=np.float64) if weights is None else weights
+        off = np.zeros(n, dtype=np.float64) if offset is None else offset
 
         warnings_list: list[str] = []
 
@@ -79,7 +85,7 @@ class CPUIRLSBackend:
         # Initialize μ and η
         # ------------------------------------------------------------------
         with timer.section('initialize'):
-            mu = family.initialize(y)
+            mu = family.initialize(y, wt)
             eta = link.link(mu)
 
         # ------------------------------------------------------------------
@@ -99,10 +105,12 @@ class CPUIRLSBackend:
                 mu_eta_val = link.mu_eta(eta)  # dμ/dη
                 var_mu = family.variance(mu)
 
-                # Working response: z = η + (y - μ) / (dμ/dη)
-                z = eta + (y - mu) / mu_eta_val
+                # Working response with the offset removed before the solve:
+                # z = (η - offset) + (y - μ) / (dμ/dη). The design fits z, then
+                # the offset is added back into η below (matching R's glm.fit).
+                z = (eta - off) + (y - mu) / mu_eta_val
 
-                # Working weights: w = (dμ/dη)² / V(μ)
+                # Working weights: w = wt * (dμ/dη)² / V(μ)
                 w = wt * (mu_eta_val ** 2) / var_mu
 
                 # NUMERICAL GUARD: prevents division by zero in weighted regression
@@ -116,8 +124,8 @@ class CPUIRLSBackend:
                 # Solve via pivoted QR
                 coefficients, qr_result = qr_solve(X_tilde, z_tilde)
 
-                # Update η and μ
-                eta = X @ coefficients
+                # Update η (with offset) and μ
+                eta = X @ coefficients + off
                 mu = link.linkinv(eta)
 
                 # Compute deviance
@@ -152,7 +160,7 @@ class CPUIRLSBackend:
         # Null deviance (intercept-only model via mini-IRLS)
         # ------------------------------------------------------------------
         with timer.section('null_deviance'):
-            null_deviance = self._null_deviance(y, wt, family)
+            null_deviance = self._null_deviance(y, wt, family, off)
 
         # ------------------------------------------------------------------
         # Dispersion
@@ -232,26 +240,28 @@ class CPUIRLSBackend:
 
     @staticmethod
     def _null_deviance(
-        y: NDArray, wt: NDArray, family: Family
+        y: NDArray, wt: NDArray, family: Family,
+        offset: NDArray | None = None,
     ) -> float:
         """Compute null deviance matching R's glm.fit().
 
         R's glm.fit() with intercept=FALSE computes null deviance using
-        mu_null = linkinv(offset), where offset defaults to 0. Since our
-        design matrix X already contains the intercept column, glm.fit
-        sees intercept=FALSE, so:
-            mu_null = linkinv(0) for all observations.
+        mu_null = linkinv(offset). Since our design matrix X already contains
+        the intercept column, glm.fit sees intercept=FALSE, so:
+            mu_null = linkinv(offset) per observation.
 
-        This matches R exactly:
+        With no offset this is linkinv(0), matching R exactly:
             Gaussian/identity: mu_null = 0
             Binomial/logit:    mu_null = 0.5
             Poisson/log:       mu_null = 1.0
+        With an offset, the null model carries the same offset in its linear
+        predictor (R refits the intercept-free null with the offset).
         """
         n = len(y)
         link = family.link
 
-        # R: wtdmu = linkinv(offset) with offset=0
-        eta_null = np.zeros(n, dtype=np.float64)
+        # R: wtdmu = linkinv(offset) (offset = 0 when not supplied)
+        eta_null = np.zeros(n, dtype=np.float64) if offset is None else offset
         mu_null = link.linkinv(eta_null)
 
         return family.deviance(y, mu_null, wt)

@@ -181,9 +181,14 @@ class LinearSolution(SolutionReprMixin):
         else:
             # NOT A FALLBACK: mathematically equivalent to QR path.
             # GPU backends don't store QR factors, so we compute
-            # (X'X)^{-1} directly. Same result, different route.
+            # (X'WX)^{-1} directly. Same result, different route. The backend
+            # stores the exact Gram it solved (weighted X'WX for a WLS fit);
+            # use it so weighted fits get the right standard errors, falling
+            # back to the unweighted design Gram for an ordinary fit.
+            gram = self._result.info.get('gram')
+            XtX = gram if gram is not None else self._design.XtX()
             try:
-                XtX_inv = np.linalg.inv(self._design.XtX())
+                XtX_inv = np.linalg.inv(XtX)
                 self._standard_errors = np.sqrt(sigma_sq * np.diag(XtX_inv))
             except np.linalg.LinAlgError:
                 self._standard_errors = np.full(p, np.nan, dtype=np.float64)

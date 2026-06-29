@@ -63,7 +63,7 @@ from pystatistics.regression.solution import GLMParams
 _FP32_REL_DECREMENT_TOL = 1e-6
 
 
-def _newton_decrement(X_np, y_np, wt_np, coef, link, family):
+def _newton_decrement(X_np, y_np, wt_np, coef, link, family, offset=None):
     """Newton decrement λ² = Uᵀ(XᵀWX)⁻¹U at ``coef`` (float64, on the host).
 
     The standard affine-invariant measure of distance to the optimum in
@@ -74,7 +74,7 @@ def _newton_decrement(X_np, y_np, wt_np, coef, link, family):
 
     Returns ``inf`` if the float64 information matrix is itself singular.
     """
-    eta = X_np @ coef
+    eta = X_np @ coef + (0.0 if offset is None else offset)
     mu = link.linkinv(eta)
     mu_eta = link.mu_eta(eta)            # dμ/dη
     var = family.variance(mu)            # V(μ)
@@ -202,6 +202,8 @@ class GPUIRLSBackend:
         max_iter: int = 25,
         force: bool = False,
         penalty: 'NDArray[np.float64] | None' = None,
+        weights: 'NDArray[np.float64] | None' = None,
+        offset: 'NDArray[np.float64] | None' = None,
     ) -> Result[GLMParams]:
         """Run IRLS on GPU to fit the GLM.
 
@@ -234,8 +236,9 @@ class GPUIRLSBackend:
         n, p = design.n, design.p
         link = family.link
 
-        # Prior weights
-        wt_np = np.ones(n, dtype=np.float64)
+        # Prior weights and offset (fast default: unit weights / no offset).
+        wt_np = np.ones(n, dtype=np.float64) if weights is None else np.asarray(weights, dtype=np.float64)
+        off_np = None if offset is None else np.asarray(offset, dtype=np.float64)
 
         warnings_list: list[str] = []
 
@@ -251,13 +254,15 @@ class GPUIRLSBackend:
                 pen_gpu = torch.from_numpy(
                     np.asarray(penalty, dtype=np.float64)
                 ).to(device=self.device, dtype=self.dtype)
-            wt_gpu = torch.ones(n, device=self.device, dtype=self.dtype)
+            wt_gpu = torch.from_numpy(wt_np).to(device=self.device, dtype=self.dtype)
+            off_gpu = (None if off_np is None else
+                       torch.from_numpy(off_np).to(device=self.device, dtype=self.dtype))
 
         # ------------------------------------------------------------------
         # Initialize μ and η (on CPU using family/link, then transfer)
         # ------------------------------------------------------------------
         with timer.section('initialize'):
-            mu_np = family.initialize(y_np)
+            mu_np = family.initialize(y_np, wt_np)
             eta_np = link.link(mu_np)
             mu_gpu = torch.from_numpy(mu_np).to(device=self.device, dtype=self.dtype)
             eta_gpu = torch.from_numpy(eta_np).to(device=self.device, dtype=self.dtype)
@@ -324,8 +329,12 @@ class GPUIRLSBackend:
                 mu_eta_val = link.mu_eta(eta_cpu)    # dμ/dη
                 var_mu = family.variance(mu_cpu)
 
-                # Working response: z = η + (y - μ) / (dμ/dη)
+                # Working response with the offset removed before the solve:
+                # z = (η - offset) + (y - μ)/(dμ/dη). The offset is added back
+                # into η when reconstructing it from the coefficients below.
                 z_np = eta_cpu + (y_np - mu_cpu) / mu_eta_val
+                if off_np is not None:
+                    z_np = z_np - off_np
 
                 # Working weights: w = wt * (dμ/dη)² / V(μ)
                 w_np = wt_np * (mu_eta_val ** 2) / var_mu
@@ -435,7 +444,7 @@ class GPUIRLSBackend:
                     )
                     coef_np, eta_cpu, mu_cpu, dev_new = step_halve(
                         coef_np, halve_target, X_np, link, family, y_np, wt_np,
-                        dev_old, require_decrease=iteration > 1,
+                        dev_old, require_decrease=iteration > 1, offset=off_np,
                     )
                     coef_gpu = torch.from_numpy(coef_np).to(
                         device=self.device, dtype=self.dtype)
@@ -453,6 +462,8 @@ class GPUIRLSBackend:
                     # on the GPU at very large n.
                     coef_cpu = coef_gpu.detach().cpu().numpy().astype(np.float64)
                     eta_cpu = X_np @ coef_cpu
+                    if off_np is not None:
+                        eta_cpu = eta_cpu + off_np
                     eta_gpu = torch.from_numpy(eta_cpu).to(
                         device=self.device, dtype=self.dtype)
                     mu_cpu = link.linkinv(eta_cpu)
@@ -462,6 +473,8 @@ class GPUIRLSBackend:
                 else:
                     # Pure float64 (CUDA) path: η on-device, read back at float64.
                     eta_gpu = X_gpu @ coef_gpu
+                    if off_gpu is not None:
+                        eta_gpu = eta_gpu + off_gpu
                     eta_cpu = eta_gpu.cpu().numpy().astype(np.float64)
                     mu_cpu = link.linkinv(eta_cpu)
                     mu_gpu = torch.from_numpy(mu_cpu).to(
@@ -493,7 +506,7 @@ class GPUIRLSBackend:
         rel_decrement = None
         if self.dtype == torch.float32 and not solve_failed:
             coef_np = coef_gpu.detach().cpu().numpy().astype(np.float64)
-            decrement = _newton_decrement(X_np, y_np, wt_np, coef_np, link, family)
+            decrement = _newton_decrement(X_np, y_np, wt_np, coef_np, link, family, off_np)
             rel_decrement = decrement / (abs(dev_new) + 0.1)
             converged = bool(rel_decrement < _FP32_REL_DECREMENT_TOL)
 
@@ -560,6 +573,8 @@ class GPUIRLSBackend:
         with timer.section('data_transfer_to_cpu'):
             coefficients = coef_gpu.cpu().numpy().astype(np.float64)
             eta_final = (X_gpu @ coef_gpu).cpu().numpy().astype(np.float64)
+            if off_np is not None:
+                eta_final = eta_final + off_np
 
         # Recompute μ on CPU at float64 for maximum accuracy
         mu_final = link.linkinv(eta_final)
@@ -568,7 +583,7 @@ class GPUIRLSBackend:
         # Null deviance (intercept-only, matching R's glm.fit)
         # ------------------------------------------------------------------
         with timer.section('null_deviance'):
-            null_deviance = self._null_deviance(y_np, wt_np, family)
+            null_deviance = self._null_deviance(y_np, wt_np, family, off_np)
 
         # ------------------------------------------------------------------
         # Dispersion
@@ -662,15 +677,17 @@ class GPUIRLSBackend:
 
     @staticmethod
     def _null_deviance(
-        y: NDArray, wt: NDArray, family: Family
+        y: NDArray, wt: NDArray, family: Family,
+        offset: NDArray | None = None,
     ) -> float:
         """Compute null deviance matching R's glm.fit().
 
-        R's glm.fit() with intercept=FALSE uses mu_null = linkinv(0).
+        R's glm.fit() with intercept=FALSE uses mu_null = linkinv(offset)
+        (linkinv(0) when there is no offset).
         """
         n = len(y)
         link = family.link
-        eta_null = np.zeros(n, dtype=np.float64)
+        eta_null = np.zeros(n, dtype=np.float64) if offset is None else offset
         mu_null = link.linkinv(eta_null)
         return family.deviance(y, mu_null, wt)
 

@@ -82,11 +82,17 @@ class GPUQRBackend:
         precision = "fp64" if self.use_fp64 else "fp32"
         return f'gpu_qr_{precision}'
 
-    def solve(self, design: Design, force: bool = False) -> Result[LinearParams]:
+    def solve(
+        self,
+        design: Design,
+        force: bool = False,
+        weights: 'np.ndarray | None' = None,
+        offset: 'np.ndarray | None' = None,
+    ) -> Result[LinearParams]:
         """
         Solve linear regression on GPU using Cholesky method.
 
-        Uses normal equations (X'X)^-1 X'y via Cholesky decomposition.
+        Uses normal equations (X'WX)^-1 X'W·y via Cholesky decomposition.
         Faster than QR, numerically stable for well-conditioned real data.
 
         Args:
@@ -94,6 +100,11 @@ class GPUQRBackend:
             force: If True, proceed even if the design matrix is
                 ill-conditioned. If False (default), raises NumericalError
                 when condition number exceeds threshold.
+            weights: Per-observation prior weights (n,) for WLS; ``None`` ⇒
+                ordinary least squares. The weighted Gram X'WX is stored so the
+                downstream (X'WX)⁻¹ standard errors are correct.
+            offset: Additive term in the linear predictor, η = Xβ + offset (n,);
+                ``None`` ⇒ no offset. Not estimated.
 
         Returns:
             Result[LinearParams]
@@ -114,11 +125,26 @@ class GPUQRBackend:
         with timer.section('data_transfer_to_gpu'):
             X = torch.from_numpy(X_np).to(device=self.device, dtype=self.dtype)
             y = torch.from_numpy(y_np).to(device=self.device, dtype=self.dtype)
+            w = (None if weights is None else
+                 torch.from_numpy(np.asarray(weights)).to(device=self.device, dtype=self.dtype))
+            off = (None if offset is None else
+                   torch.from_numpy(np.asarray(offset)).to(device=self.device, dtype=self.dtype))
 
-        # Compute normal equations (needed for the Cholesky solve regardless).
+        # The response actually fit is y − offset; the offset is added back into
+        # the fitted values below.
+        y_fit = y if off is None else y - off
+
+        # Weighted normal equations (X'WX) β = X'W·y_fit. With no weights this is
+        # the plain Gram X'X. The (possibly weighted) Gram is stored for the
+        # standard-error computation downstream.
         with timer.section('normal_equations'):
-            XtX = X.T @ X
-            Xty = X.T @ y
+            if w is None:
+                XtX = X.T @ X
+                Xty = X.T @ y_fit
+            else:
+                wX = w.unsqueeze(1) * X
+                XtX = X.T @ wX
+                Xty = X.T @ (w * y_fit)
 
         # Condition number check on the p×p Gram matrix instead of the n×p
         # design: cond(X) = sqrt(cond(X'X)). svdvals on a p×p matrix is orders of
@@ -176,15 +202,20 @@ class GPUQRBackend:
                         "  - Check for collinear predictors in your design matrix\n"
                         "  - Use force=True to attempt least-squares solve despite ill-conditioning"
                     )
-                # Cholesky failed — X'X not positive definite
+                # Cholesky failed — X'WX not positive definite. Solve the
+                # (weighted) least-squares system directly: with weights this is
+                # √W·X vs √W·y_fit, which reproduces the X'WX normal equations.
+                if w is None:
+                    Xls, yls = X, y_fit
+                else:
+                    sqrt_w = torch.sqrt(w)
+                    Xls, yls = sqrt_w.unsqueeze(1) * X, sqrt_w * y_fit
                 # lstsq may not be supported on MPS; fall back to CPU
                 if self.device.type == 'mps':
-                    lstsq_result = torch.linalg.lstsq(
-                        X.cpu(), y.cpu()
-                    )
+                    lstsq_result = torch.linalg.lstsq(Xls.cpu(), yls.cpu())
                     coef_gpu = lstsq_result.solution.to(self.device)
                 else:
-                    lstsq_result = torch.linalg.lstsq(X, y)
+                    lstsq_result = torch.linalg.lstsq(Xls, yls)
                     coef_gpu = lstsq_result.solution
 
                 # Determine rank from singular values (already computed)
@@ -197,16 +228,27 @@ class GPUQRBackend:
                 f"p={p}). Coefficients may not be unique."
             )
 
-        # Compute fitted and residuals
+        # Compute fitted and residuals (fitted includes the offset)
         with timer.section('fitted_residuals'):
             fitted_gpu = X @ coef_gpu
+            if off is not None:
+                fitted_gpu = fitted_gpu + off
             residuals_gpu = y - fitted_gpu
 
-        # Statistics
+        # Statistics — R² as R's summary.lm() defines it: mss/(mss+rss) with the
+        # model SS about the (weighted) mean of the FITTED values, so tss = mss +
+        # rss. Equals Σw(y-ȳ)² with no offset; differs (correctly, per R) when an
+        # offset is present. σ² = rss/df uses the (weighted) residual SS.
         with timer.section('statistics'):
-            rss = float((residuals_gpu @ residuals_gpu).item())
-            y_mean = y.mean()
-            tss = float(((y - y_mean) @ (y - y_mean)).item())
+            if w is None:
+                rss = float((residuals_gpu @ residuals_gpu).item())
+                f_mean = fitted_gpu.mean()
+                mss = float(((fitted_gpu - f_mean) @ (fitted_gpu - f_mean)).item())
+            else:
+                rss = float((w * residuals_gpu * residuals_gpu).sum().item())
+                f_mean = (w * fitted_gpu).sum() / w.sum()
+                mss = float((w * (fitted_gpu - f_mean) * (fitted_gpu - f_mean)).sum().item())
+            tss = rss + mss
 
         # Transfer back to CPU
         with timer.section('data_transfer_to_cpu'):
@@ -234,6 +276,10 @@ class GPUQRBackend:
                 'dtype': str(self.dtype),
                 'device_name': self.device_name,
                 'condition_number': cond,
+                # The (possibly weighted) Gram X'WX actually solved. The
+                # standard-error path uses this so weighted fits get (X'WX)⁻¹
+                # rather than the unweighted design Gram.
+                'gram': XtX.detach().cpu().numpy().astype(np.float64),
             },
             timing=timer.result(),
             backend_name=self.name,

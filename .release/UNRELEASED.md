@@ -9,4 +9,31 @@
 
 ## Changes
 
-*(empty — no unreleased changes yet)*
+- **Prior weights (`weights=`) and offset (`offset=`) for `regression.fit`.**
+  `fit()` now accepts per-observation prior `weights` and a linear-predictor
+  `offset`, matching R's `lm(..., weights=)` and `glm(..., weights=, offset=)`.
+  - `weights` are prior/observation weights: weighted least squares for OLS
+    (Gaussian), and IRLS prior weights for every GLM family
+    (binomial/poisson/gamma/negative-binomial, including the negative-binomial
+    θ estimation). Must be non-negative and not all zero. As with R's
+    `lm`/`glm`, they are precision weights — residual df is `n − p` (rows), so a
+    case-weighted fit and the corresponding row-replicated fit share point
+    estimates but not standard errors.
+  - `offset` enters the linear predictor as `η = Xβ + offset` and is not
+    estimated — e.g. `log(exposure)` for a Poisson rate model. The null
+    deviance, fitted values, residuals, deviance and standard errors all account
+    for it.
+  - Validated against R (`glm.fit`/`lm` with `weights=`/`offset=`) to
+    CPU-vs-R round-off on coefficients, standard errors, fitted values,
+    deviance, null deviance and dispersion across Gaussian, binomial, Poisson,
+    Gamma (log and inverse links) and fixed-θ negative binomial.
+  - GPU (float32) OLS and GLM backends honor both inputs, reproducing the CPU
+    fit to float32 tolerance.
+  - Standard errors for a weighted OLS fit now use the weighted Gram `XᵀWX`
+    (was the unweighted `XᵀX` on the GPU path). R² for a weighted fit uses the
+    `mss/(mss+rss)` decomposition (matches R's `summary.lm` with no offset).
+  - Prior versions raised `TypeError` when `weights=`/`offset=` were passed —
+    this closes that documented gap.
+  - Not yet supported together with a ridge penalty (`l2 > 0`): `weights=` /
+    `offset=` raise `NotImplementedError` there (no R reference to validate a
+    weighted/offset ridge against; `MASS::lm.ridge` takes neither).

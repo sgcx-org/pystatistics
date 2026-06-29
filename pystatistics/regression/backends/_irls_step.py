@@ -52,6 +52,7 @@ def step_halve(
     dev_old: float,
     max_halvings: int = 12,
     require_decrease: bool = False,
+    offset: NDArray[np.float64] | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], float]:
     """Halve the IRLS step toward ``coef_prev`` until the deviance is acceptable.
 
@@ -89,10 +90,13 @@ def step_halve(
 
     Returns:
         ``(coef, eta, mu, dev)`` for the accepted iterate: the coefficients, their
-        linear predictor ``X@coef``, fitted mean ``linkinv(eta)``, and deviance.
+        linear predictor ``X@coef + offset``, fitted mean ``linkinv(eta)``, and
+        deviance. ``offset`` (n,) is added to the linear predictor; ``None`` ⇒ no
+        offset.
     """
     coef = np.asarray(coef_new, dtype=np.float64)
-    eta = X @ coef
+    off = 0.0 if offset is None else offset
+    eta = X @ coef + off
     mu = link.linkinv(eta)
     dev = family.deviance(y, mu, wt)
 
@@ -105,7 +109,7 @@ def step_halve(
         or (require_decrease and dev > dev_old + 1e-8)
     ) and k < max_halvings:
         coef = 0.5 * (coef + coef_prev)
-        eta = X @ coef
+        eta = X @ coef + off
         mu = link.linkinv(eta)
         dev = family.deviance(y, mu, wt)
         k += 1
