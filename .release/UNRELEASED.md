@@ -9,6 +9,22 @@
 
 ## Changes
 
+- **Gamma GLM AIC now matches R's `glm.fit` AIC to round-off.** `GammaFamily.aic`
+  (`pystatistics/regression/families.py`) previously evaluated the
+  log-likelihood at dispersion `deviance/df_residual` and used the generic
+  `-2*loglik + 2*rank`, both of which disagree with R. R's `Gamma()$aic`
+  evaluates at the MLE dispersion `deviance/sum(weights)` and counts the
+  estimated dispersion as a free parameter (`+2`). For a typical Gamma(log) fit
+  this corrected AIC from ~585 to ~545 (R's value); the gap was ~2.5 AIC units
+  in the weighted reference cases. The dispersion *reported* for standard errors
+  (the moment estimate `deviance/df_residual`) is unchanged — only the AIC's
+  internal dispersion differs. Fixed-θ negative-binomial AIC was already correct
+  (matches `MASS::negative.binomial(theta)$aic`, no extra penalty for a known θ)
+  and is unchanged. AIC parity for Gamma (log and inverse links) and
+  negative-binomial is now asserted against R in
+  `tests/regression/test_weights_offset_r_validation.py` (previously only
+  finiteness was checked).
+
 - **Prior weights (`weights=`) and offset (`offset=`) for `regression.fit`.**
   `fit()` now accepts per-observation prior `weights` and a linear-predictor
   `offset`, matching R's `lm(..., weights=)` and `glm(..., weights=, offset=)`.

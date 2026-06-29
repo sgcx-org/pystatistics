@@ -505,6 +505,39 @@ class GammaFamily(Family):
         )))
         return ll
 
+    def aic(
+        self, y: NDArray, mu: NDArray, wt: NDArray,
+        rank: int, dispersion: float
+    ) -> float:
+        """Compute AIC matching R's ``Gamma()$aic``.
+
+        R's Gamma family evaluates the AIC log-likelihood at a dispersion of
+        ``dev / sum(wt)`` — the MLE of the dispersion under the Gamma
+        distribution — NOT the moment estimate ``dev / df_residual`` that R
+        reports in ``summary.glm`` and that PyStatistics stores in
+        ``GLMParams.dispersion`` for standard errors. The two diverge whenever
+        ``rank > 0``, so the ``dispersion`` argument (which the solver derives
+        from ``df_residual``) must be ignored here and the AIC-specific
+        dispersion recomputed internally.
+
+        R also counts the estimated dispersion/shape as a free parameter,
+        adding ``+2`` on top of ``2 * rank``. Concretely R computes
+        ``Gamma()$aic`` as ``-2 * sum(wt * dgamma(y, 1/disp, scale=mu*disp,
+        log=TRUE)) + 2`` and ``glm.fit`` adds ``2 * rank``, giving the formula
+        below. ``log_likelihood`` evaluated at ``disp`` is algebraically the
+        weighted ``dgamma`` sum.
+        """
+        dev = self.deviance(y, mu, wt)
+        total_wt = float(np.sum(wt))
+        # NUMERICAL GUARD: a degenerate (zero-weight or perfect) fit yields a
+        # non-positive dispersion; log_likelihood returns NaN, which the base
+        # aic would propagate. Surface it explicitly rather than masking.
+        disp = dev / total_wt if total_wt > 0 else float('nan')
+        ll = self.log_likelihood(y, mu, wt, disp)
+        # +2 for the estimated dispersion parameter (R's Gamma()$aic), +2*rank
+        # for the regression coefficients (R's glm.fit).
+        return -2.0 * ll + 2.0 + 2.0 * rank
+
     @property
     def dispersion_is_fixed(self) -> bool:
         return False
@@ -594,7 +627,13 @@ class NegativeBinomial(Family):
     @property
     def dispersion_is_fixed(self) -> bool:
         # For a given theta, the NB GLM has phi=1 (dispersion is "fixed"
-        # in the sense that it's not estimated from Pearson residuals)
+        # in the sense that it's not estimated from Pearson residuals).
+        #
+        # AIC: the base Family.aic (-2*loglik + 2*rank) already matches
+        # MASS::negative.binomial(theta)$aic, which returns -2*loglik with no
+        # extra dispersion-parameter penalty — theta is treated as known here.
+        # (MASS::glm.nb adds the +2 for an *estimated* theta separately, on top
+        # of this family AIC; that is out of scope for a fixed-theta fit.)
         return True
 
     def __repr__(self) -> str:

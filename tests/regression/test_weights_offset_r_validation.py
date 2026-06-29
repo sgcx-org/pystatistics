@@ -7,10 +7,12 @@ Each case in ``tests/fixtures/weights_offset_cases.json`` was fit in R with
 data with PyStatistics and assert parity to CPU-vs-R round-off tolerance.
 
 Gaussian cases are checked through the OLS/WLS path (``family=None``); the other
-families through their GLM family object. AIC is asserted only where R's AIC
-definition is unambiguous under weighting (gaussian/poisson/binomial-integer
-weights); Gamma/NB AIC follows a different R weighting convention and is checked
-elsewhere (not part of this feature).
+families through their GLM family object. AIC is asserted for every non-gaussian
+family against R's ``glm.fit`` AIC: Gamma matches ``Gamma()$aic`` (dispersion =
+``dev/sum(wt)`` plus a ``+2`` dispersion-parameter penalty) and negative
+binomial matches ``MASS::negative.binomial(theta)$aic`` (no extra penalty for a
+known theta). Gaussian AIC is not reported on the OLS ``LinearSolution`` and is
+skipped here.
 """
 
 import json
@@ -43,8 +45,10 @@ def _load():
 CASES, RESULTS = _load() if CASES_PATH.exists() and RESULTS_PATH.exists() else ({}, {})
 CASE_NAMES = sorted(CASES.keys())
 
-# AIC parity holds for these families under (integer, for binomial) weights.
-AIC_CHECKED = {"gaussian", "poisson", "binomial"}
+# AIC parity is asserted for every GLM family. Gaussian is listed so the
+# parametrization covers it, but its assertion is skipped (no AIC on the OLS
+# LinearSolution); the remaining families assert round-off parity with R.
+AIC_CHECKED = {"gaussian", "poisson", "binomial", "Gamma", "negative.binomial"}
 
 
 def _build_family(family, link, theta):
