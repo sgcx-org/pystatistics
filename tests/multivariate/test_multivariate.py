@@ -4,6 +4,10 @@ Tests for the multivariate analysis module.
 Covers PCA, factor analysis, and rotation methods.
 """
 
+import os
+import shutil
+import subprocess
+
 import numpy as np
 import pytest
 
@@ -57,6 +61,84 @@ def factor_data():
         0.2 * f1 + 0.8 * f2 + noise * rng.standard_normal(n),
     ])
     return X
+
+
+def clean_2factor(seed: int) -> np.ndarray:
+    """Clean 2-factor model (n=400, p=8), simple structure, varying loadings.
+
+    Variables 0-3 load 0.70-0.80 on factor 1, variables 4-7 on factor 2,
+    uniquenesses ~0.3-0.5. On several seeds (e.g. 24) the raw ML loadings
+    need a substantial varimax rotation whose criterion plateaus -- the
+    exact regime where the old *absolute* convergence test failed to
+    converge in 1000 iterations while R's *relative* test converges.
+    """
+    rng = np.random.default_rng(seed)
+    n = 400
+    f1 = rng.standard_normal(n)
+    f2 = rng.standard_normal(n)
+    t1 = rng.uniform(0.70, 0.80, 4)
+    t2 = rng.uniform(0.70, 0.80, 4)
+    cols = []
+    for L in t1:
+        cols.append(L * f1 + np.sqrt(1 - L ** 2) * rng.standard_normal(n))
+    for L in t2:
+        cols.append(L * f2 + np.sqrt(1 - L ** 2) * rng.standard_normal(n))
+    return np.column_stack(cols)
+
+
+# ---------------------------------------------------------------------------
+# R cross-validation helpers (skipped when Rscript is unavailable)
+# ---------------------------------------------------------------------------
+
+_HAS_RSCRIPT = shutil.which("Rscript") is not None
+_requires_r = pytest.mark.skipif(not _HAS_RSCRIPT, reason="Rscript not available")
+
+
+def _r_factanal(X, tmp_path, *, n_factors, rotation, lower=0.005):
+    """Run R ``stats::factanal`` and return (loadings, uniquenesses, objective).
+
+    Loadings are returned in (p, m) shape (R stores them column-major).
+    """
+    csv = os.path.join(str(tmp_path), "fa_data.csv")
+    np.savetxt(csv, np.asarray(X), delimiter=",")
+    script = (
+        f'X <- as.matrix(read.csv("{csv}", header=FALSE))\n'
+        f'fit <- factanal(X, factors={n_factors}, rotation="{rotation}", lower={lower})\n'
+        'cat("UNIQ:", paste(format(fit$uniquenesses, digits=15), collapse=","), "\\n")\n'
+        'cat("CRIT:", format(fit$criteria["objective"], digits=15), "\\n")\n'
+        'cat("DIM:", nrow(fit$loadings), ncol(fit$loadings), "\\n")\n'
+        'cat("LOAD:", paste(format(as.vector(fit$loadings), digits=15), collapse=","), "\\n")\n'
+    )
+    out = subprocess.run(["Rscript", "-e", script], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError("Rscript failed:\n" + out.stderr)
+    uniq = crit = dim = load_flat = None
+    for line in out.stdout.splitlines():
+        if line.startswith("UNIQ:"):
+            uniq = np.array([float(v) for v in line[5:].strip().split(",")])
+        elif line.startswith("CRIT:"):
+            crit = float(line[5:].strip())
+        elif line.startswith("DIM:"):
+            dim = tuple(int(v) for v in line[4:].split())
+        elif line.startswith("LOAD:"):
+            load_flat = np.array([float(v) for v in line[5:].strip().split(",")])
+    loadings = load_flat.reshape(dim, order="F")
+    return loadings, uniq, crit
+
+
+def _loading_diff_up_to_rotation(py, r):
+    """Max abs difference between loadings up to column permutation + sign."""
+    from itertools import permutations
+
+    p, m = py.shape
+    best = np.inf
+    for perm in permutations(range(m)):
+        cand = py[:, perm].astype(float).copy()
+        for j in range(m):
+            if np.sum((cand[:, j] - r[:, j]) ** 2) > np.sum((-cand[:, j] - r[:, j]) ** 2):
+                cand[:, j] = -cand[:, j]
+        best = min(best, np.max(np.abs(cand - r)))
+    return best
 
 
 # ===========================================================================
@@ -761,6 +843,129 @@ class TestFactorAnalysis:
         assert result.n_obs == 200
         assert result.n_vars == 6
 
+    # ---- F1: default varimax converges on clean multi-factor data ----
+
+    @pytest.mark.parametrize("seed", [14, 24, 48, 62])
+    def test_clean_multifactor_default_varimax_converges(self, seed):
+        """Default ``factor_analysis(X, n_factors=2)`` converges on clean
+        simple-structure data and recovers the block structure.
+
+        These seeds drive the raw ML loadings into a varimax criterion that
+        plateaus; the previous absolute stop-criterion raised
+        ConvergenceError here (>1000 iters), R's relative test converges.
+        """
+        X = clean_2factor(seed)
+        result = factor_analysis(X, n_factors=2)  # rotation defaults to varimax
+        assert result.rotation_method == "varimax"
+        # Simple structure: vars 0-3 share one factor, 4-7 the other.
+        dominant = np.argmax(np.abs(result.loadings), axis=1)
+        assert len(set(dominant[:4])) == 1
+        assert len(set(dominant[4:])) == 1
+        assert dominant[0] != dominant[4]
+        # Uniquenesses in the spec'd 0.3-0.5 band, none degenerate.
+        assert np.all(result.uniquenesses > 0.2)
+        assert np.all(result.uniquenesses < 0.6)
+
+    # ---- F2: uniqueness floor (`lower`) ----
+
+    def test_lower_floors_uniquenesses(self):
+        """A Heywood-prone variable is floored at the default ``lower``."""
+        X = _heywood_data()
+        result = factor_analysis(X, n_factors=1, rotation="none")
+        assert np.all(result.uniquenesses >= 0.005 - 1e-9)
+        # The floor is actually binding on the offending variable.
+        assert np.isclose(result.uniquenesses.min(), 0.005, atol=1e-6)
+
+    def test_lower_admits_heywood_when_relaxed(self):
+        """Relaxing ``lower`` lets the Heywood uniqueness collapse toward 0,
+        confirming the floor (not some other clamp) is what constrains it."""
+        X = _heywood_data()
+        floored = factor_analysis(X, n_factors=1, rotation="none", lower=0.005)
+        relaxed = factor_analysis(X, n_factors=1, rotation="none", lower=1e-7)
+        assert floored.uniquenesses.min() > relaxed.uniquenesses.min()
+        assert relaxed.uniquenesses.min() < 1e-3
+        # The floored optimum has the higher (more constrained) objective.
+        assert floored.objective >= relaxed.objective - 1e-9
+
+    def test_custom_lower_is_respected(self):
+        """A non-default ``lower`` floors the uniquenesses at that value."""
+        X = _heywood_data()
+        result = factor_analysis(X, n_factors=1, rotation="none", lower=0.05)
+        assert np.all(result.uniquenesses >= 0.05 - 1e-9)
+        assert np.isclose(result.uniquenesses.min(), 0.05, atol=1e-6)
+
+    def test_lower_recorded_in_info(self):
+        """The resolved ``lower`` is exposed on the result info dict."""
+        X = _heywood_data()
+        result = factor_analysis(X, n_factors=1, rotation="none", lower=0.01)
+        assert result.info["lower"] == 0.01
+
+    @pytest.mark.parametrize("bad", [0.0, 1.0, -0.1, 1.5])
+    def test_invalid_lower_raises(self, factor_data, bad):
+        """``lower`` outside (0, 1) fails loud."""
+        with pytest.raises(ValidationError, match="lower"):
+            factor_analysis(factor_data, n_factors=2, lower=bad)
+
+
+# ===========================================================================
+# R cross-validation: factor analysis vs stats::factanal
+# ===========================================================================
+
+def _heywood_data() -> np.ndarray:
+    """Single-factor data with one near-perfectly-explained variable.
+
+    Variable 0 is the factor plus negligible noise, so its uniqueness wants
+    to go to ~0 (a Heywood case) and is floored by ``lower``.
+    """
+    rng = np.random.default_rng(1)
+    n = 150
+    f = rng.standard_normal(n)
+    return np.column_stack([
+        f + 0.01 * rng.standard_normal(n),
+        0.8 * f + 0.6 * rng.standard_normal(n),
+        0.7 * f + 0.7 * rng.standard_normal(n),
+        0.6 * f + 0.8 * rng.standard_normal(n),
+        0.5 * f + 0.9 * rng.standard_normal(n),
+    ])
+
+
+@_requires_r
+class TestFactorAnalysisVsR:
+    """Confirm the multi-factor FA-vs-factanal agreement deferred at 4.4.0."""
+
+    def test_multifactor_varimax_matches_factanal(self, tmp_path):
+        """Clean 2-factor: uniquenesses + ML objective match factanal to a
+        tight tolerance, loadings up to rotation/sign."""
+        X = clean_2factor(24)
+        py = factor_analysis(X, n_factors=2, rotation="varimax")
+        r_load, r_uniq, r_crit = _r_factanal(
+            X, tmp_path, n_factors=2, rotation="varimax"
+        )
+        assert np.max(np.abs(np.asarray(py.uniquenesses) - r_uniq)) < 1e-4
+        assert abs(py.objective - r_crit) < 1e-6
+        assert _loading_diff_up_to_rotation(np.asarray(py.loadings), r_load) < 1e-3
+
+    def test_iris_1factor_matches_factanal_with_lower(self, tmp_path):
+        """iris 1-factor Heywood case matches factanal at the shared default
+        ``lower=0.005`` -- Petal.Length floored, objective ~0.585 (not 0.566)."""
+        iris_csv = os.path.join(str(tmp_path), "iris.csv")
+        subprocess.run(
+            ["Rscript", "-e",
+             f'write.table(iris[,1:4], "{iris_csv}", sep=",", '
+             'row.names=FALSE, col.names=FALSE)'],
+            check=True, capture_output=True, text=True,
+        )
+        iris = np.loadtxt(iris_csv, delimiter=",")
+        py = factor_analysis(iris, n_factors=1, rotation="none", lower=0.005)
+        r_load, r_uniq, r_crit = _r_factanal(
+            iris, tmp_path, n_factors=1, rotation="none", lower=0.005
+        )
+        assert np.max(np.abs(np.asarray(py.uniquenesses) - r_uniq)) < 1e-4
+        assert abs(py.objective - r_crit) < 1e-4
+        # Matches R's floored optimum, not the unconstrained Heywood one.
+        assert abs(py.objective - 0.585) < 0.01
+        assert np.isclose(np.asarray(py.uniquenesses).min(), 0.005, atol=1e-4)
+
 
 # ===========================================================================
 # Rotation Tests
@@ -829,6 +1034,34 @@ class TestRotation:
         loadings = np.array([[0.9], [0.8], [0.7]])
         rotated, R = promax(loadings)
         assert rotated.shape == (3, 1)
+
+    def test_varimax_relative_convergence_on_plateau_loadings(self):
+        """Loadings whose criterion plateaus (the F1 regime) converge under
+        the relative test where the old absolute test would not.
+
+        These are the raw ML loadings from ``clean_2factor(24)`` -- both
+        factors loaded near-equally, so the varimax criterion creeps up by
+        ~1%/iter and never reaches an absolute 1e-6 step in 1000 iters."""
+        raw = factor_analysis(
+            clean_2factor(24), n_factors=2, rotation="none"
+        ).loadings
+        rotated, R = varimax(np.asarray(raw))
+        np.testing.assert_allclose(R @ R.T, np.eye(2), atol=1e-8)
+        # Communalities preserved by the orthogonal rotation.
+        np.testing.assert_allclose(
+            np.sum(rotated ** 2, axis=1),
+            np.sum(np.asarray(raw) ** 2, axis=1),
+            rtol=1e-8,
+        )
+
+    def test_varimax_nonconvergence_raises(self):
+        """Genuine non-convergence still fails loud (Rule 1): a tiny
+        max_iter on loadings that need real rotation raises."""
+        raw = np.asarray(
+            factor_analysis(clean_2factor(24), n_factors=2, rotation="none").loadings
+        )
+        with pytest.raises(ConvergenceError, match="did not converge"):
+            varimax(raw, max_iter=2)
 
 
 class TestPCADeviceResident:

@@ -17,19 +17,26 @@ def varimax(
     loadings: NDArray,
     *,
     max_iter: int = 1000,
-    tol: float = 1e-6,
+    tol: float = 1e-5,
 ) -> tuple[NDArray, NDArray]:
     """Varimax (orthogonal) rotation of a loadings matrix.
 
     Maximises the varimax criterion using Kaiser normalisation
     (normalise rows before rotation, denormalise after).
 
-    Matches R's ``stats::varimax()``.
+    Matches R's ``stats::varimax()``, including its **relative**
+    convergence test: the iteration stops once the rotation criterion
+    ``d = sum(singular values)`` fails to grow by more than a factor of
+    ``(1 + tol)``. An absolute test on ``d`` is wrong because ``d`` scales
+    with the loadings, so the same absolute threshold demands wildly
+    different numbers of iterations on different data (R uses ``eps=1e-5``,
+    relative; matched here).
 
     Args:
         loadings: Unrotated loadings matrix, shape (p, m).
         max_iter: Maximum number of iterations.
-        tol: Convergence tolerance on the rotation criterion change.
+        tol: Relative convergence tolerance on the rotation criterion
+            (matches R's ``eps``; default 1e-5).
 
     Returns:
         Tuple of (rotated_loadings, rotation_matrix) where
@@ -40,6 +47,13 @@ def varimax(
         ConvergenceError: If the algorithm does not converge.
     """
     p, m = loadings.shape
+
+    # A single factor has no rotational freedom: varimax is a no-op.
+    # (R's stats::varimax returns immediately for ncol < 2.) Returning
+    # here also avoids the degenerate criterion d == 0, on which the
+    # relative convergence test can never fire.
+    if m < 2:
+        return loadings.copy(), np.eye(m)
 
     # Kaiser normalisation: normalise each row to unit length
     row_norms = np.sqrt(np.sum(loadings ** 2, axis=1))
@@ -64,7 +78,10 @@ def varimax(
         rotation_matrix = U @ Vt
         d_new = np.sum(S)
 
-        if abs(d_new - d_old) < tol:
+        # R's relative test: stop when the criterion stops growing by more
+        # than a factor of (1 + tol). d_old = 0 on the first pass never
+        # triggers, matching R's `dpast = 0` initialisation.
+        if d_new < d_old * (1.0 + tol):
             rotated_loadings = normalized @ rotation_matrix
             # Undo Kaiser normalisation
             rotated_loadings = rotated_loadings * row_norms[:, np.newaxis]
@@ -72,10 +89,11 @@ def varimax(
 
         d_old = d_new
 
+    final_change = abs(d_new - d_old) / abs(d_old) if d_old != 0 else float("inf")
     raise ConvergenceError(
         f"Varimax rotation did not converge after {max_iter} iterations",
         iterations=max_iter,
-        final_change=abs(d_new - d_old),
+        final_change=final_change,
         reason="max_iterations",
         threshold=tol,
     )
@@ -86,7 +104,7 @@ def promax(
     *,
     m: int = 4,
     max_iter: int = 1000,
-    tol: float = 1e-6,
+    tol: float = 1e-5,
 ) -> tuple[NDArray, NDArray]:
     """Promax (oblique) rotation of a loadings matrix.
 
@@ -103,7 +121,8 @@ def promax(
         loadings: Unrotated loadings matrix, shape (p, k).
         m: Power parameter for the target. Default 4 (R's default).
         max_iter: Maximum iterations for the initial varimax step.
-        tol: Convergence tolerance for the initial varimax step.
+        tol: Relative convergence tolerance for the initial varimax step
+            (see :func:`varimax`; default 1e-5).
 
     Returns:
         Tuple of (rotated_loadings, rotation_matrix).
