@@ -224,6 +224,7 @@ def factor_analysis(
     rotation: str = "varimax",
     method: str = "ml",
     names: list[str] | None = None,
+    lower: float = 0.005,
     tol: float = 1e-8,
     max_iter: int = 1000,
 ) -> FactorSolution:
@@ -249,6 +250,10 @@ def factor_analysis(
         rotation: 'varimax' (orthogonal), 'promax' (oblique), or 'none'.
         method: 'ml' (only ML supported).
         names: Variable names.
+        lower: Lower bound on the uniquenesses, enforced during the
+            optimisation. Matches R's ``factanal(lower=)`` (default 0.005).
+            Guards against degenerate Heywood solutions where a uniqueness
+            collapses to ~0. Must satisfy ``0 < lower < 1``.
         tol: Convergence tolerance.
         max_iter: Maximum iterations.
 
@@ -269,6 +274,11 @@ def factor_analysis(
     if rotation not in valid_rotations:
         raise ValidationError(
             f"rotation: must be one of {valid_rotations}, got '{rotation}'"
+        )
+
+    if not (0.0 < lower < 1.0):
+        raise ValidationError(
+            f"lower: must satisfy 0 < lower < 1, got {lower}"
         )
 
     X_arr = check_array(X, "X")
@@ -306,29 +316,31 @@ def factor_analysis(
     # ---- Compute correlation matrix ----
     S = np.corrcoef(X_arr, rowvar=False)
 
-    # ---- Initial uniquenesses from 1 - squared multiple correlations ----
+    # ---- Initial uniquenesses (R's shrunk SMC start) ----
+    # R uses: start = (1 - 0.5*m/p) / diag(solve(S)), a shrunk version of
+    # 1 - squared-multiple-correlations. Clip into the feasible box so the
+    # L-BFGS-B start respects the `lower` floor.
     try:
         S_inv_diag = np.diag(np.linalg.inv(S))
-        init_psi = np.clip(1.0 / S_inv_diag, 0.005, 0.995)
-        # These are R^2 values; uniquenesses = 1 - communalities
-        # but the SMC-based init uses 1/diag(S^{-1}) as communalities
-        # so init uniquenesses = 1 - 1/diag(S^{-1})
-        # Actually R uses: start = (1 - 0.5*m/p) / diag(solve(S))
-        # which is a shrunk version
         init_psi = (1.0 - 0.5 * n_factors / p) / S_inv_diag
-        init_psi = np.clip(init_psi, 0.005, 0.995)
+        init_psi = np.clip(init_psi, lower, 1.0)
     except np.linalg.LinAlgError:
         init_psi = np.full(p, 0.5)
 
     log_psi_init = np.log(init_psi)
 
     # ---- Optimise ----
+    # Box-constrain uniquenesses to [lower, 1] (R's factanal: lower=lower,
+    # upper=1) by bounding log(psi) to [log(lower), 0]. The floor prevents
+    # degenerate Heywood solutions (uniqueness -> 0).
+    log_bounds = [(np.log(lower), 0.0)] * p
     result = optimize.minimize(
         _ml_objective,
         log_psi_init,
         args=(S, n_factors),
         method="L-BFGS-B",
         jac=_ml_gradient,
+        bounds=log_bounds,
         options={"maxiter": max_iter, "ftol": tol, "gtol": tol},
     )
 
@@ -337,8 +349,9 @@ def factor_analysis(
     objective = float(result.fun)
 
     psi = np.exp(result.x)
-    # Clamp uniquenesses to (0, 1) range
-    psi = np.clip(psi, 1e-10, 1.0 - 1e-10)
+    # Enforce the uniqueness floor exactly (the optimiser may sit a hair
+    # inside the bound numerically).
+    psi = np.clip(psi, lower, 1.0)
 
     # ---- Extract loadings ----
     loadings_raw = _extract_loadings(S, psi, n_factors)
@@ -392,7 +405,12 @@ def factor_analysis(
     return FactorSolution(
         _result=Result(
             params=params,
-            info={"method": method, "rotation": rotation, "converged": converged},
+            info={
+                "method": method,
+                "rotation": rotation,
+                "converged": converged,
+                "lower": lower,
+            },
             timing=None,
             backend_name="cpu_factanal",
             warnings=(),
