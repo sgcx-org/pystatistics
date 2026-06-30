@@ -371,6 +371,17 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.4.1 — factor analysis matches R on multi-factor and Heywood cases
+
+- `factor_analysis(X, n_factors=2)` with the default varimax rotation no longer
+  raises a spurious "did not converge" error on clean, well-fitting multi-factor
+  data; the rotation uses a relative convergence test matching R's `stats::varimax`
+  and its rotated loadings now agree with R.
+- New `lower=` parameter (default `0.005`, matching R `factanal`) floors the
+  uniquenesses during fitting, preventing degenerate Heywood solutions; a
+  one-factor iris fit now matches R's constrained optimum. Must satisfy
+  `0 < lower < 1`.
+
 ### 4.4.0 — PCA on Apple Silicon GPUs
 
 - `pca(..., backend='gpu')` now runs on Apple Silicon (Metal/MPS), where it used

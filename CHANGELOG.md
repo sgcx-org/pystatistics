@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.4.1
+
+Factor analysis now matches R's `factanal` on multi-factor models and Heywood cases.
+
+- **`factor_analysis(X, n_factors=2)` no longer raises a spurious convergence
+  error.** With the default varimax rotation, well-fitting multi-factor models on
+  clean data could fail with "Varimax rotation did not converge after 1000
+  iterations." The rotation now uses a relative convergence test (matching R's
+  `stats::varimax`), so it converges in the expected number of iterations and the
+  rotated loadings match R. A genuine non-convergence still raises, as before.
+- **New `lower=` parameter on `factor_analysis` (default `0.005`).** Uniquenesses
+  are now constrained to be at least `lower` during fitting, matching R
+  `factanal`'s default and guarding against degenerate Heywood solutions where a
+  variable's uniqueness collapses to ~0. On data prone to a Heywood case (e.g. a
+  one-factor fit of the iris measurements), the result now agrees with R's
+  constrained optimum. Pass a smaller `lower` to relax the floor, or a larger one
+  to constrain further; it must satisfy `0 < lower < 1`.
+
 ## 4.4.0
 
 PCA now runs on Apple Silicon (Metal/MPS) GPUs.
