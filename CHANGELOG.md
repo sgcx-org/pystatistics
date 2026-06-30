@@ -1,5 +1,35 @@
 # Changelog
 
+## 4.4.0
+
+PCA now runs on Apple Silicon (Metal/MPS) GPUs.
+
+- **`pca(..., backend='gpu')` now works on Apple Silicon**, where it previously
+  raised "not supported on Apple Silicon." A new randomized truncated SVD solver
+  (Halko–Martinsson–Tropp with CholeskyQR2 orthonormalization) keeps the whole
+  computation on the Metal GPU — earlier the SVD/eigendecomposition PCA relies on
+  had no Metal kernel and would have silently run on the CPU. On a Mac, the
+  default `pca(X, backend='gpu')` and a tensor already on the GPU now run this
+  path automatically; no code change is needed to use it.
+- **New `solver='randomized'`** for `pca()`, selectable on both CUDA and Apple
+  Silicon, with three new knobs: `oversample` (default 10) and `n_iter`
+  (default 4) trade accuracy for speed, and `seed` (default fixed) makes the
+  randomized sketch reproducible — the same input gives the same result every
+  call; pass a different seed for an independent draw. Results match the CPU
+  reference at the same single-precision tolerance as the other GPU paths.
+- **Performance (Apple M2 Max):** on the large tall and wide data PCA is used on,
+  the GPU path is several times faster than the same computation on the CPU and up
+  to ~8–36× faster than a full double-precision SVD (e.g. a 500k×200 fit drops
+  from ~3.6 s to ~0.2 s, and a 1M×500 fit from ~22 s to ~0.6 s). Small inputs
+  (under ~10k rows) are still faster on the CPU, where data-transfer overhead
+  outweighs the compute.
+- **Safety and clarity:** the randomized path refuses near-singular data
+  (estimated condition number above the single-precision safe range) unless you
+  pass `force=True`, the same guard the GPU Gram path already uses. On Apple
+  Silicon an explicit `solver='svd'` or `solver='gram'` now fails with a clear
+  message pointing to `solver='randomized'` or `backend='cpu'`, instead of
+  quietly falling back to the CPU. CUDA behavior is unchanged.
+
 ## 4.3.3
 
 Discrete-time survival results now report whether the model fit converged.

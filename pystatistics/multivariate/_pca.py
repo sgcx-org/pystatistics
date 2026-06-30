@@ -46,9 +46,12 @@ def pca(
     n_components: int | None = None,
     names: list[str] | None = None,
     backend: str | None = None,
-    solver: str = "svd",
+    solver: str | None = None,
     force: bool = False,
     device_resident: bool = False,
+    oversample: int = 10,
+    n_iter: int = 4,
+    seed: int = 0,
 ) -> PCASolution:
     """Principal Component Analysis via SVD.
 
@@ -95,9 +98,15 @@ def pca(
                 - ``'auto'``: prefer GPU (float32) when CUDA is
                   available, else CPU.
         solver: Numerical algorithm to use. Only matters when actually
-            running on GPU (the CPU path always uses SVD).
-            ``'svd'`` (default): SVD of X. Always safe. Moderate
-                (~3–4×) speedup over CPU LAPACK.
+            running on GPU (the CPU path always uses SVD). The default
+            (``None``) resolves by device: ``'svd'`` on CUDA, and
+            ``'randomized'`` on Apple Silicon (MPS), where it is the only
+            genuinely on-device path.
+            ``'svd'``: SVD of X. Always safe. Moderate (~3–4×) speedup
+                over CPU LAPACK. **CUDA only** — on MPS ``torch.linalg.svd``
+                silently falls back to the CPU, so an explicit
+                ``solver='svd'`` on Apple Silicon raises (no silent CPU
+                substitution).
             ``'gram'``: Eigendecomposition of X'X — turns PCA into a
                 big GEMM + small symmetric eigendecomp, both GPU
                 sweet spots. For tall-skinny well-conditioned data
@@ -105,15 +114,38 @@ def pca(
                 SVD path. **Squares the condition number**, so raises
                 ``NumericalError`` on ill-conditioned data unless
                 ``force=True``. Precision gates: cond(X) ≲ 1e6 for
-                FP64, cond(X) ≲ 1e3 for FP32.
-            ``'auto'``: Uses ``'gram'`` when n > 2p AND the condition
-                check passes; falls back to ``'svd'`` otherwise. This
-                is the "best GPU path that is mathematically safe for
-                this data" dispatch.
-        force: Bypass the Gram path's condition-number gate. Numerical
-            results will be unreliable on truly ill-conditioned inputs
-            — use only when you understand the data is well-conditioned
-            despite the automated estimator disagreeing.
+                FP64, cond(X) ≲ 1e3 for FP32. **CUDA only** — on MPS
+                ``torch.linalg.eigh`` has no Metal kernel, so an explicit
+                ``solver='gram'`` on Apple Silicon raises.
+            ``'randomized'``: Halko–Martinsson–Tropp randomized truncated
+                SVD with CholeskyQR2 orthonormalization. Every X-sized
+                operation runs on-device via ``matmul`` + ``cholesky``
+                (only a tiny l×l eigendecomposition touches the host), so
+                this is the path that makes PCA run — and beat the CPU
+                3–8× — on Apple Silicon. Device-agnostic, also selectable
+                on CUDA. Approximate (top-k only) and seeded; see
+                ``oversample`` / ``n_iter`` / ``seed``. Squares the
+                condition number inside CholeskyQR, so it gates on cond(X)
+                ≲ 1e3 (FP32) just like the Gram path; ``force=True``
+                bypasses.
+            ``'auto'``: On CUDA, uses ``'gram'`` when n > 2p AND the
+                condition check passes; falls back to ``'svd'`` otherwise.
+                On MPS, routes to ``'randomized'``.
+        force: Bypass the condition-number gate (Gram and randomized
+            paths). Numerical results will be unreliable on truly
+            ill-conditioned inputs — use only when you understand the data
+            is well-conditioned despite the automated estimator
+            disagreeing.
+        oversample: Randomized solver only — extra sketch dimensions drawn
+            beyond ``n_components`` for accuracy (default 10).
+        n_iter: Randomized solver only — number of power iterations
+            (default 4). Higher is more accurate on slowly-decaying
+            spectra at proportional cost.
+        seed: Randomized solver only — RNG seed for the Gaussian sketch.
+            The default is fixed, so a given input is reproducible; pass a
+            different value to draw an independent sketch. GPU RNG is not
+            bit-identical to the CPU RNG (statistically equivalent, not
+            bitwise-equal).
         device_resident: When ``True`` and the GPU backend runs, the
             returned :class:`PCASolution` holds its numeric fields
             (``sdev``, ``rotation``, ``center``, ``scale``, ``x``) as
@@ -309,6 +341,17 @@ def pca(
     # had no GPU, and downgraded 'auto' to CPU when no CUDA is present). So a
     # non-'cpu' backend here always means "run on the GPU".
     if backend != "cpu":
+        # Default-resolution of the solver lives here in the gateway, where
+        # the resolved device is known. An unspecified solver (``None``)
+        # resolves by device: 'svd' on CUDA (the historical default, kept
+        # byte-for-byte) and 'randomized' on MPS (the only genuinely
+        # on-device path on Apple Silicon). An *explicit* solver is passed
+        # through untouched — the backend then honors it or fails loud
+        # (e.g. explicit 'svd'/'gram' on MPS raises rather than running on
+        # the CPU).
+        resolved_solver = solver
+        if resolved_solver is None:
+            resolved_solver = "randomized" if gpu_device_type == "mps" else "svd"
         from pystatistics.multivariate.backends.gpu_pca import pca_gpu
         return pca_gpu(
             X_for_gpu if X_arr is None else X_arr,
@@ -320,9 +363,12 @@ def pca(
             var_names=var_names,
             device=gpu_device_type,
             use_fp64=use_fp64,
-            method=solver,
+            method=resolved_solver,
             force=force,
             device_resident=device_resident,
+            oversample=oversample,
+            n_iter=n_iter,
+            seed=seed,
         )
 
     # ---- SVD (CPU reference path) ----

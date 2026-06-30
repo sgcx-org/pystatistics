@@ -371,6 +371,21 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.4.0 — PCA on Apple Silicon GPUs
+
+- `pca(..., backend='gpu')` now runs on Apple Silicon (Metal/MPS), where it used
+  to raise "not supported." A new randomized truncated SVD solver keeps the whole
+  computation on the Metal GPU; the default GPU path on a Mac selects it
+  automatically, so no code change is needed. On the large tall/wide data PCA is
+  used on, it is several times faster than the same computation on the CPU (e.g. a
+  500k×200 fit drops from ~3.6 s to ~0.2 s on an M2 Max). Small inputs (under
+  ~10k rows) remain faster on the CPU.
+- New `solver='randomized'` (selectable on CUDA too) with `oversample` / `n_iter`
+  accuracy knobs and a reproducible `seed`. It refuses near-singular data at
+  single precision unless `force=True`. On Apple Silicon an explicit
+  `solver='svd'` or `'gram'` now fails with a clear message instead of silently
+  running on the CPU; CUDA behavior is unchanged.
+
 ### 4.3.3 — convergence signal for discrete-time survival
 
 - `survival.discrete_time(...)` results now expose `.converged` and `.n_iter`,

@@ -251,10 +251,12 @@ class TestPCAGPU:
         with pytest.raises(ValidationError, match="backend"):
             pca(iris_like_data, backend="quantum")
 
-    def test_pca_gpu_on_mps_raises(self, iris_like_data):
-        """On Apple Silicon, explicit backend='gpu' must raise rather than
-        silently running the SVD/eigendecomposition on the CPU (Rule 1).
-        PCA GPU is CUDA-only by design."""
+    def test_explicit_svd_gram_on_mps_raise(self, iris_like_data):
+        """On Apple Silicon, an *explicit* solver='svd'/'gram' must fail loud
+        rather than silently running on the CPU (Rule 1 / A6): svd silently
+        falls back to the CPU and eigh has no Metal kernel. The on-device
+        randomized path (the default on MPS) is exercised by
+        :class:`TestPCARandomizedMPS`."""
         try:
             import torch
         except ImportError:
@@ -266,8 +268,9 @@ class TestPCAGPU:
         )
         if not mps_only:
             pytest.skip("requires an MPS-only machine")
-        with pytest.raises(RuntimeError, match="MPS"):
-            pca(iris_like_data, backend="gpu")
+        for solver in ("svd", "gram"):
+            with pytest.raises(RuntimeError, match="Metal"):
+                pca(iris_like_data, backend="gpu", solver=solver)
 
     def test_gpu_fp64_matches_cpu(self, iris_like_data):
         """FP64 GPU path should match CPU to machine precision."""
@@ -421,6 +424,212 @@ class TestPCAGPU:
         # auto should have fallen back to SVD, so results are identical
         # (same code path, same data).
         np.testing.assert_allclose(r_auto.sdev, r_svd.sdev, rtol=1e-14)
+
+
+def _mps_available() -> bool:
+    """True only on an Apple-Silicon machine with a working MPS backend."""
+    try:
+        import torch
+    except ImportError:
+        return False
+    return (
+        not torch.cuda.is_available()
+        and hasattr(torch.backends, "mps")
+        and torch.backends.mps.is_available()
+    )
+
+
+def _planted_lowrank(rng, n, p, rank, noise=0.1):
+    """Low-rank-plus-noise data with a separated spectrum — the regime PCA is
+    used in, and the regime randomized SVD targets. Mirrors the validated
+    investigation prototype."""
+    U = rng.standard_normal((n, rank))
+    Vt = np.linalg.qr(rng.standard_normal((p, rank)))[0].T   # p×rank orthonormal
+    strength = np.linspace(10.0, 3.0, rank)
+    return ((U * strength) @ Vt + noise * rng.standard_normal((n, p))).astype(
+        np.float64
+    )
+
+
+@pytest.mark.skipif(not _mps_available(), reason="requires an Apple-Silicon MPS machine")
+class TestPCARandomizedMPS:
+    """Tests for the randomized SVD PCA path on Apple Silicon (Metal/MPS).
+
+    This is the only genuinely on-device PCA path on MPS. Per the two-tier
+    validation rule, GPU is validated against the CPU reference at the
+    ``GPU_FP32`` tier (rtol 1e-4, atol 1e-5). The algorithm itself was
+    validated against the fp64 numpy reference at ~1e-7 in the investigation.
+    """
+
+    # ---- Normal cases: correctness vs the CPU fp64 reference ----
+
+    @pytest.mark.parametrize(
+        "n,p,rank,k",
+        [
+            (5000, 200, 8, 5),     # tall
+            (2000, 1500, 10, 8),   # wide
+            (1500, 1500, 12, 10),  # square
+        ],
+    )
+    def test_randomized_matches_cpu_at_gpu_fp32(self, n, p, rank, k):
+        """sdev, loadings, and scores match the CPU reference at the GPU_FP32
+        tier across tall / wide / square shapes.
+
+        The comparison targets the invariant part of the PCA answer (the same
+        rule the Gram-vs-SVD test uses): singular values are uniquely
+        determined; loadings are compared through the subspace projection
+        ``V Vᵀ`` and scores through the rank-k reconstruction ``scores @ Vᵀ``,
+        both invariant to rotations within near-degenerate eigenspaces (where
+        two algorithms can legitimately produce different individual loading
+        vectors that nonetheless span the same subspace)."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        rng = np.random.default_rng(0)
+        X = _planted_lowrank(rng, n, p, rank)
+        r_cpu = pca(X, n_components=k, backend="cpu")
+        r_gpu = pca(X, n_components=k, backend="gpu")   # → randomized on MPS
+        assert r_gpu.backend_name == "gpu_pca (mps)"
+        assert r_gpu.info["method"] == "randomized"
+
+        # Singular values are uniquely determined → elementwise at the tier.
+        np.testing.assert_allclose(
+            r_gpu.sdev, r_cpu.sdev, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+        # Loadings: subspace projection is well-defined regardless of rotation
+        # within degenerate eigenspaces.
+        proj_cpu = r_cpu.rotation @ r_cpu.rotation.T
+        proj_gpu = r_gpu.rotation @ r_gpu.rotation.T
+        np.testing.assert_allclose(
+            proj_gpu, proj_cpu, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+        # Scores: the rank-k reconstruction is rotation-invariant. Compare on a
+        # scale normalized to the data magnitude (a single small score element
+        # in fp32 is not meaningful at elementwise rtol).
+        recon_cpu = r_cpu.x @ r_cpu.rotation.T
+        recon_gpu = r_gpu.x @ r_gpu.rotation.T
+        scale = np.max(np.abs(recon_cpu))
+        assert np.max(np.abs(recon_gpu - recon_cpu)) <= (
+            GPU_FP32.atol + GPU_FP32.rtol * scale
+        )
+
+    def test_default_solver_routes_to_randomized_on_mps(self, iris_like_data):
+        """The naive path — no solver specified — must work on MPS (it routes
+        to randomized), not raise."""
+        r = pca(iris_like_data, backend="gpu")
+        assert r.info["method"] == "randomized"
+
+    def test_auto_solver_routes_to_randomized_on_mps(self, iris_like_data):
+        """solver='auto' on MPS routes to the randomized path."""
+        r = pca(iris_like_data, backend="gpu", solver="auto")
+        assert r.info["method"] == "randomized"
+
+    def test_torch_tensor_default_runs_randomized(self):
+        """A torch.Tensor already on MPS with no explicit backend runs the
+        randomized path (the device-resident DataSource entry point)."""
+        import torch
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        rng = np.random.default_rng(1)
+        X = _planted_lowrank(rng, 3000, 100, 6)
+        Xt = torch.as_tensor(X.astype(np.float32), device="mps")
+        r_gpu = pca(Xt, n_components=5)
+        r_cpu = pca(X, n_components=5, backend="cpu")
+        assert r_gpu.info["method"] == "randomized"
+        np.testing.assert_allclose(
+            r_gpu.sdev, r_cpu.sdev, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_device_resident_keeps_tensors_on_device(self):
+        """device_resident=True leaves numeric fields as MPS tensors."""
+        import torch
+        rng = np.random.default_rng(2)
+        Xt = torch.as_tensor(
+            _planted_lowrank(rng, 2000, 80, 6).astype(np.float32), device="mps",
+        )
+        r = pca(Xt, n_components=5, device_resident=True)
+        assert r.device == "mps"
+        assert isinstance(r.x, torch.Tensor)
+        assert r.x.device.type == "mps"
+
+    # ---- Edge cases ----
+
+    @pytest.mark.parametrize(
+        "center,scale",
+        [(True, True), (True, False), (False, True), (False, False)],
+    )
+    def test_center_scale_combinations(self, center, scale):
+        """All center/scale combinations match the CPU reference at the tier."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        rng = np.random.default_rng(3)
+        X = _planted_lowrank(rng, 2000, 50, 8)
+        r_cpu = pca(X, n_components=8, center=center, scale=scale, backend="cpu")
+        r_gpu = pca(X, n_components=8, center=center, scale=scale, backend="gpu")
+        np.testing.assert_allclose(
+            r_gpu.sdev, r_cpu.sdev, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_small_n(self):
+        """Small n (below the GPU-win threshold) is still correct."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        rng = np.random.default_rng(4)
+        X = rng.standard_normal((30, 8))
+        r_cpu = pca(X, n_components=4, backend="cpu")
+        r_gpu = pca(X, n_components=4, backend="gpu")
+        np.testing.assert_allclose(
+            r_gpu.sdev, r_cpu.sdev, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_k_near_min_dimension(self):
+        """n_components close to min(n, p) (sketch width capped at min(n, p))."""
+        from pystatistics.core.compute.tolerances import GPU_FP32
+        rng = np.random.default_rng(5)
+        X = rng.standard_normal((200, 15))
+        r_cpu = pca(X, n_components=15, backend="cpu")
+        r_gpu = pca(X, n_components=15, backend="gpu")
+        assert r_gpu.sdev.shape == (15,)
+        np.testing.assert_allclose(
+            r_gpu.sdev, r_cpu.sdev, rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
+        )
+
+    def test_seed_reproducibility(self):
+        """Same seed → bitwise-identical result; different seed → it still
+        matches the reference but is a distinct draw."""
+        rng = np.random.default_rng(6)
+        X = _planted_lowrank(rng, 4000, 100, 6)
+        a = pca(X, n_components=5, backend="gpu", seed=7)
+        b = pca(X, n_components=5, backend="gpu", seed=7)
+        np.testing.assert_array_equal(a.sdev, b.sdev)
+        np.testing.assert_array_equal(a.x, b.x)
+        np.testing.assert_array_equal(a.rotation, b.rotation)
+
+    # ---- Failure cases ----
+
+    def test_explicit_svd_raises_loud(self, iris_like_data):
+        with pytest.raises(RuntimeError, match="Metal"):
+            pca(iris_like_data, backend="gpu", solver="svd")
+
+    def test_explicit_gram_raises_loud(self, iris_like_data):
+        with pytest.raises(RuntimeError, match="Metal"):
+            pca(iris_like_data, backend="gpu", solver="gram")
+
+    def test_invalid_solver_raises(self, iris_like_data):
+        with pytest.raises(ValidationError, match="method"):
+            pca(iris_like_data, backend="gpu", solver="quantum")
+
+    def test_ill_conditioned_refuses(self):
+        """cond(X) past the fp32 gate refuses (NumericalError) unless force."""
+        from pystatistics.core.exceptions import NumericalError
+        rng = np.random.default_rng(8)
+        X = rng.standard_normal((1000, 20))
+        X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)   # near-collinear
+        with pytest.raises(NumericalError, match="cond"):
+            pca(X, backend="gpu", solver="randomized")
+
+    def test_ill_conditioned_force_bypasses(self):
+        """force=True bypasses the condition gate and completes."""
+        rng = np.random.default_rng(9)
+        X = rng.standard_normal((1000, 20))
+        X[:, 0] = X[:, 1] + 1e-7 * rng.standard_normal(1000)
+        r = pca(X, n_components=20, backend="gpu", solver="randomized", force=True)
+        assert r.sdev.shape == (20,)
 
 
 # ===========================================================================

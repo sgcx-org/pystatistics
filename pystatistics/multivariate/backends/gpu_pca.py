@@ -364,6 +364,9 @@ def pca_gpu(
     method: str = "svd",
     force: bool = False,
     device_resident: bool = False,
+    oversample: int = 10,
+    n_iter: int = 4,
+    seed: int = 0,
 ) -> PCASolution:
     """Fit PCA on GPU. Dispatches on ``method``.
 
@@ -380,40 +383,82 @@ def pca_gpu(
     device : {'cuda', 'mps'}
     use_fp64 : bool
         FP64 on CUDA yes, MPS raises (MPS has no FP64 SVD).
-    method : {'svd', 'gram', 'auto'}
-        'svd' always-safe SVD of X (default).
+    method : {'svd', 'gram', 'auto', 'randomized'}
+        'svd' always-safe SVD of X (default on CUDA).
         'gram' eigendecompose X'X; raises on ill-conditioned data
             unless ``force=True``.
         'auto' uses 'gram' when n > 2p AND condition check passes;
-            falls back to 'svd' otherwise.
+            falls back to 'svd' otherwise. On MPS, 'auto' routes to
+            'randomized' (the only genuinely on-device path).
+        'randomized' Halko–Martinsson–Tropp randomized truncated SVD
+            with CholeskyQR2 orthonormalization. The only on-device path
+            on Apple Silicon (Metal/MPS); also selectable on CUDA.
     force : bool
-        Bypass the Gram-path condition check. Numerical results will
-        be unreliable for truly ill-conditioned inputs.
+        Bypass the condition check (Gram and randomized paths). Numerical
+        results will be unreliable for truly ill-conditioned inputs.
+    oversample, n_iter, seed : int
+        Randomized-path accuracy / reproducibility knobs (ignored by the
+        svd / gram paths). See :func:`gpu_pca_randomized._pca_gpu_randomized`.
+
+    Device capability
+    -----------------
+    On MPS only the 'randomized' path is genuinely on-device: ``torch.linalg.svd``
+    silently falls back to the CPU and ``torch.linalg.eigh`` raises, so the 'svd'
+    and 'gram' paths have no Metal kernel. An explicit 'svd' or 'gram' on MPS
+    therefore fails loud (Rule 1 / A6 — no silent CPU substitution) rather than
+    running on the CPU under a 'gpu' label. The ``pca()`` gateway resolves an
+    unspecified solver to 'randomized' on MPS so the default path is seamless.
     """
     import torch
 
     # Validate inputs before any hardware dispatch so an invalid method
     # raises the same ValidationError regardless of device.
-    if method not in ("svd", "gram", "auto"):
+    if method not in ("svd", "gram", "auto", "randomized"):
         from pystatistics.core.exceptions import ValidationError
         raise ValidationError(
-            f"method: must be 'svd', 'gram', or 'auto', got {method!r}"
+            "method: must be 'svd', 'gram', 'auto', or 'randomized', "
+            f"got {method!r}"
+        )
+
+    n, p = X_arr.shape
+
+    # The randomized path is device-agnostic (CUDA or MPS) and is the only
+    # genuinely on-device path on Apple Silicon.
+    if method == "randomized":
+        from pystatistics.multivariate.backends.gpu_pca_randomized import (
+            _pca_gpu_randomized,
+        )
+        return _pca_gpu_randomized(
+            X_arr, center, scale, n_components,
+            col_means_cpu, scale_values_cpu, var_names,
+            device, use_fp64, force,
+            oversample=oversample, n_iter=n_iter, seed=seed,
+            device_resident=device_resident,
         )
 
     if device == "mps":
-        # PCA is fundamentally an eigendecomposition / SVD problem, and
-        # neither ``torch.linalg.svd`` (the 'svd' path) nor the symmetric
-        # eigendecomposition of X'X (the 'gram' path) has a Metal kernel —
-        # both silently fall back to the CPU on MPS. There is therefore no
-        # genuine GPU PCA on Apple Silicon; offering one would advertise a
-        # capability we do not have. Fail fast (Coding Bible Rule 1) rather
-        # than quietly running on the CPU under a 'gpu' label.
+        # Only 'svd' / 'gram' reach here on MPS ('randomized' handled above;
+        # the pca() gateway maps a default/'auto' solver to 'randomized' on
+        # MPS). Neither has a Metal kernel — svd silently falls back to the
+        # CPU, eigh raises — so an explicit request fails loud rather than
+        # quietly running on the CPU under a 'gpu' label (Rule 1 / A6).
+        if method == "auto":
+            from pystatistics.multivariate.backends.gpu_pca_randomized import (
+                _pca_gpu_randomized,
+            )
+            return _pca_gpu_randomized(
+                X_arr, center, scale, n_components,
+                col_means_cpu, scale_values_cpu, var_names,
+                device, use_fp64, force,
+                oversample=oversample, n_iter=n_iter, seed=seed,
+                device_resident=device_resident,
+            )
         raise RuntimeError(
-            "GPU PCA is not supported on Apple Silicon (MPS): the SVD / "
-            "symmetric eigendecomposition that PCA requires has no Metal "
-            "kernel and would silently run on the CPU. Use backend='cpu' "
-            "(or backend='auto', which selects CPU on MPS). CUDA is "
-            "supported."
+            f"GPU PCA solver={method!r} has no on-device Metal kernel on "
+            "Apple Silicon (MPS): torch.linalg.svd silently falls back to the "
+            "CPU and torch.linalg.eigh raises. Use solver='randomized' (or "
+            "'auto', or the default) for the on-device path, or backend='cpu' "
+            "for a double-precision CPU fit. CUDA supports all solvers."
         )
 
     # NOTE on TF32: we deliberately do NOT enable
@@ -422,8 +467,6 @@ def pca_gpu(
     # ``scores = X_centered @ V`` matmul that dominates this kernel,
     # the per-element error exceeds the ``GPU_FP32`` tier (rtol=1e-4,
     # atol=1e-5) the project guarantees for GPU-vs-CPU agreement.
-
-    n, p = X_arr.shape
 
     if method == "svd":
         return _pca_gpu_svd(
