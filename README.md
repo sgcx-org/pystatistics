@@ -371,6 +371,20 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.0 — mixed models scale up, report singular fits, and gain a GPU low-rank / GRM model
+
+- `lmm()` now scales to large and crossed designs — a structure-exploiting
+  batched/sparse solver drops a 2000-group fit from ~197 s to ~0.05 s, and crossed
+  designs that used to run out of memory now fit — with fixed-effect standard
+  errors computed in O(p³) instead of O(n³). Estimates are unchanged and match
+  `lme4`.
+- `lmm()` flags boundary (singular) fits via `LMMSolution.is_singular` and a
+  warning, like `lme4`'s `isSingular()`.
+- New `grm_lmm()` — a low-rank / GRM mixed model (a genomic relatedness matrix or
+  any reduced-rank random effect) with REML/ML, narrow-sense heritability and
+  genetic-value BLUPs, and a `backend=` (`cpu`/`gpu`/`gpu_fp64`/`auto`) whose
+  float32 GPU path refuses loudly rather than return a biased fit.
+
 ### 4.4.1 — factor analysis matches R on multi-factor and Heywood cases
 
 - `factor_analysis(X, n_factors=2)` with the default varimax rotation no longer

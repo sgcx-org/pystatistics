@@ -1,5 +1,36 @@
 # Changelog
 
+## 4.5.0
+
+Linear mixed models scale to large and crossed designs, report singular fits, and gain a GPU-accelerated low-rank / GRM model.
+
+- **`lmm()` scales to large and crossed designs.** The solver no longer
+  materializes the dense random-effects design: a single grouping factor uses a
+  batched per-group Cholesky, and crossed / nested designs use a sparse
+  factorization. Estimates are unchanged and continue to match `lme4`. A
+  2000-group fit drops from ~197 s to ~0.05 s; a 5000-group / 100,000-observation
+  fit completes in ~0.1 s; crossed designs (e.g. 2000×1000 levels, 60,000
+  observations) that previously ran out of memory now fit.
+- **`lmm()` fixed-effect standard errors now compute in O(p³) instead of O(n³)**,
+  from the p×p factor already produced by the fit. Results are machine-identical
+  to the previous path and match `lme4`; the speed-up at large sample sizes is
+  several orders of magnitude.
+- **`lmm()` reports boundary (singular) fits.** A new `LMMSolution.is_singular`
+  accessor and a `RuntimeWarning` flag fits where a random-effects variance has
+  collapsed to ~0 or an implied correlation has reached ±1, mirroring `lme4`'s
+  `isSingular()`. The estimates are unchanged.
+- **New model `grm_lmm()` — a low-rank / GRM mixed model with a GPU backend.** A
+  linear mixed model with a single low-rank variance component `K = WW'/M` (e.g.
+  a genomic relatedness matrix from M standardized markers). It fits by REML/ML
+  and reports the fixed-effect table, genetic and residual variance components,
+  narrow-sense heritability `h² = σ²_g/(σ²_g + σ²_e)`, and genetic-value BLUPs
+  (`GRMSolution`). It exposes `backend=` (`'cpu'` float64, `'gpu'` float32,
+  `'gpu_fp64'` CUDA-only, `'auto'`); the float32 GPU path checks the conditioning
+  of `W` in double precision and refuses loudly (`NumericalError`) on designs past
+  the float32-safe boundary rather than returning a biased fit (use `'gpu_fp64'`
+  or `'cpu'` for an exact fit, or `force=True` to bypass). `lmm` and `glmm`
+  remain CPU-only.
+
 ## 4.4.1
 
 Factor analysis now matches R's `factanal` on multi-factor models and Heywood cases.
