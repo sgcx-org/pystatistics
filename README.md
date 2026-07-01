@@ -371,6 +371,12 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.1 — robust convergence for near-perfect-ICC mixed models
+
+`lmm()` now converges to the correct optimum in the extreme variance-ratio regime
+(intraclass correlation approaching 1), where it could previously fail to converge
+or report a biased variance component. Well-converged fits are unchanged.
+
 ### 4.5.0 — mixed models scale up, report singular fits, and gain a GPU low-rank / GRM model
 
 - `lmm()` now scales to large and crossed designs — a structure-exploiting

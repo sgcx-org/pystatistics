@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.5.1
+
+- **`lmm()` now converges correctly in the extreme variance-ratio regime.** When
+  the intraclass correlation approaches 1 — the residual variance orders of
+  magnitude below the between-group variance — the optimizer could previously fail
+  to converge (returning `converged=False`) or, in a nearby case, stop early and
+  report a biased variance component (on a near-perfect-ICC fit, a between-group
+  variance about 17% below `lme4`'s). Such fits now fall back to a derivative-free
+  optimization and converge to the correct optimum, matching `lme4` to ~1e-6
+  relative on the variance component. Well-converged fits are unaffected.
+
 ## 4.5.0
 
 Linear mixed models scale to large and crossed designs, report singular fits, and gain a GPU-accelerated low-rank / GRM model.
