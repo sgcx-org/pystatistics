@@ -69,6 +69,7 @@ def robust_minimize(
 
     Returns ``(x_hat, f_hat, converged)``.
     """
+    x0 = np.asarray(x0, dtype=np.float64)
     lb = np.array([(-np.inf if b[0] is None else b[0]) for b in bounds])
 
     res = minimize(fun, x0, method="L-BFGS-B", bounds=bounds,
@@ -77,14 +78,25 @@ def robust_minimize(
     best_f = float(res.fun)
     converged = bool(res.success)
 
-    if not converged or not _is_stationary(fun, best_x, best_f, lb):
-        # Bounded-by-projection Nelder-Mead from the L-BFGS-B point. Diagonal θ
-        # entries are variance factors (variance = θ²), so the objective is even
-        # in their sign; projecting the simplex result onto the lower bounds
-        # keeps it feasible without distorting a genuine optimum.
-        nm = minimize(fun, best_x, method="Nelder-Mead",
+    # A result sitting on a finite lower bound (a variance factor driven to 0) is
+    # ALWAYS suspect: it is either a genuine singular fit or a boundary collapse
+    # (L-BFGS-B overshooting an interior variance optimum to θ=0). The scale-aware
+    # stationarity probe cannot tell them apart through PIRLS noise at the bound,
+    # so we always verify such a fit with a derivative-free search.
+    at_bound = bool(np.any(np.isfinite(lb) & (best_x <= lb + 1e-6)))
+
+    if not converged or at_bound or not _is_stationary(fun, best_x, best_f, lb):
+        # Bounded-by-projection Nelder-Mead from the ORIGINAL start x0 (not the
+        # possibly-collapsed L-BFGS-B point — a simplex seeded at the θ=0 boundary
+        # does not reliably climb back out). Diagonal θ entries are variance
+        # factors (variance = θ²), so the objective is even in their sign;
+        # projecting the result onto the lower bounds keeps it feasible without
+        # distorting a genuine optimum. Adopted only if it STRICTLY lowers the
+        # deviance, so a well-converged fit — and a truly singular one — is left
+        # unchanged.
+        nm = minimize(fun, x0, method="Nelder-Mead",
                       options={"xatol": 1e-7, "fatol": tol,
-                               "maxiter": max_iter * 20})
+                               "maxiter": max_iter * 40})
         nm_x = np.maximum(np.asarray(nm.x, dtype=np.float64), lb)
         nm_f = float(fun(nm_x))
         if nm_f < best_f - _FALLBACK_MIN_IMPROVEMENT:

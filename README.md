@@ -371,6 +371,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.6 — GLMM variance estimation robustness
+
+`glmm()` no longer settles at a zero random-effect variance on flat-likelihood
+data: a fit that lands at zero variance is verified with a derivative-free search
+and kept only if it genuinely improves, so real random-effect variance is
+recovered (matching `lme4::glmer`) while genuinely singular fits still return zero.
+
 ### 4.5.5 — GLMM scales to many groups
 
 `glmm()` now uses a structure-exploiting solver (batched/sparse) so fitting time

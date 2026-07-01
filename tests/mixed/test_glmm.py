@@ -225,6 +225,39 @@ class TestGLMMOptimizerRobustness:
         assert res.coefficients[1] == pytest.approx(0.4, abs=0.1)
         assert res.var_components[0].variance > 0.05
 
+    def test_flat_surface_variance_not_collapsed(self):
+        """A logit random-intercept fit whose deviance surface has a shallow
+        interior variance optimum: L-BFGS-B overshoots to θ=0 and the fine
+        stationarity probe misses it through PIRLS noise, so the boundary must be
+        treated as suspect and rescued by the derivative-free fallback.
+        lme4::glmer(nAGQ=1) gives variance ≈ 0.174 on this exact data."""
+        rng = np.random.default_rng(404)
+        G, per = 25, 16
+        n = G * per
+        g = np.repeat(np.arange(G), per)
+        b = rng.normal(0, 0.7, G)
+        x = rng.normal(0, 1, n)
+        y = (rng.random(n) < 1.0 / (1.0 + np.exp(-(0.3 + 0.6 * x + b[g])))).astype(float)
+        X = np.column_stack([np.ones(n), x])
+        res = glmm(y, X, groups={"g": g}, family="binomial")
+        assert res.converged
+        np.testing.assert_allclose(res.var_components[0].variance, 0.174, rtol=0.1)
+
+    def test_genuine_singular_stays_zero(self):
+        """The other direction (R9/R12 true-classifier): when there is NO group
+        signal the boundary rescue must NOT invent spurious variance — the
+        fallback is adopted only if it strictly lowers the deviance, so a
+        genuinely singular fit stays at ~0 (matching glmer isSingular)."""
+        rng = np.random.default_rng(202)
+        G, per = 20, 15
+        n = G * per
+        g = np.repeat(np.arange(G), per)
+        x = rng.normal(0, 1, n)
+        y = (rng.random(n) < 1.0 / (1.0 + np.exp(-(0.1 + 0.8 * x)))).astype(float)
+        X = np.column_stack([np.ones(n), x])
+        res = glmm(y, X, groups={"g": g}, family="binomial")
+        assert res.var_components[0].variance < 0.02
+
     def test_probit_variance_not_collapsed(self):
         from scipy.stats import norm
         from pystatistics.regression.families import Binomial

@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.5.6
+
+- **`glmm()` no longer settles at a zero random-effect variance on flat-likelihood
+  data.** On some datasets the optimizer could report success at a fit with a
+  collapsed (zero) random-effect variance and a worse fit, where `lme4::glmer`
+  finds a clearly non-zero variance. The optimizer now verifies any fit that
+  lands at zero variance with a derivative-free search and keeps it only if it
+  genuinely improves the fit, so real random-effect variance is recovered while
+  genuinely singular fits still return zero. Well-converged fits are unchanged.
+
 ## 4.5.5
 
 - **`glmm()` scales to many groups.** The generalized linear mixed model now uses
