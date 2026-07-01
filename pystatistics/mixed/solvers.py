@@ -11,7 +11,6 @@ from __future__ import annotations
 import warnings
 import numpy as np
 from numpy.typing import ArrayLike
-from scipy.optimize import minimize
 from scipy import stats
 
 from pystatistics.core.result import Result
@@ -33,6 +32,7 @@ from pystatistics.mixed._deviance import (
     profiled_deviance_glmm, laplace_deviance_glmm,
 )
 from pystatistics.mixed._optimizer import optimize_theta
+from pystatistics.mixed._glmm_optimizer import robust_minimize
 from pystatistics.mixed._satterthwaite import satterthwaite_df
 from pystatistics.mixed.design import MixedDesign
 from pystatistics.mixed.solution import LMMSolution, GLMMSolution
@@ -345,44 +345,37 @@ def glmm(
     with timer.section('optimization'):
         # Stage 1 (nAGQ=0 warm start): optimize θ only, with β solved jointly
         # inside PIRLS. This gives a good (θ₀, β₀) to seed the Laplace stage —
-        # exactly how lme4::glmer bootstraps its nAGQ=1 optimization.
+        # exactly how lme4::glmer bootstraps its nAGQ=1 optimization. A
+        # derivative-free fallback rescues the case where L-BFGS-B overshoots an
+        # interior variance optimum to the θ=0 boundary (a silent collapse).
         from pystatistics.mixed._pirls import solve_pirls
 
-        stage1 = minimize(
-            profiled_deviance_glmm,
-            theta0,
-            args=(design.X, Z, design.y, specs, family_obj),
-            method='L-BFGS-B',
-            bounds=bounds,
-            options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
-        )
-        theta_start_2 = stage1.x
+        theta_start_2, _dev1, _conv1 = robust_minimize(
+            lambda th: profiled_deviance_glmm(
+                th, design.X, Z, design.y, specs, family_obj),
+            theta0, bounds, max_iter=max_iter, tol=tol)
         beta_start = solve_pirls(
             design.X, Z, design.y, build_lambda(theta_start_2, specs),
             family_obj).pls.beta
 
         # Stage 2 (Laplace / nAGQ=1): optimize BOTH θ and β over the Laplace
-        # deviance, profiling only the random-effects modes u inside PIRLS.
+        # deviance, profiling only the random-effects modes u via PIRLS, with the
+        # same robust fallback on the joint objective.
         params0 = np.concatenate([theta_start_2, beta_start])
         param_bounds = bounds + [(None, None)] * p  # β is unbounded
-        opt_result = minimize(
-            laplace_deviance_glmm,
-            params0,
-            args=(design.X, Z, design.y, specs, family_obj, n_theta),
-            method='L-BFGS-B',
-            bounds=param_bounds,
-            options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
-        )
+        best_x, final_dev, converged = robust_minimize(
+            lambda pr: laplace_deviance_glmm(
+                pr, design.X, Z, design.y, specs, family_obj, n_theta),
+            params0, param_bounds, max_iter=max_iter, tol=tol)
 
-    converged = bool(opt_result.success)
-    theta_hat = opt_result.x[:n_theta]
-    beta_hat = opt_result.x[n_theta:]
-    n_iter = int(opt_result.nit)
+    theta_hat = best_x[:n_theta]
+    beta_hat = best_x[n_theta:]
 
     if not converged:
         warnings.warn(
-            f"GLMM optimizer did not converge after {n_iter} iterations. "
-            f"Message: {opt_result.message}",
+            "GLMM optimizer did not converge (L-BFGS-B and the derivative-free "
+            "fallback both failed to satisfy the tolerance). Treat the estimates "
+            "with caution.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -395,6 +388,7 @@ def glmm(
         Lambda_hat = build_lambda(theta_hat, specs)
         mode = solve_pirls_u(design.X, Z, design.y, Lambda_hat, beta_hat,
                              family_obj)
+        n_iter = int(mode.n_iter)  # inner PIRLS iterations at the optimum
 
     # Variance components (for GLMM, σ² = 1 by convention)
     with timer.section('variance_components'):
@@ -465,7 +459,7 @@ def glmm(
 
     warn_list = []
     if not converged:
-        warn_list.append(f"Optimizer did not converge: {opt_result.message}")
+        warn_list.append("Optimizer did not converge (L-BFGS-B + fallback)")
     if not mode.converged:
         warn_list.append(f"PIRLS did not converge after {mode.n_iter} iterations")
 
@@ -475,12 +469,12 @@ def glmm(
             'method': 'Laplace',
             'family': family_obj.name,
             'link': family_obj.link.name,
-            'optimizer': 'L-BFGS-B',
+            'optimizer': 'L-BFGS-B+NelderMead',
             'converged': converged,
             'pirls_converged': mode.converged,
             'n_iter': n_iter,
             'pirls_iter': mode.n_iter,
-            'deviance': opt_result.fun,
+            'deviance': float(final_dev),
         },
         timing=timer.result(),
         backend_name='cpu_glmm',

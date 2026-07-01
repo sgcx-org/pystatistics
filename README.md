@@ -371,6 +371,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.4 — more robust GLMM fitting
+
+`glmm()` Poisson models now fit reliably without occasional numerical failures
+during optimization, and the optimizer no longer settles at a suboptimal fit with
+a collapsed (near-zero) random-effect variance — a derivative-free fallback
+recovers the correct optimum. Well-converged fits are unchanged.
+
 ### 4.5.3 — clearer errors for unsupported GLMM families
 
 `glmm()` now raises a clear error when given a Gaussian or Gamma family (which

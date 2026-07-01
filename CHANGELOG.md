@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.5.4
+
+- **`glmm()` Poisson fits are now numerically robust.** Fitting a Poisson mixed
+  model could fail with a numerical error during optimization (an internal
+  overflow while the optimizer explored the parameter space), even for standard
+  datasets. The optimizer's inner loop now guards against this, so these models
+  fit reliably. Well-conditioned fits are unchanged.
+- **`glmm()` no longer collapses the random-effect variance to zero at a
+  suboptimal fit.** For some datasets the optimizer could settle at a point with a
+  near-zero random-effect variance and a worse fit while reporting success. A
+  derivative-free fallback now recovers the correct optimum in these cases;
+  fits that already converged well are unchanged.
+
 ## 4.5.3
 
 - **`glmm()` now reports a clear error for Gaussian and Gamma families instead of

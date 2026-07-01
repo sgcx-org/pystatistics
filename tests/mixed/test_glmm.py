@@ -199,6 +199,51 @@ class TestGLMMPoisson:
         assert np.all(result.fitted_values > 0)
 
 
+class TestGLMMOptimizerRobustness:
+    """Regression guards for the Laplace optimizer's robustness.
+
+    (1) Poisson PIRLS must not overflow when the outer optimizer probes a
+        far-from-optimum β (step-halving + η-clamping in the inner loop).
+    (2) The outer optimizer must not silently collapse the random-effect
+        variance to ~0 at a suboptimal point — a prior L-BFGS-B overshoot to the
+        θ=0 boundary that reported convergence. A derivative-free fallback
+        rescues it. References are from lme4::glmer(..., nAGQ=1).
+    """
+
+    def test_poisson_wide_covariate_converges(self):
+        rng = np.random.default_rng(3)
+        G, per = 20, 20
+        n = G * per
+        g = np.repeat(np.arange(G), per)
+        b = rng.normal(0, 0.5, G)
+        x = rng.normal(0, 1.5, n)  # wide range -> exp(eta) would overflow raw
+        y = rng.poisson(np.exp(0.5 + 0.4 * x + b[g])).astype(float)
+        X = np.column_stack([np.ones(n), x])
+        res = glmm(y, X, groups={"g": g}, family="poisson")
+        assert res.converged
+        assert np.all(np.isfinite(res.coefficients))
+        assert res.coefficients[1] == pytest.approx(0.4, abs=0.1)
+        assert res.var_components[0].variance > 0.05
+
+    def test_probit_variance_not_collapsed(self):
+        from scipy.stats import norm
+        from pystatistics.regression.families import Binomial
+        rng = np.random.default_rng(7)
+        G, per = 25, 18
+        n = G * per
+        g = np.repeat(np.arange(G), per)
+        b = rng.normal(0, 0.6, G)
+        x = rng.normal(0, 1, n)
+        y = (rng.random(n) < norm.cdf(0.2 + 0.5 * x + b[g])).astype(float)
+        X = np.column_stack([np.ones(n), x])
+        res = glmm(y, X, groups={"g": g}, family=Binomial(link="probit"))
+        # lme4::glmer(nAGQ=1): coef (0.0997, 0.5441), var 0.1384.
+        assert res.converged
+        np.testing.assert_allclose(res.coefficients, [0.0997, 0.5441], rtol=0.05)
+        # The collapse bug drove this to ~1e-10; guard well above that.
+        assert 0.08 < res.var_components[0].variance < 0.25
+
+
 class TestGLMMCorrelatedFixedEffectSE:
     """Regression guard: fixed-effect SEs must be correct for CORRELATED
     predictors, not only (weighted-)orthogonal ones.

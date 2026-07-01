@@ -216,27 +216,38 @@ def solve_pirls_u(
     ZLam = Z @ Lambda                      # (n, q) = ZΛ
     offset = X @ np.asarray(beta, dtype=np.float64)  # Xβ, fixed
 
-    # Initialize (same scheme as the joint PIRLS; the penalized mode is unique
-    # for canonical links, so the start affects only iteration count).
-    mu = family.initialize(y)
-    eta = link.link(mu)
+    # η is clamped to this range wherever the mean/weights are formed, so a
+    # non-canonical link (e.g. Poisson log with exp) cannot overflow while the
+    # OUTER optimizer probes a far-from-optimum β. Real fits sit well inside it
+    # (|η| well under ~30), so the clamp never binds at the optimum — it only
+    # keeps bad probes finite so step-halving can back out of them.
+    ETA_CLAMP = 30.0
+
+    def _eval(u_vec):
+        """(penalized deviance, eta, mu) at spherical modes u_vec."""
+        eta_ = offset + ZLam @ u_vec
+        eta_c = np.clip(eta_, -ETA_CLAMP, ETA_CLAMP)
+        mu_ = link.linkinv(eta_c)
+        pdev = float(family.deviance(y, mu_, wt) + u_vec @ u_vec)
+        return pdev, eta_, mu_
 
     wt = np.ones(n, dtype=np.float64)
-    dev_old = family.deviance(y, mu, wt)
-    converged = False
     u = np.zeros(q, dtype=np.float64)
+    pdev_old, eta, mu = _eval(u)
+    converged = False
     L = np.eye(q)
     w = wt
     z = eta
 
     iteration = 0
     for iteration in range(1, max_iter + 1):
-        mu_eta_val = link.mu_eta(eta)
-        z = eta + (y - mu) / mu_eta_val
+        eta_c = np.clip(eta, -ETA_CLAMP, ETA_CLAMP)
+        mu_eta_val = link.mu_eta(eta_c)
+        z = eta_c + (y - mu) / mu_eta_val
         w = (mu_eta_val ** 2) / family.variance(mu)
         w = np.maximum(w, 1e-10)
 
-        # Solve for u only, with Xβ as a fixed offset.
+        # Solve for the Newton step in u only, with Xβ as a fixed offset.
         ZLam_w = ZLam * w[:, np.newaxis]           # W ZΛ  (rows scaled)
         LtL = ZLam_w.T @ ZLam + np.eye(q)          # Λ'Z'WZΛ + I
         try:
@@ -250,20 +261,41 @@ def solve_pirls_u(
             )
         rhs = ZLam.T @ (w * (z - offset))          # Λ'Z'W (z - Xβ)
         cu = sla.solve_triangular(L, rhs, lower=True)
-        u = sla.solve_triangular(L.T, cu, lower=False)
+        u_new = sla.solve_triangular(L.T, cu, lower=False)
 
-        eta = offset + ZLam @ u
-        mu = link.linkinv(eta)
+        # Step-halving on the PENALIZED deviance: accept the full PIRLS step only
+        # if it does not increase (dev + ‖u‖²) and stays finite; otherwise back
+        # off toward the current mode. This is what makes the inner loop robust
+        # for non-canonical links (matching lme4's PIRLS) — a full step that
+        # would diverge (e.g. Poisson η → ∞) is halved instead of crashing.
+        step = 1.0
+        pdev_new, eta_try, mu_try = _eval(u_new)
+        while (not np.isfinite(pdev_new) or pdev_new > pdev_old + 1e-10) \
+                and step > 1e-8:
+            step *= 0.5
+            pdev_new, eta_try, mu_try = _eval(u + step * (u_new - u))
+        u = u + step * (u_new - u)
+        eta, mu = eta_try, mu_try
 
-        dev_new = family.deviance(y, mu, wt)
-        if abs(dev_new - dev_old) / (abs(dev_old) + 0.1) < tol:
+        if abs(pdev_new - pdev_old) / (abs(pdev_old) + 0.1) < tol:
             converged = True
-            dev_old = dev_new
+            pdev_old = pdev_new
             break
-        dev_old = dev_new
+        pdev_old = pdev_new
 
+    # Recompute the weights, working response and L factor at the final mode so
+    # the Laplace log|L|² and the fixed-effect covariance are evaluated exactly
+    # at (θ, β)'s converged modes (not the penultimate iterate).
+    eta_c = np.clip(eta, -ETA_CLAMP, ETA_CLAMP)
+    mu_eta_val = link.mu_eta(eta_c)
+    z = eta_c + (y - mu) / mu_eta_val
+    w = np.maximum((mu_eta_val ** 2) / family.variance(mu), 1e-10)
+    LtL = (ZLam * w[:, np.newaxis]).T @ ZLam + np.eye(q)
+    L = np.linalg.cholesky(LtL)
+
+    dev_final = float(family.deviance(y, mu, wt))
     b = Lambda @ u
     return PIRLSModeResult(
         u=u, b=b, mu=mu, eta=eta, weights=w, working_response=z, L=L,
-        deviance=float(dev_old), converged=converged, n_iter=iteration,
+        deviance=dev_final, converged=converged, n_iter=iteration,
     )
