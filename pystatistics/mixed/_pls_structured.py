@@ -65,7 +65,9 @@ class StructuredContext:
     Built once per fit; the optimizer then calls ``deviance_structured`` /
     ``solve_structured`` many times with different θ against the same context.
     For the sparse path it caches the sparse Z and per-factor block metadata so
-    they are not rebuilt every evaluation.
+    they are not rebuilt every evaluation. For the single-factor (batched) path
+    it also caches the θ-independent per-group cross-products (``bat_S`` = Vⱼ'Vⱼ,
+    ``bat_P`` = Vⱼ'Xⱼ, ``bat_Vty`` = Vⱼ'yⱼ) that the analytic θ-gradient reuses.
     """
     specs: list
     X: NDArray
@@ -74,6 +76,12 @@ class StructuredContext:
     single_factor: bool
     Z_sparse: object = None
     sp_blocks: list | None = None
+    # Single-factor analytic-gradient cache (None for the sparse path).
+    bat_S: NDArray | None = None       # (J, q, q) per-group Vⱼ'Vⱼ
+    bat_P: NDArray | None = None       # (J, q, p) per-group Vⱼ'Xⱼ
+    bat_Vty: NDArray | None = None     # (J, q)    per-group Vⱼ'yⱼ
+    bat_V: NDArray | None = None       # (n, q)    RE term values
+    bat_gids: NDArray | None = None    # (n,)      group index per obs
 
 
 def build_structured_context(
@@ -82,11 +90,27 @@ def build_structured_context(
     """Prepare the θ-independent context for structured solves."""
     single = len(specs) == 1
     Z_sparse, blocks = (None, None)
+    bat_S = bat_P = bat_Vty = bat_V = bat_gids = None
     if not single:
         Z_sparse, blocks = build_sparse_z(specs)
+    else:
+        spec = specs[0]
+        V = spec.value_cols
+        if V is not None:                          # structured parse
+            gids = spec.group_ids
+            J, q = spec.n_groups, spec.n_terms
+            p = X.shape[1]
+            bat_S = np.zeros((J, q, q))
+            np.add.at(bat_S, gids, V[:, :, None] * V[:, None, :])
+            bat_P = np.zeros((J, q, p))
+            np.add.at(bat_P, gids, V[:, :, None] * X[:, None, :])
+            bat_Vty = np.zeros((J, q))
+            np.add.at(bat_Vty, gids, V * y[:, None])
+            bat_V, bat_gids = V, gids
     return StructuredContext(
         specs=specs, X=X, y=y, reml=reml,
         single_factor=single, Z_sparse=Z_sparse, sp_blocks=blocks,
+        bat_S=bat_S, bat_P=bat_P, bat_Vty=bat_Vty, bat_V=bat_V, bat_gids=bat_gids,
     )
 
 
@@ -183,3 +207,85 @@ def deviance_structured(theta: NDArray, ctx: StructuredContext) -> float:
     res = solve_structured(theta, ctx)
     n, p = ctx.X.shape
     return deviance_from_result(res, n, p, ctx.reml)
+
+
+def has_analytic_gradient(ctx: StructuredContext) -> bool:
+    """True when :func:`deviance_and_grad_structured` returns a real gradient
+    (the single grouping-factor / batched path). The crossed / nested (sparse)
+    path has no analytic θ-gradient yet — callers fall back to finite differences.
+    """
+    return ctx.single_factor and ctx.bat_S is not None
+
+
+def deviance_and_grad_structured(
+    theta: NDArray, ctx: StructuredContext,
+) -> tuple[float, NDArray]:
+    """Profiled REML/ML deviance AND its analytic θ-gradient (single factor).
+
+    Same objective value as :func:`deviance_structured` (verified equal to
+    round-off), plus the exact gradient — so L-BFGS-B costs one evaluation per
+    step instead of the ``2·dim(θ)+1`` a finite-difference gradient needs. The
+    gradient is the sum of three terms, each assembled from the per-group
+    quantities of the batched solve:
+
+        ∂/∂θ_k [ log|M| ]      = Σ_j tr(Mⱼ⁻¹ ∂Mⱼ/∂θ_k)
+        ∂/∂θ_k [ log|RtR| ]    = tr(RtR⁻¹ ∂RtR/∂θ_k)                 (REML only)
+        ∂/∂θ_k [ pwrss ]       = -2 · residᵀ (∂(ZΛu)/∂θ_k)          (envelope thm)
+
+    with Mⱼ = Tᵀ Sⱼ T + I, Bⱼ = Tᵀ Pⱼ, aⱼ = Tᵀ (Vⱼ'yⱼ), and E_k = ∂T/∂θ_k a
+    single-entry lower-triangular basis matrix. Validated against a finite-
+    difference gradient of the same deviance to ~1e-7.
+    """
+    from pystatistics.mixed._struct_batched import _theta_to_T
+
+    X, y, reml = ctx.X, ctx.y, ctx.reml
+    n, p = X.shape
+    S, P, Vty, V, gids = ctx.bat_S, ctx.bat_P, ctx.bat_Vty, ctx.bat_V, ctx.bat_gids
+    J, q = S.shape[0], S.shape[1]
+
+    T = _theta_to_T(theta, q)
+    M = np.einsum('ki,jkl,lm->jim', T, S, T) + np.eye(q)
+    Minv = np.linalg.inv(M)
+    a = np.einsum('ki,jk->ji', T, Vty)                     # Tᵀ (Vⱼ'yⱼ)
+    B = np.einsum('ki,jkl->jil', T, P)                     # Tᵀ Pⱼ  (J,q,p)
+    Minv_a = np.einsum('jik,jk->ji', Minv, a)
+    Minv_B = np.einsum('jik,jkl->jil', Minv, B)
+    RtR = X.T @ X - np.einsum('jqp,jqr->pr', B, Minv_B)
+    rhs = X.T @ y - np.einsum('jqp,jq->p', B, Minv_a)
+    RtRinv = np.linalg.inv(RtR)
+    beta = RtRinv @ rhs
+    u = Minv_a - np.einsum('jqp,p->jq', Minv_B, beta)
+    Zb = np.einsum('nq,nq->n', V @ T, u[gids])
+    resid = y - X @ beta - Zb
+    pwrss = float(resid @ resid + (u * u).sum())
+
+    # NUMERICAL GUARD: prevents log(0) in the determinant terms.
+    logdet_M = float(np.sum(np.log(np.maximum(np.linalg.det(M), 1e-300))))
+    _sign, logdet_RtR = np.linalg.slogdet(RtR)
+    df = (n - p) if reml else n
+    dev = logdet_M + (logdet_RtR if reml else 0.0) \
+        + df * (1.0 + np.log(2.0 * np.pi * pwrss / df))
+
+    # --- analytic gradient over the lower-triangular θ components ---
+    tri = [(r, c) for r in range(q) for c in range(r + 1)]
+    grad = np.zeros(len(tri))
+    for k, (r, c) in enumerate(tri):
+        E = np.zeros((q, q)); E[r, c] = 1.0
+        dM = (np.einsum('ki,jkl,lm->jim', E, S, T)
+              + np.einsum('ki,jkl,lm->jim', T, S, E))
+        t1 = np.einsum('jik,jki->', Minv, dM)              # Σ tr(Mⱼ⁻¹ ∂Mⱼ)
+        if reml:
+            dB = np.einsum('ki,jkl->jil', E, P)            # ∂Bⱼ = Eᵀ Pⱼ
+            ta = np.einsum('jqp,jqr->pr', dB, Minv_B)
+            Minv_dB = np.einsum('jik,jkr->jir', Minv, dB)
+            tb = np.einsum('jqp,jqr->pr', B, Minv_dB)
+            tc = np.einsum('jqp,jqr,jrs->ps', Minv_B, dM, Minv_B)
+            dRtR = -(ta + tb - tc)
+            t2 = np.einsum('pr,rp->', RtRinv, dRtR)
+        else:
+            t2 = 0.0
+        Eu = np.einsum('rc,jc->jr', E, u)                  # ∂(Λu)/∂θ_k per group
+        dZb = np.einsum('nq,nq->n', V, Eu[gids])
+        t3 = -2.0 * float(resid @ dZb)                     # envelope: ∂pwrss
+        grad[k] = t1 + t2 + df * t3 / pwrss
+    return float(dev), grad

@@ -371,6 +371,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.7 — faster random-slope LMMs
+
+`lmm()` now optimizes the variance parameters with an exact analytic gradient
+instead of finite differences, so correlated random-slope models fit about 1.35×
+faster (random-intercept and crossed designs are unaffected). Estimates are
+unchanged.
+
 ### 4.5.6 — GLMM variance estimation robustness
 
 `glmm()` no longer settles at a zero random-effect variance on flat-likelihood

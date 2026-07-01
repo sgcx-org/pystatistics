@@ -20,7 +20,60 @@ from pystatistics.mixed._pls import solve_pls
 from pystatistics.mixed._deviance import profiled_deviance_lmm
 from pystatistics.mixed._pls_structured import (
     build_structured_context, solve_structured, deviance_structured,
+    deviance_and_grad_structured, has_analytic_gradient,
 )
+
+
+class TestAnalyticGradient:
+    """The analytic θ-gradient (A.3) must return the SAME deviance as the plain
+    path and a gradient matching finite differences to ~1e-6 — across random
+    intercept (q=1) and correlated random slope (q=2) single-factor designs."""
+
+    def _ctx(self, q_terms, seed=0):
+        rng = np.random.default_rng(seed)
+        G, per = 30, 12
+        n = G * per
+        g = np.repeat(np.arange(G), per)
+        x = rng.normal(0, 1, n)
+        y = 10 + 2 * x + rng.normal(0, 3, n) + rng.normal(0, 2, G)[g]
+        X = np.column_stack([np.ones(n), x])
+        re = {"g": list(q_terms)}
+        rd = {"x": x} if "x" in q_terms else {}
+        specs = parse_random_effects({"g": g}, re, rd, n, build_dense=False)
+        return build_structured_context(X, y, specs, reml=True)
+
+    @pytest.mark.parametrize("q_terms,theta", [
+        (("1",), np.array([0.8])),
+        (("1", "x"), np.array([1.2, 0.3, 0.7])),
+    ])
+    def test_deviance_matches_and_grad_matches_fd(self, q_terms, theta):
+        ctx = self._ctx(q_terms)
+        assert has_analytic_gradient(ctx)
+        dev_plain = deviance_structured(theta, ctx)
+        dev_g, grad = deviance_and_grad_structured(theta, ctx)
+        # Same objective value to round-off.
+        np.testing.assert_allclose(dev_g, dev_plain, rtol=0, atol=1e-9)
+        # Gradient matches central finite differences.
+        fd = np.zeros_like(theta)
+        h = 1e-6
+        for i in range(len(theta)):
+            tp = theta.copy(); tp[i] += h
+            tm = theta.copy(); tm[i] -= h
+            fd[i] = (deviance_structured(tp, ctx) - deviance_structured(tm, ctx)) / (2 * h)
+        np.testing.assert_allclose(grad, fd, rtol=1e-4, atol=1e-5)
+
+    def test_crossed_has_no_analytic_gradient(self):
+        """Crossed/nested (sparse) designs fall back to finite differences."""
+        rng = np.random.default_rng(1)
+        n = 200
+        s = rng.integers(0, 20, n); it = rng.integers(0, 15, n)
+        x = rng.normal(size=n); y = rng.normal(size=n)
+        X = np.column_stack([np.ones(n), x])
+        specs = parse_random_effects({"s": s, "it": it},
+                                     {"s": ["1"], "it": ["1"]}, {}, n,
+                                     build_dense=False)
+        ctx = build_structured_context(X, y, specs, reml=True)
+        assert not has_analytic_gradient(ctx)
 
 
 def _compare(y, X, groups, re, rd, theta, reml=True):

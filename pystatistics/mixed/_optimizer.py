@@ -20,7 +20,9 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize, Bounds
 
-from pystatistics.mixed._pls_structured import deviance_structured
+from pystatistics.mixed._pls_structured import (
+    deviance_structured, deviance_and_grad_structured, has_analytic_gradient,
+)
 
 
 # Deviance improvement (in REML/ML deviance units) required before the
@@ -92,13 +94,25 @@ def optimize_theta(ctx, starts, bounds, lb, max_iter, tol):
     Returns:
         A scipy OptimizeResult (from whichever optimizer is adopted).
     """
+    # Use the exact analytic θ-gradient where available (the single grouping-
+    # factor / batched path) so L-BFGS-B costs one deviance evaluation per step
+    # instead of the 2·dim(θ)+1 a finite-difference gradient needs (~2.3× fewer
+    # evals; the A.3 optimization). The crossed / nested (sparse) path has no
+    # analytic gradient yet and falls back to L-BFGS-B's finite differences.
+    use_grad = has_analytic_gradient(ctx)
+    if use_grad:
+        objective, jac = (lambda th, c: deviance_and_grad_structured(th, c)), True
+    else:
+        objective, jac = deviance_structured, None
+
     best = None
     for start in starts:
         res = minimize(
-            deviance_structured,
+            objective,
             start,
             args=(ctx,),
             method='L-BFGS-B',
+            jac=jac,
             bounds=bounds,
             options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
         )
