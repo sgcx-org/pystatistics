@@ -371,6 +371,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.2 — accurate generalized linear mixed models
+
+`glmm()` now fits the Laplace approximation (nAGQ = 1), matching the default fit of
+`lme4::glmer`: the fixed effects are optimized together with the variance
+components rather than in the inner loop, so estimates and log-likelihood agree
+with `glmer` to about 1e-3 (previously they matched only the cruder `nAGQ = 0`
+fit). A standard-error bug that made `glmm()` fixed-effect standard errors — and
+the z-statistics, p-values and confidence intervals derived from them — wrong for
+models with correlated predictors is also fixed.
+
 ### 4.5.1 — robust convergence for near-perfect-ICC mixed models
 
 `lmm()` now converges to the correct optimum in the extreme variance-ratio regime

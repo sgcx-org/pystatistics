@@ -179,3 +179,51 @@ class TestGLMMPoisson:
             family='poisson',
         )
         assert np.all(result.fitted_values > 0)
+
+
+class TestGLMMCorrelatedFixedEffectSE:
+    """Regression guard: fixed-effect SEs must be correct for CORRELATED
+    predictors, not only (weighted-)orthogonal ones.
+
+    A prior bug computed Var(β̂) as (RXᵀRX)⁻¹ instead of the correct
+    (RX·RXᵀ)⁻¹. The two agree when XᵀWX is near-diagonal, so single-predictor
+    fixtures masked it — but with correlated predictors the slope SEs were off
+    by nearly an order of magnitude (silently wrong z/p/CIs). Reference values
+    are from lme4::glmer(y ~ x1 + x2 + (1|g), family=binomial, nAGQ=1) on this
+    exact (seeded) dataset.
+    """
+
+    # lme4::glmer nAGQ=1 reference (see docstring).
+    R_COEF = np.array([-0.030256, 0.326583, -0.172029])
+    R_SE = np.array([0.136113, 0.629364, 0.722047])
+
+    @staticmethod
+    def _make_data():
+        rng = np.random.default_rng(2024)
+        G, per = 30, 12
+        n = G * per
+        grp = np.repeat(np.arange(G), per)
+        b = rng.normal(0, 0.7, G)
+        x1 = rng.normal(0, 1, n)
+        x2 = 0.85 * x1 + 0.15 * rng.normal(0, 1, n)  # corr(x1, x2) ~ 0.98
+        eta = 0.1 + 0.5 * x1 - 0.4 * x2 + b[grp]
+        y = (rng.random(n) < 1.0 / (1.0 + np.exp(-eta))).astype(float)
+        X = np.column_stack([np.ones(n), x1, x2])
+        return y, X, grp
+
+    def test_se_matches_glmer(self):
+        """SEs agree with glmer to the Laplace/optimizer tier (~5%)."""
+        y, X, grp = self._make_data()
+        result = glmm(y, X, groups={'g': grp}, family='binomial')
+        np.testing.assert_allclose(result.coefficients, self.R_COEF, rtol=0.05)
+        np.testing.assert_allclose(result.standard_errors, self.R_SE, rtol=0.05)
+
+    def test_se_not_collapsed(self):
+        """Bulletproof sentinel: the buggy formula drove the correlated-slope
+        SEs below ~0.1; the correct ones are ~0.6-0.7. Guards against a
+        transpose regression even if the reference constants drift."""
+        y, X, grp = self._make_data()
+        result = glmm(y, X, groups={'g': grp}, family='binomial')
+        # slopes on x1, x2 (indices 1, 2)
+        assert result.standard_errors[1] > 0.3
+        assert result.standard_errors[2] > 0.3

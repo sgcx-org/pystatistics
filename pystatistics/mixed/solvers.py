@@ -25,10 +25,13 @@ from pystatistics.mixed._random_effects import (
     parse_random_effects, build_z_matrix, build_lambda,
     theta_lower_bounds, theta_start, is_singular_fit,
 )
+from pystatistics.mixed._pls import solve_pls
 from pystatistics.mixed._pls_structured import (
     build_structured_context, solve_structured,
 )
-from pystatistics.mixed._deviance import profiled_deviance_glmm
+from pystatistics.mixed._deviance import (
+    profiled_deviance_glmm, laplace_deviance_glmm,
+)
 from pystatistics.mixed._optimizer import optimize_theta
 from pystatistics.mixed._satterthwaite import satterthwaite_df
 from pystatistics.mixed.design import MixedDesign
@@ -268,9 +271,14 @@ def glmm(
 ) -> GLMMSolution:
     """Fit a generalized linear mixed model.
 
-    Uses Laplace approximation to the marginal likelihood with
-    Penalized IRLS (PIRLS) for the inner loop and L-BFGS-B for
-    the outer optimization over variance components.
+    Uses the Laplace approximation to the marginal likelihood (equivalent to
+    ``lme4::glmer(..., nAGQ=1)``, R's default): the random-effects modes are
+    profiled by Penalized IRLS (PIRLS) in an inner loop, while BOTH the variance
+    parameters θ and the fixed effects β are optimized in the outer loop
+    (L-BFGS-B) over the Laplace deviance. Optimizing β in the outer loop — rather
+    than solving it jointly inside PIRLS (the cruder ``nAGQ=0`` scheme) — is what
+    makes the fixed effects match ``glmer``'s Laplace fit rather than a biased
+    approximation.
 
     Args:
         y: Response vector (n,).
@@ -318,9 +326,16 @@ def glmm(
         lb = theta_lower_bounds(specs)
         bounds = [(lb[i], None) for i in range(len(theta0))]
 
-    # Optimize θ via Laplace-approximated deviance
+    p = design.X.shape[1]
+    n_theta = len(theta0)
+
     with timer.section('optimization'):
-        opt_result = minimize(
+        # Stage 1 (nAGQ=0 warm start): optimize θ only, with β solved jointly
+        # inside PIRLS. This gives a good (θ₀, β₀) to seed the Laplace stage —
+        # exactly how lme4::glmer bootstraps its nAGQ=1 optimization.
+        from pystatistics.mixed._pirls import solve_pirls
+
+        stage1 = minimize(
             profiled_deviance_glmm,
             theta0,
             args=(design.X, Z, design.y, specs, family_obj),
@@ -328,10 +343,28 @@ def glmm(
             bounds=bounds,
             options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
         )
+        theta_start_2 = stage1.x
+        beta_start = solve_pirls(
+            design.X, Z, design.y, build_lambda(theta_start_2, specs),
+            family_obj).pls.beta
 
-    converged = opt_result.success
-    theta_hat = opt_result.x
-    n_iter = opt_result.nit
+        # Stage 2 (Laplace / nAGQ=1): optimize BOTH θ and β over the Laplace
+        # deviance, profiling only the random-effects modes u inside PIRLS.
+        params0 = np.concatenate([theta_start_2, beta_start])
+        param_bounds = bounds + [(None, None)] * p  # β is unbounded
+        opt_result = minimize(
+            laplace_deviance_glmm,
+            params0,
+            args=(design.X, Z, design.y, specs, family_obj, n_theta),
+            method='L-BFGS-B',
+            bounds=param_bounds,
+            options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
+        )
+
+    converged = bool(opt_result.success)
+    theta_hat = opt_result.x[:n_theta]
+    beta_hat = opt_result.x[n_theta:]
+    n_iter = int(opt_result.nit)
 
     if not converged:
         warnings.warn(
@@ -341,43 +374,50 @@ def glmm(
             stacklevel=2,
         )
 
-    # Final PIRLS solve at optimal θ
+    # Final inner solve at (θ̂, β̂): the conditional modes û, the fitted mean,
+    # and the IRLS weights/working response the fixed-effect covariance needs.
     with timer.section('final_solve'):
-        from pystatistics.mixed._pirls import solve_pirls
+        from pystatistics.mixed._pirls import solve_pirls_u
 
         Lambda_hat = build_lambda(theta_hat, specs)
-        pirls = solve_pirls(design.X, Z, design.y, Lambda_hat, family_obj)
+        mode = solve_pirls_u(design.X, Z, design.y, Lambda_hat, beta_hat,
+                             family_obj)
 
     # Variance components (for GLMM, σ² = 1 by convention)
     with timer.section('variance_components'):
         var_comps = _extract_var_components(theta_hat, 1.0, specs)
         n_groups_dict = {s.group_name: s.n_groups for s in specs}
 
-    # BLUPs
+    # BLUPs (conditional modes b = Λû)
     with timer.section('blups'):
-        random_effs = _extract_blups(pirls.pls.b, specs)
+        random_effs = _extract_blups(mode.b, specs)
 
-    # Fixed effect SEs and Wald z-statistics
+    # Fixed effect SEs and Wald z-statistics. The Laplace fixed-effect
+    # covariance is the inverse of the p×p Schur complement of the penalized
+    # system evaluated at the mode (the RX factor lme4 stores); a single joint
+    # PLS solve at the final weights/working response yields RX.
     with timer.section('inference'):
-        se = _compute_se_glmm(pirls.pls, design.X.shape[1])
-        z_vals = pirls.pls.beta / se
+        pls_final = solve_pls(design.X, Z, mode.working_response, Lambda_hat,
+                              weights=mode.weights, reml=False)
+        se = _compute_se_glmm(pls_final, p)
+        z_vals = beta_hat / se
         p_vals = 2.0 * stats.norm.sf(np.abs(z_vals))
 
     # Model fit
     with timer.section('model_fit'):
         wt = np.ones(design.n, dtype=np.float64)
-        deviance = family_obj.deviance(design.y, pirls.mu, wt)
-        n_params = len(pirls.pls.beta) + len(theta_hat)
+        deviance = family_obj.deviance(design.y, mode.mu, wt)
+        n_params = p + len(theta_hat)
 
         # Laplace-approximated marginal log-likelihood:
         # ll = conditional_loglik - 0.5 * ||u||^2 - 0.5 * log|L_theta|^2
         # where conditional_loglik = sum(f(y_i | mu_i)) is the full
         # conditional log-likelihood including normalizing constants.
         # For GLMM, dispersion = 1.
-        cond_ll = family_obj.log_likelihood(design.y, pirls.mu, wt, 1.0)
-        penalty = float(pirls.pls.u @ pirls.pls.u)
+        cond_ll = family_obj.log_likelihood(design.y, mode.mu, wt, 1.0)
+        penalty = float(mode.u @ mode.u)
         # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
-        log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pirls.pls.L), 1e-20)))
+        log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(mode.L), 1e-20)))
         ll = cond_ll - 0.5 * penalty - 0.5 * log_det_L
         aic = -2.0 * ll + 2.0 * n_params
         bic = -2.0 * ll + np.log(design.n) * n_params
@@ -387,7 +427,7 @@ def glmm(
     timer.stop()
 
     params = GLMMParams(
-        coefficients=pirls.pls.beta,
+        coefficients=beta_hat,
         coefficient_names=tuple(coef_names),
         se=se,
         z_values=z_vals,
@@ -404,17 +444,17 @@ def glmm(
         converged=converged,
         n_iter=n_iter,
         random_effects=random_effs,
-        fitted_values=pirls.mu,
-        linear_predictor=pirls.eta,
-        residuals=design.y - pirls.mu,
+        fitted_values=mode.mu,
+        linear_predictor=mode.eta,
+        residuals=design.y - mode.mu,
         theta=theta_hat,
     )
 
     warn_list = []
     if not converged:
         warn_list.append(f"Optimizer did not converge: {opt_result.message}")
-    if not pirls.converged:
-        warn_list.append(f"PIRLS did not converge after {pirls.n_iter} iterations")
+    if not mode.converged:
+        warn_list.append(f"PIRLS did not converge after {mode.n_iter} iterations")
 
     result = Result(
         params=params,
@@ -424,9 +464,9 @@ def glmm(
             'link': family_obj.link.name,
             'optimizer': 'L-BFGS-B',
             'converged': converged,
-            'pirls_converged': pirls.converged,
+            'pirls_converged': mode.converged,
             'n_iter': n_iter,
-            'pirls_iter': pirls.n_iter,
+            'pirls_iter': mode.n_iter,
             'deviance': opt_result.fun,
         },
         timing=timer.result(),
@@ -545,10 +585,9 @@ def _compute_se(pls) -> np.ndarray:
     runtime at scale). It is machine-identical (~1e-14) to that dense path
     and thousands of times faster.
 
-    NOTE: this is RX⁻¹ᵀ·RX⁻¹, NOT _compute_se_glmm's RX⁻¹·RX⁻¹ᵀ. The LMM
-    RX (from solve_pls) and the GLMM RX (from solve_pirls) use opposite
-    transpose conventions; copying the GLMM product here gives the wrong
-    variance (verified: 0.17 relative error).
+    Both the LMM and GLMM paths use this SAME ``RX⁻¹ᵀ·RX⁻¹`` form — ``RX`` is
+    the lower Cholesky of the Schur complement in each case (both come from
+    :func:`solve_pls`), so Var(β̂) = (RX·RXᵀ)⁻¹ = RX⁻ᵀ RX⁻¹.
     """
     try:
         RX_inv = np.linalg.inv(pls.RX)
@@ -564,11 +603,25 @@ def _compute_se(pls) -> np.ndarray:
 
 
 def _compute_se_glmm(pls, p: int) -> np.ndarray:
-    """Compute standard errors for GLMM (σ² = 1 by convention)."""
+    """Compute fixed-effect standard errors for GLMM (σ² = 1 by convention).
+
+    The Laplace fixed-effect covariance is the inverse of the p×p Schur
+    complement of the penalized system at the mode. ``pls.RX`` is the LOWER
+    Cholesky factor of that Schur complement S (so S = RX·RXᵀ), hence
+
+        Var(β̂) = S⁻¹ = (RX·RXᵀ)⁻¹ = RX⁻ᵀ RX⁻¹ = (RX⁻¹)ᵀ (RX⁻¹).
+
+    This is the SAME convention as the LMM :func:`_compute_se` (``pls`` comes
+    from the same :func:`solve_pls`). The previous ``RX⁻¹·RX⁻¹ᵀ`` form was
+    wrong: it inverts RXᵀRX instead of RX·RXᵀ, which agrees only when the
+    fixed-effect design is (weighted-)orthogonal and is badly wrong for
+    correlated predictors (validated against lme4::glmer).
+    """
     try:
         RX_inv = np.linalg.inv(pls.RX)
-        vcov = RX_inv @ RX_inv.T
+        vcov = RX_inv.T @ RX_inv
     except np.linalg.LinAlgError:
+        # Singular RX (collinear fixed effects): pseudo-inverse of RX·RXᵀ.
         RtR = pls.RX @ pls.RX.T
         vcov = np.linalg.pinv(RtR)
 

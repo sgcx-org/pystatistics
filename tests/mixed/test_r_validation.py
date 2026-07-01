@@ -494,7 +494,7 @@ class TestLMMNoEffect:
 
     def test_log_likelihood(self):
         np.testing.assert_allclose(
-            self.result.log_likelihood, self.ref['logLik'], atol=1.0
+            self.result.log_likelihood, self.ref['logLik'], atol=5e-2
         )
 
 
@@ -525,23 +525,23 @@ class TestGLMMBinomial:
         np.testing.assert_allclose(
             self.result.coefficients[0],
             self.ref['fixef']['(Intercept)'],
-            rtol=0.05,
+            rtol=5e-3,
         )
 
     def test_fixed_slope(self):
         np.testing.assert_allclose(
             self.result.coefficients[1],
             self.ref['fixef']['x'],
-            rtol=0.05,
+            rtol=5e-3,
         )
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=0.06)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=3e-2)
 
     def test_z_values(self):
         r_z = np.array(self.ref['z_value'])
-        np.testing.assert_allclose(self.result.z_values, r_z, rtol=0.06)
+        np.testing.assert_allclose(self.result.z_values, r_z, rtol=3e-2)
 
     def test_p_values(self):
         r_p = np.array(self.ref['p_value'])
@@ -557,17 +557,17 @@ class TestGLMMBinomial:
         vc = self.result.var_components
         py_var = [v.variance for v in vc if v.name == '(Intercept)'][0]
         np.testing.assert_allclose(
-            py_var, self.ref['var_group'], rtol=1e-2
+            py_var, self.ref['var_group'], rtol=3e-3
         )
 
     def test_deviance(self):
         np.testing.assert_allclose(
-            self.result.deviance, self.ref['deviance'], rtol=1e-2
+            self.result.deviance, self.ref['deviance'], rtol=3e-3
         )
 
     def test_log_likelihood(self):
         np.testing.assert_allclose(
-            self.result.log_likelihood, self.ref['logLik'], atol=1.0
+            self.result.log_likelihood, self.ref['logLik'], atol=5e-2
         )
 
     def test_aic(self):
@@ -607,23 +607,23 @@ class TestGLMMPoisson:
         np.testing.assert_allclose(
             self.result.coefficients[0],
             self.ref['fixef']['(Intercept)'],
-            rtol=0.05,
+            rtol=5e-3,
         )
 
     def test_fixed_slope(self):
         np.testing.assert_allclose(
             self.result.coefficients[1],
             self.ref['fixef']['x'],
-            rtol=0.05,
+            rtol=5e-3,
         )
 
     def test_standard_errors(self):
         r_se = np.array(self.ref['se'])
-        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=0.06)
+        np.testing.assert_allclose(self.result.standard_errors, r_se, rtol=3e-2)
 
     def test_z_values(self):
         r_z = np.array(self.ref['z_value'])
-        np.testing.assert_allclose(self.result.z_values, r_z, rtol=0.06)
+        np.testing.assert_allclose(self.result.z_values, r_z, rtol=3e-2)
 
     def test_p_values(self):
         r_p = np.array(self.ref['p_value'])
@@ -639,17 +639,17 @@ class TestGLMMPoisson:
         vc = self.result.var_components
         py_var = [v.variance for v in vc if v.name == '(Intercept)'][0]
         np.testing.assert_allclose(
-            py_var, self.ref['var_group'], rtol=1e-2
+            py_var, self.ref['var_group'], rtol=3e-3
         )
 
     def test_deviance(self):
         np.testing.assert_allclose(
-            self.result.deviance, self.ref['deviance'], rtol=1e-2
+            self.result.deviance, self.ref['deviance'], rtol=3e-3
         )
 
     def test_log_likelihood(self):
         np.testing.assert_allclose(
-            self.result.log_likelihood, self.ref['logLik'], atol=1.0
+            self.result.log_likelihood, self.ref['logLik'], atol=5e-2
         )
 
     def test_aic(self):

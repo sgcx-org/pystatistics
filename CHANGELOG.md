@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.5.2
+
+- **`glmm()` now uses the Laplace approximation (nAGQ = 1), matching the default
+  fit of `lme4::glmer`.** Earlier versions optimized only the variance components
+  while solving the fixed effects inside the inner PIRLS loop — a cruder
+  approximation equivalent to `glmer(..., nAGQ = 0)` — so the fixed-effect
+  estimates could differ from the default `glmer` fit by several percent (for
+  example, about 4% on a binomial slope). `glmm()` now optimizes the fixed effects
+  together with the variance components against the Laplace-approximated
+  likelihood. Fixed effects and log-likelihood now agree with `glmer` to about
+  1e-3 across binomial and Poisson families and random-intercept and random-slope
+  designs; standard errors, variance components and BLUPs agree to about 1–2%.
+- **Fixed incorrect fixed-effect standard errors in `glmm()` for models with
+  correlated predictors.** The standard errors (and the z-statistics, p-values and
+  confidence intervals derived from them) were computed with a transposed matrix
+  factor. The error cancelled when the predictors were uncorrelated, so simple
+  models were unaffected, but with correlated predictors the standard errors could
+  be off by a large factor (in one case a slope standard error came out roughly
+  eight times too small). Standard errors are now correct and match `glmer` to
+  about 1–2%.
+
 ## 4.5.1
 
 - **`lmm()` now converges correctly in the extreme variance-ratio regime.** When

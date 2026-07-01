@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 
 from pystatistics.mixed._random_effects import RandomEffectSpec, build_lambda
 from pystatistics.mixed._pls import solve_pls
-from pystatistics.mixed._pirls import solve_pirls
+from pystatistics.mixed._pirls import solve_pirls, solve_pirls_u
 
 
 def profiled_deviance_lmm(
@@ -126,3 +126,50 @@ def profiled_deviance_glmm(
     log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(pirls.pls.L), 1e-20)))
 
     return dev_component + penalty + log_det_L
+
+
+def laplace_deviance_glmm(
+    params: NDArray,
+    X: NDArray,
+    Z: NDArray,
+    y: NDArray,
+    specs: list[RandomEffectSpec],
+    family,
+    n_theta: int,
+    pirls_tol: float = 1e-8,
+    pirls_max_iter: int = 25,
+) -> float:
+    """Laplace-approximated deviance as a function of BOTH θ and β (nAGQ=1).
+
+    This is the true Laplace (glmer default, ``nAGQ=1``) objective: the outer
+    optimizer minimizes over the joint parameter vector ``params = [θ, β]``. For
+    each candidate (θ, β), only the random-effects modes û are profiled (by
+    :func:`solve_pirls_u`, β held fixed), and the Laplace deviance is
+
+        d(θ, β) = deviance(y, μ̂) + ‖û‖² + log|L_θ|² .
+
+    Contrast :func:`profiled_deviance_glmm`, which optimizes over θ ONLY with β
+    solved jointly inside PIRLS (``nAGQ=0``) — a cruder, faster approximation
+    whose fixed effects are biased relative to the Laplace fit. Putting β in the
+    outer optimization is what makes glmm() match ``glmer(..., nAGQ=1)``.
+
+    Args:
+        params: Packed parameter vector ``[θ (n_theta,), β (p,)]``.
+        X: Fixed effects design matrix (n, p).
+        Z: Random effects design matrix (n, q).
+        y: Response vector (n,).
+        specs: Random effect specifications.
+        family: GLM family object.
+        n_theta: Number of variance parameters θ (to split ``params``).
+        pirls_tol: Inner PIRLS convergence tolerance.
+        pirls_max_iter: Inner PIRLS maximum iterations.
+
+    Returns:
+        The Laplace-approximated deviance (scalar to minimize).
+    """
+    theta = params[:n_theta]
+    beta = params[n_theta:]
+    Lambda = build_lambda(theta, specs)
+    mode = solve_pirls_u(X, Z, y, Lambda, beta, family,
+                         tol=pirls_tol, max_iter=pirls_max_iter)
+    return mode.laplace_deviance
