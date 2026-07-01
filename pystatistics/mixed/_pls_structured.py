@@ -98,6 +98,21 @@ def _build_factor(theta: NDArray, ctx: StructuredContext):
     )
 
 
+def build_weighted_factor(ctx: StructuredContext, theta: NDArray,
+                          response: NDArray, weights: NDArray):
+    """Structured factor for the GLMM inner loop: M = Λ'Z'WZΛ + I with the
+    working ``response`` and IRLS ``weights`` (dispatches batched vs sparse on
+    the same context the LMM path uses). ``ctx.y`` is ignored — the GLMM PIRLS
+    passes the current working response explicitly."""
+    if ctx.single_factor:
+        return build_batched_factor(theta, ctx.specs[0], ctx.X, response,
+                                    weights=weights)
+    return build_sparse_factor(
+        theta, ctx.specs, ctx.Z_sparse, ctx.sp_blocks, ctx.X, response,
+        weights=weights,
+    )
+
+
 def solve_structured(theta: NDArray, ctx: StructuredContext) -> StructuredPLSResult:
     """Solve the penalized least squares problem at θ via the structured path.
 

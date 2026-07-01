@@ -371,6 +371,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.5 — GLMM scales to many groups
+
+`glmm()` now uses a structure-exploiting solver (batched/sparse) so fitting time
+grows roughly linearly with the number of groups instead of cubically — a
+many-group binomial fit that was several times slower than `lme4::glmer` is now
+close to it. Estimates are unchanged.
+
 ### 4.5.4 — more robust GLMM fitting
 
 `glmm()` Poisson models now fit reliably without occasional numerical failures

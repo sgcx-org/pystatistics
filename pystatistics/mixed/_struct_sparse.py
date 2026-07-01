@@ -140,13 +140,27 @@ def build_sparse_factor(
     blocks: list,
     X: NDArray,
     y: NDArray,
+    weights: NDArray | None = None,
 ) -> SparseFactor:
-    """Build and factor the sparse penalized system for a crossed design."""
+    """Build and factor the sparse penalized system for a crossed design.
+
+    ``weights`` (optional per-observation IRLS weights W) turns the system into
+    M = Λ'Z'WZΛ + I with cross-products a = Λ'Z'Wy, B = Λ'Z'WX — the GLMM inner
+    loop. None = unit weights (the LMM path), byte-for-behaviour unchanged.
+    """
     n, p = X.shape
     Lambda = build_sparse_lambda(theta, specs, blocks)
     ZL = (Z @ Lambda).tocsc()
     total_q = ZL.shape[1]
-    M = (ZL.T @ ZL + sp.identity(total_q, format='csc')).tocsc()
+    if weights is None:
+        M = (ZL.T @ ZL + sp.identity(total_q, format='csc')).tocsc()
+        a = ZL.T @ y
+        B = ZL.T @ X
+    else:
+        WZL = (sp.diags(weights) @ ZL).tocsc()          # diag(W) ZΛ
+        M = (ZL.T @ WZL + sp.identity(total_q, format='csc')).tocsc()
+        a = ZL.T @ (weights * y)
+        B = ZL.T @ (weights[:, None] * X)
 
     try:
         lu = splu(M, permc_spec='MMD_AT_PLUS_A')
@@ -162,8 +176,6 @@ def build_sparse_factor(
     diagU = lu.U.diagonal()
     logdet_M = float(np.sum(np.log(np.abs(diagU))))
 
-    a = ZL.T @ y                                        # (q,)
-    B = ZL.T @ X                                        # (q, p)
     if sp.issparse(B):
         B = B.toarray()
     a = np.asarray(a).ravel()

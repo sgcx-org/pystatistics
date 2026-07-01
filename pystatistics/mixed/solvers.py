@@ -28,8 +28,10 @@ from pystatistics.mixed._pls import solve_pls
 from pystatistics.mixed._pls_structured import (
     build_structured_context, solve_structured,
 )
-from pystatistics.mixed._deviance import (
-    profiled_deviance_glmm, laplace_deviance_glmm,
+from pystatistics.mixed._glmm_pirls import (
+    mode_joint, mode_given_beta,
+    profiled_deviance as glmm_profiled_deviance,
+    laplace_deviance as glmm_laplace_deviance,
 )
 from pystatistics.mixed._optimizer import optimize_theta
 from pystatistics.mixed._glmm_optimizer import robust_minimize
@@ -332,9 +334,13 @@ def glmm(
 
     with timer.section('setup'):
         specs = parse_random_effects(
-            design.groups, design.random_effects, design.random_data, design.n
+            design.groups, design.random_effects, design.random_data, design.n,
+            build_dense=False,
         )
-        Z = build_z_matrix(specs)
+        # Structure-exploiting context (batched per-group for a single grouping
+        # factor; sparse for crossed/nested) — the GLMM PIRLS solves through it
+        # so the cost scales with the block/sparsity structure, not O(#groups³).
+        ctx = build_structured_context(design.X, design.y, specs, reml=False)
         theta0 = theta_start(specs)
         lb = theta_lower_bounds(specs)
         bounds = [(lb[i], None) for i in range(len(theta0))]
@@ -348,15 +354,10 @@ def glmm(
         # exactly how lme4::glmer bootstraps its nAGQ=1 optimization. A
         # derivative-free fallback rescues the case where L-BFGS-B overshoots an
         # interior variance optimum to the θ=0 boundary (a silent collapse).
-        from pystatistics.mixed._pirls import solve_pirls
-
         theta_start_2, _dev1, _conv1 = robust_minimize(
-            lambda th: profiled_deviance_glmm(
-                th, design.X, Z, design.y, specs, family_obj),
+            lambda th: glmm_profiled_deviance(ctx, th, family_obj),
             theta0, bounds, max_iter=max_iter, tol=tol)
-        beta_start = solve_pirls(
-            design.X, Z, design.y, build_lambda(theta_start_2, specs),
-            family_obj).pls.beta
+        beta_start = mode_joint(ctx, theta_start_2, family_obj).beta
 
         # Stage 2 (Laplace / nAGQ=1): optimize BOTH θ and β over the Laplace
         # deviance, profiling only the random-effects modes u via PIRLS, with the
@@ -364,8 +365,7 @@ def glmm(
         params0 = np.concatenate([theta_start_2, beta_start])
         param_bounds = bounds + [(None, None)] * p  # β is unbounded
         best_x, final_dev, converged = robust_minimize(
-            lambda pr: laplace_deviance_glmm(
-                pr, design.X, Z, design.y, specs, family_obj, n_theta),
+            lambda pr: glmm_laplace_deviance(ctx, pr, family_obj, n_theta),
             params0, param_bounds, max_iter=max_iter, tol=tol)
 
     theta_hat = best_x[:n_theta]
@@ -381,13 +381,10 @@ def glmm(
         )
 
     # Final inner solve at (θ̂, β̂): the conditional modes û, the fitted mean,
-    # and the IRLS weights/working response the fixed-effect covariance needs.
+    # the Laplace log-det and the p×p Schur factor RX the fixed-effect
+    # covariance needs — all from the structured factor at the mode.
     with timer.section('final_solve'):
-        from pystatistics.mixed._pirls import solve_pirls_u
-
-        Lambda_hat = build_lambda(theta_hat, specs)
-        mode = solve_pirls_u(design.X, Z, design.y, Lambda_hat, beta_hat,
-                             family_obj)
+        mode = mode_given_beta(ctx, theta_hat, beta_hat, family_obj)
         n_iter = int(mode.n_iter)  # inner PIRLS iterations at the optimum
 
     # Variance components (for GLMM, σ² = 1 by convention)
@@ -401,12 +398,9 @@ def glmm(
 
     # Fixed effect SEs and Wald z-statistics. The Laplace fixed-effect
     # covariance is the inverse of the p×p Schur complement of the penalized
-    # system evaluated at the mode (the RX factor lme4 stores); a single joint
-    # PLS solve at the final weights/working response yields RX.
+    # system at the mode (the RX factor lme4 stores), carried on the mode result.
     with timer.section('inference'):
-        pls_final = solve_pls(design.X, Z, mode.working_response, Lambda_hat,
-                              weights=mode.weights, reml=False)
-        se = _compute_se_glmm(pls_final, p)
+        se = _compute_se_glmm(mode, p)
         z_vals = beta_hat / se
         p_vals = 2.0 * stats.norm.sf(np.abs(z_vals))
 
@@ -422,10 +416,8 @@ def glmm(
         # conditional log-likelihood including normalizing constants.
         # For GLMM, dispersion = 1.
         cond_ll = family_obj.log_likelihood(design.y, mode.mu, wt, 1.0)
-        penalty = float(mode.u @ mode.u)
-        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
-        log_det_L = 2.0 * np.sum(np.log(np.maximum(np.diag(mode.L), 1e-20)))
-        ll = cond_ll - 0.5 * penalty - 0.5 * log_det_L
+        # log|L_θ|² = log|Λ'Z'WZΛ + I|, carried on the structured mode result.
+        ll = cond_ll - 0.5 * mode.penalty - 0.5 * mode.logdet_M
         aic = -2.0 * ll + 2.0 * n_params
         bic = -2.0 * ll + np.log(design.n) * n_params
 

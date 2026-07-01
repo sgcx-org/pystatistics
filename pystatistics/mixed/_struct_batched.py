@@ -89,6 +89,7 @@ def build_batched_factor(
     spec: RandomEffectSpec,
     X: NDArray,
     y: NDArray,
+    weights: NDArray | None = None,
 ) -> BatchedFactor:
     """Build the block-diagonal factor for a single grouping factor.
 
@@ -96,7 +97,11 @@ def build_batched_factor(
         theta: θ vector for this (single) grouping factor.
         spec: The grouping factor's RandomEffectSpec (must carry value_cols).
         X: Fixed-effects design (n, p).
-        y: Response (n,).
+        y: Response (n,) — the working response z for the GLMM PIRLS path.
+        weights: Optional per-observation IRLS weights W (n,). When given the
+            system becomes M = Λ'Z'WZΛ + I and the cross-products a = Λ'Z'Wy,
+            B = Λ'Z'WX — exactly what the GLMM inner loop needs. None = unit
+            weights (the LMM path), byte-for-behaviour unchanged.
     """
     V = spec.value_cols
     if V is None:
@@ -108,17 +113,19 @@ def build_batched_factor(
 
     T = _theta_to_T(theta, q)
     VT = V @ T                                          # (n, q) rotated values
+    wVT = VT if weights is None else VT * weights[:, None]  # W-scaled rows
 
-    # Per-group accumulators via segment sums (ragged-safe).
+    # Per-group accumulators via segment sums (ragged-safe). Scaling ONE factor
+    # of each outer product by W gives the weighted Gram Σ w·VT VTᵀ (symmetric).
     A = np.zeros((J, q, q), dtype=np.float64)
-    np.add.at(A, gids, VT[:, :, None] * VT[:, None, :])
+    np.add.at(A, gids, wVT[:, :, None] * VT[:, None, :])
     M = A + np.eye(q)[None, :, :]
 
     a_g = np.zeros((J, q), dtype=np.float64)
-    np.add.at(a_g, gids, VT * y[:, None])
+    np.add.at(a_g, gids, wVT * y[:, None])
 
     B_g = np.zeros((J, q, p), dtype=np.float64)
-    np.add.at(B_g, gids, VT[:, :, None] * X[:, None, :])
+    np.add.at(B_g, gids, wVT[:, :, None] * X[:, None, :])
 
     sign, logabsdet = np.linalg.slogdet(M)
     logdet_M = float(logabsdet.sum())

@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.5.5
+
+- **`glmm()` scales to many groups.** The generalized linear mixed model now uses
+  a structure-exploiting solver (batched per-group for a single grouping factor,
+  sparse for crossed/nested designs) instead of a dense factorization, so fitting
+  time grows roughly linearly with the number of groups rather than cubically. A
+  400-group / 6,000-observation binomial fit that was several times slower than
+  `lme4::glmer` is now close to it, and the gap no longer widens with size.
+  Estimates are unchanged.
+
 ## 4.5.4
 
 - **`glmm()` Poisson fits are now numerically robust.** Fitting a Poisson mixed
