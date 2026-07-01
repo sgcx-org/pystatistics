@@ -26,9 +26,10 @@ from pystatistics.mixed._random_effects import (
     theta_lower_bounds, theta_start, is_singular_fit,
 )
 from pystatistics.mixed._pls_structured import (
-    build_structured_context, solve_structured, deviance_structured,
+    build_structured_context, solve_structured,
 )
 from pystatistics.mixed._deviance import profiled_deviance_glmm
+from pystatistics.mixed._optimizer import optimize_theta
 from pystatistics.mixed._satterthwaite import satterthwaite_df
 from pystatistics.mixed.design import MixedDesign
 from pystatistics.mixed.solution import LMMSolution, GLMMSolution
@@ -138,29 +139,10 @@ def lmm(
                                 alt[idx] = scale
                             idx += 1
                 starts.append(alt)
-
-            best_result = None
-            for start in starts:
-                res = minimize(
-                    deviance_structured,
-                    start,
-                    args=(ctx,),
-                    method='L-BFGS-B',
-                    bounds=bounds,
-                    options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
-                )
-                if best_result is None or res.fun < best_result.fun:
-                    best_result = res
-            opt_result = best_result
         else:
-            opt_result = minimize(
-                deviance_structured,
-                theta0,
-                args=(ctx,),
-                method='L-BFGS-B',
-                bounds=bounds,
-                options={'maxiter': max_iter, 'ftol': tol, 'gtol': tol * 10},
-            )
+            starts = [theta0]
+
+        opt_result = optimize_theta(ctx, starts, bounds, lb, max_iter, tol)
 
     converged = opt_result.success
     theta_hat = opt_result.x
