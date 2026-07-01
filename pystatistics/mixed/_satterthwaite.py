@@ -1,5 +1,4 @@
-"""
-Satterthwaite degrees of freedom for fixed effects in LMM.
+"""Satterthwaite degrees of freedom for fixed effects in LMM.
 
 Computes approximate denominator degrees of freedom for t-tests on
 fixed effects, following the algorithm in lmerTest (Kuznetsova et al., 2017).
@@ -21,6 +20,10 @@ differentiating only w.r.t. θ misses the contribution of σ to Var(β̂), leadi
 to incorrect (often far too large) Satterthwaite df for fixed effects that are
 not strongly affected by the random effects structure.
 
+All linear algebra goes through the structure-exploiting PLS solver: the
+per-coefficient variance C(θ) = (X'V*⁻¹X)⁻¹ is obtained as (RX·RXᵀ)⁻¹ from the
+p×p Schur factor, never by forming the dense n×n V*.
+
 References:
     Kuznetsova, A., Brockhoff, P. B., & Christensen, R. H. B. (2017).
     lmerTest Package: Tests in Linear Mixed Effects Models.
@@ -32,17 +35,23 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.mixed._random_effects import RandomEffectSpec, build_lambda
-from pystatistics.mixed._pls import solve_pls
+from pystatistics.mixed._pls_structured import (
+    StructuredContext, solve_structured,
+)
+
+
+def _C_from_RX(RX: NDArray) -> NDArray:
+    """C(θ) = (X'V*⁻¹X)⁻¹ = (RX·RXᵀ)⁻¹ from the p×p Schur factor RX."""
+    try:
+        RX_inv = np.linalg.inv(RX)
+        return RX_inv.T @ RX_inv
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(RX @ RX.T)
 
 
 def satterthwaite_df(
     theta: NDArray,
-    X: NDArray,
-    Z: NDArray,
-    y: NDArray,
-    specs: list[RandomEffectSpec],
-    reml: bool = True,
+    ctx: StructuredContext,
     eps: float = 1e-4,
 ) -> NDArray:
     """Compute Satterthwaite denominator df for each fixed effect.
@@ -50,39 +59,25 @@ def satterthwaite_df(
     Uses the full variance parameter vector φ = (θ, σ) where σ is the
     residual standard deviation. This matches lmerTest's approach.
 
-    Algorithm:
-    1. At converged (θ̂, σ̂), decompose Var(β̂) = σ² × C(θ)
-       where C(θ) = (X'V*(θ)⁻¹X)⁻¹ and V*(θ) = ZΛΛ'Z' + I
-    2. Compute gradients of Var(β̂_k) w.r.t. both θ and σ
-    3. Compute the Hessian of the REML deviance w.r.t. (θ, σ)
-    4. For each β_k: df_k = 2 Var(β̂_k)² / [g' A g]
-
     Args:
         theta: Converged θ̂ parameter vector.
-        X, Z, y: Model matrices.
-        specs: Random effect specifications.
-        reml: REML or ML.
+        ctx: The structured-solve context (X, y, specs, reml).
         eps: Step size for numerical differentiation.
 
     Returns:
         Array of Satterthwaite df, one per fixed effect (p,).
     """
-    n, p = X.shape
+    n, p = ctx.X.shape
     n_theta = len(theta)
 
-    # Get sigma from a PLS solve at the converged theta
-    Lambda = build_lambda(theta, specs)
-    pls = solve_pls(X, Z, y, Lambda, reml=reml)
-    sigma = np.sqrt(pls.sigma_sq)
-    sigma_sq = pls.sigma_sq
+    res = solve_structured(theta, ctx)
+    sigma_sq = res.sigma_sq
+    sigma = np.sqrt(sigma_sq)
 
-    # Step 1: Compute C(θ) = (X' V*(θ)⁻¹ X)⁻¹ where V* = ZΛΛ'Z' + I
-    V_star = Z @ Lambda @ Lambda.T @ Z.T + np.eye(n)
-    C = np.linalg.inv(X.T @ np.linalg.solve(V_star, X))
+    # Step 1: C(θ) = (X' V*⁻¹ X)⁻¹ at the converged θ.
+    C = _C_from_RX(res.RX)
 
-    # Step 2: Gradients of Var(β̂_k) = σ² × C_kk w.r.t. (θ, σ)
-    # dVar/dθ_j = σ² × dC_kk/dθ_j
-    # dVar/dσ = 2σ × C_kk
+    # Step 2: Gradients of Var(β̂_k) = σ² × C_kk w.r.t. (θ, σ).
     dC_dtheta = np.zeros((p, n_theta), dtype=np.float64)
 
     for j in range(n_theta):
@@ -93,25 +88,20 @@ def satterthwaite_df(
         theta_plus[j] += h
         theta_minus[j] -= h
 
-        # Enforce lower bound on diagonal elements
-        lb = _theta_lower_bound_at_index(j, specs)
+        lb = _theta_lower_bound_at_index(j, ctx.specs)
         if theta_minus[j] < lb:
-            # Forward difference
-            C_plus = _compute_C(theta_plus, X, Z, specs, n)
+            # Forward difference (cannot cross the lower bound).
+            C_plus = _compute_C(theta_plus, ctx)
             for k in range(p):
                 dC_dtheta[k, j] = (C_plus[k, k] - C[k, k]) / h
         else:
-            # Central difference
-            C_plus = _compute_C(theta_plus, X, Z, specs, n)
-            C_minus = _compute_C(theta_minus, X, Z, specs, n)
+            C_plus = _compute_C(theta_plus, ctx)
+            C_minus = _compute_C(theta_minus, ctx)
             for k in range(p):
                 dC_dtheta[k, j] = (C_plus[k, k] - C_minus[k, k]) / (2 * h)
 
-    # Full gradient for each beta_k: g = [sigma^2 * dC/dtheta, 2*sigma*C_kk]
-    # (n_theta + 1 elements per beta_k)
-
-    # Step 3: Hessian of the REML deviance w.r.t. (θ, σ)
-    hessian = _full_deviance_hessian(theta, sigma, X, Z, y, specs, reml, eps)
+    # Step 3: Hessian of the REML/ML deviance w.r.t. (θ, σ).
+    hessian = _full_deviance_hessian(theta, sigma, ctx, eps)
 
     # A = 2 × H⁻¹
     try:
@@ -120,19 +110,17 @@ def satterthwaite_df(
         H_inv = np.linalg.pinv(hessian)
     A = 2.0 * H_inv
 
-    # Step 4: Compute df for each fixed effect
+    # Step 4: df for each fixed effect.
     df = np.zeros(p, dtype=np.float64)
     n_params = n_theta + 1  # theta + sigma
 
     for k in range(p):
         var_k = sigma_sq * C[k, k]
 
-        # Gradient vector: [dVar/dtheta_1, ..., dVar/dtheta_m, dVar/dsigma]
         g = np.zeros(n_params, dtype=np.float64)
         g[:n_theta] = sigma_sq * dC_dtheta[k, :]
         g[n_theta] = 2.0 * sigma * C[k, k]
 
-        # Denominator: g' A g
         denom = float(g @ A @ g)
 
         if denom > 0 and var_k > 0:
@@ -140,26 +128,18 @@ def satterthwaite_df(
         else:
             df[k] = float(n - p)
 
-        # Clamp to reasonable range
         df[k] = max(df[k], 1.0)
 
     return df
 
 
-def _compute_C(
-    theta: NDArray,
-    X: NDArray,
-    Z: NDArray,
-    specs: list[RandomEffectSpec],
-    n: int,
-) -> NDArray:
-    """Compute C(θ) = (X' V*(θ)⁻¹ X)⁻¹ where V* = ZΛΛ'Z' + I."""
-    Lambda = build_lambda(theta, specs)
-    V_star = Z @ Lambda @ Lambda.T @ Z.T + np.eye(n)
-    return np.linalg.inv(X.T @ np.linalg.solve(V_star, X))
+def _compute_C(theta: NDArray, ctx: StructuredContext) -> NDArray:
+    """C(θ) = (X' V*(θ)⁻¹ X)⁻¹ via the structured solve's RX factor."""
+    res = solve_structured(theta, ctx)
+    return _C_from_RX(res.RX)
 
 
-def _theta_lower_bound_at_index(j: int, specs: list[RandomEffectSpec]) -> float:
+def _theta_lower_bound_at_index(j: int, specs: list) -> float:
     """Get the lower bound for the j-th element of θ."""
     idx = 0
     for spec in specs:
@@ -175,71 +155,44 @@ def _theta_lower_bound_at_index(j: int, specs: list[RandomEffectSpec]) -> float:
 def _full_deviance_hessian(
     theta: NDArray,
     sigma: float,
-    X: NDArray,
-    Z: NDArray,
-    y: NDArray,
-    specs: list[RandomEffectSpec],
-    reml: bool,
+    ctx: StructuredContext,
     eps: float,
 ) -> NDArray:
-    """Compute Hessian of the REML deviance w.r.t. (θ, σ).
+    """Hessian of the REML/ML deviance w.r.t. (θ, σ).
 
-    The REML deviance as a function of (θ, σ) is:
-    d(θ, σ) = log|L_θ|² + log|RX|² + (n-p)log(σ²) + pwrss(θ)/σ²
+    The deviance as a function of (θ, σ) is:
+        REML: d = log|L_θ|² + log|RX|² + (n-p)·log(σ²) + pwrss(θ)/σ²
+        ML:   d = log|L_θ|²            + n·log(σ²)      + pwrss(θ)/σ²
 
-    where L_θ and RX come from PLS at the given θ, and pwrss is the
-    penalized weighted residual sum of squares.
-
-    For ML: d(θ, σ) = log|L_θ|² + n·log(σ²) + pwrss(θ)/σ²
-
-    Args:
-        theta: θ parameter vector.
-        sigma: Residual standard deviation.
-        X, Z, y: Model matrices.
-        specs: Random effect specifications.
-        reml: REML or ML.
-        eps: Step size for finite differences.
-
-    Returns:
-        Hessian matrix of shape (n_theta + 1, n_theta + 1).
+    where log|L_θ|² (= logdet_M), RX, and pwrss come from the structured solve.
     """
-    n, p = X.shape
+    n, p = ctx.X.shape
     n_theta = len(theta)
     n_params = n_theta + 1
+    reml = ctx.reml
 
     def deviance(th, sig):
-        """Compute deviance as function of (theta, sigma)."""
-        Lam = build_lambda(th, specs)
-        pls_local = solve_pls(X, Z, y, Lam, reml=reml)
-
+        res = solve_structured(th, ctx)
         sig_sq = sig ** 2
-        # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
-        log_det_L = 2.0 * np.sum(
-            np.log(np.maximum(np.diag(pls_local.L), 1e-20))
-        )
+        log_det_L = res.logdet_M
         # NUMERICAL GUARD: prevents log(0) in log-likelihood computation
         log_det_RX = 2.0 * np.sum(
-            np.log(np.maximum(np.abs(np.diag(pls_local.RX)), 1e-20))
+            np.log(np.maximum(np.abs(np.diag(res.RX)), 1e-20))
         )
-
         if reml:
             df = n - p
             return (log_det_L + log_det_RX
-                    + df * np.log(sig_sq) + pls_local.pwrss / sig_sq)
-        else:
-            return (log_det_L
-                    + n * np.log(sig_sq) + pls_local.pwrss / sig_sq)
+                    + df * np.log(sig_sq) + res.pwrss / sig_sq)
+        return (log_det_L + n * np.log(sig_sq) + res.pwrss / sig_sq)
 
-    # Compute step sizes
+    # Step sizes.
     h = np.zeros(n_params)
     for j in range(n_theta):
         h[j] = eps * max(abs(theta[j]), 1.0)
     h[n_theta] = eps * max(abs(sigma), 1.0)
 
-    # Evaluate deviance at center
     d0 = deviance(theta, sigma)
 
-    # Evaluate at single perturbations
     d_plus = np.zeros(n_params)
     d_minus = np.zeros(n_params)
 
@@ -250,7 +203,7 @@ def _full_deviance_hessian(
 
         tm = theta.copy()
         tm[j] -= h[j]
-        lb = _theta_lower_bound_at_index(j, specs)
+        lb = _theta_lower_bound_at_index(j, ctx.specs)
         if tm[j] < lb:
             tm[j] = lb
         d_minus[j] = deviance(tm, sigma)
@@ -258,17 +211,13 @@ def _full_deviance_hessian(
     d_plus[n_theta] = deviance(theta, sigma + h[n_theta])
     d_minus[n_theta] = deviance(theta, sigma - h[n_theta])
 
-    # Build Hessian
     H = np.zeros((n_params, n_params), dtype=np.float64)
 
-    # Diagonal
     for j in range(n_params):
         H[j, j] = (d_plus[j] - 2.0 * d0 + d_minus[j]) / (h[j] ** 2)
 
-    # Off-diagonal (symmetric)
     for j in range(n_params):
         for l in range(j + 1, n_params):
-            # Build perturbed theta and sigma for each of the 4 corners
             def perturbed(dj, dl):
                 th_p = theta.copy()
                 sig_p = sigma

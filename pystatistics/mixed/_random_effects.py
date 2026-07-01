@@ -30,19 +30,27 @@ class RandomEffectSpec:
         group_ids: Integer group labels for each observation, shape (n,).
             Values are 0-indexed consecutive integers.
         terms: Names of the random effect terms (e.g. ('1',) or ('1', 'time')).
-        Z_block: Design matrix block for this grouping factor, shape (n, J*q)
-            where J = n_groups and q = n_terms.
+        Z_block: Dense design matrix block for this grouping factor, shape
+            (n, J*q) where J = n_groups and q = n_terms. ``None`` when the
+            spec was parsed with ``build_dense=False`` (the structure-exploiting
+            LMM path, which never materializes the dense block).
         n_groups: Number of unique groups (J).
         n_terms: Number of random effect terms per group (q).
         theta_size: Number of θ parameters for this block = q*(q+1)/2.
+        value_cols: The per-observation term values, shape (n, q): column t is
+            the value of term t at each observation (1.0 for an intercept term,
+            the slope variable for a slope term). This is the compact (n×q)
+            representation the structured solver uses instead of the dense
+            (n×J*q) ``Z_block``.
     """
     group_name: str
     group_ids: NDArray
     terms: tuple[str, ...]
-    Z_block: NDArray
+    Z_block: NDArray | None
     n_groups: int
     n_terms: int
     theta_size: int
+    value_cols: NDArray | None = None
 
 
 def parse_random_effects(
@@ -50,6 +58,7 @@ def parse_random_effects(
     random_effects: dict[str, list[str]] | None,
     random_data: dict[str, NDArray] | None,
     n: int,
+    build_dense: bool = True,
 ) -> list[RandomEffectSpec]:
     """Parse user input into structured RandomEffectSpec objects.
 
@@ -62,6 +71,12 @@ def parse_random_effects(
             random slope variables. Required if any term in random_effects
             is not '1' (intercept).
         n: Number of observations.
+        build_dense: If True (default), build the dense (n, J*q) ``Z_block``
+            for each factor — the GLMM path needs it. If False, skip the dense
+            block (``Z_block=None``) and only populate ``value_cols``; the
+            structure-exploiting LMM solver works from ``value_cols`` +
+            ``group_ids`` and never materializes the dense design, so this is
+            what avoids the O(n·J·q) memory blow-up at large group counts.
 
     Returns:
         List of RandomEffectSpec, one per grouping factor.
@@ -90,8 +105,14 @@ def parse_random_effects(
         terms = tuple(terms)
         n_terms = len(terms)
 
-        # Build Z block for this grouping factor
-        Z_block = _build_z_block(group_ids, n_groups, terms, random_data, n)
+        # Compact (n, q) term-value matrix — always cheap to build.
+        value_cols = _build_value_cols(terms, random_data, n)
+
+        # Dense (n, J*q) block — only for the GLMM/dense path.
+        Z_block = (
+            _build_z_block(group_ids, n_groups, terms, random_data, n)
+            if build_dense else None
+        )
 
         theta_size = n_terms * (n_terms + 1) // 2
 
@@ -103,9 +124,44 @@ def parse_random_effects(
             n_groups=n_groups,
             n_terms=n_terms,
             theta_size=theta_size,
+            value_cols=value_cols,
         ))
 
     return specs
+
+
+def _build_value_cols(
+    terms: tuple[str, ...],
+    random_data: dict[str, NDArray],
+    n: int,
+) -> NDArray:
+    """Build the compact (n, q) term-value matrix for one grouping factor.
+
+    Column t holds the value of term t at each observation: 1.0 for an
+    intercept term ('1'), the slope variable otherwise. This is the
+    structured solver's analogue of the dense Z block, without the per-group
+    expansion.
+    """
+    q = len(terms)
+    V = np.zeros((n, q), dtype=np.float64)
+    for t_idx, term in enumerate(terms):
+        if term == '1':
+            V[:, t_idx] = 1.0
+        else:
+            if term not in random_data:
+                raise ValidationError(
+                    f"Random slope term '{term}' requires data in "
+                    f"random_data dict, but '{term}' was not found. "
+                    f"Available: {list(random_data.keys())}"
+                )
+            var_data = np.asarray(random_data[term], dtype=np.float64)
+            if var_data.shape[0] != n:
+                raise ValidationError(
+                    f"Random data '{term}' has {var_data.shape[0]} elements, "
+                    f"expected {n}"
+                )
+            V[:, t_idx] = var_data
+    return V
 
 
 def _build_z_block(
@@ -270,6 +326,43 @@ def theta_lower_bounds(specs: list[RandomEffectSpec]) -> NDArray:
                 else:
                     bounds.append(-np.inf)   # off-diagonal: unbounded
     return np.array(bounds, dtype=np.float64)
+
+
+def is_singular_fit(
+    theta: NDArray, specs: list[RandomEffectSpec], tol: float = 1e-4
+) -> bool:
+    """Detect a boundary (singular) random-effects fit, matching lme4.
+
+    A mixed-model fit is *singular* when the estimated random-effects
+    covariance is on the boundary of the feasible region: a variance has
+    collapsed to (near) zero, or an implied correlation has reached ±1. In
+    the θ (relative-covariance Cholesky) parameterisation both show up the
+    same way — as a **diagonal** element of a Cholesky factor at (near) its
+    lower bound of 0. A variance→0 collapses its own diagonal directly; a
+    correlation→±1 collapses a *trailing* diagonal of the same block. So a
+    single test over the diagonal θ elements detects both.
+
+    This mirrors lme4's ``isSingular()`` exactly: flag if any θ element whose
+    lower bound is 0 (i.e. a Cholesky-factor diagonal) is below ``tol``.
+
+    Args:
+        theta: The (converged) θ parameter vector.
+        specs: Random effect specifications.
+        tol: Boundary tolerance on the relative-covariance scale.
+            Default 1e-4, matching lme4's ``isSingular`` default.
+
+    Returns:
+        True if the fit is singular (on the boundary), else False.
+    """
+    idx = 0
+    for spec in specs:
+        q = spec.n_terms
+        for row in range(q):
+            for col in range(row + 1):
+                if row == col and theta[idx] < tol:
+                    return True
+                idx += 1
+    return False
 
 
 def theta_start(specs: list[RandomEffectSpec]) -> NDArray:

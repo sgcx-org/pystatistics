@@ -168,6 +168,19 @@ class LMMSolution(SolutionReprMixin):
     def n_iter(self) -> int:
         return self.params.n_iter
 
+    @property
+    def is_singular(self) -> bool:
+        """Whether this is a boundary (singular) fit.
+
+        True when a random-effects variance has collapsed to (near) zero or
+        an implied correlation has reached ±1 — the fit sits on the boundary
+        of the feasible region. Mirrors lme4's ``isSingular()``. The
+        estimates are still the correct (boundary) MLE; a singular fit is a
+        signal the random-effects structure may be too complex for the data,
+        not an error.
+        """
+        return self.params.is_singular
+
     # --- Model comparison ---
 
     def compare(self, other: 'LMMSolution') -> str:

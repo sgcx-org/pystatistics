@@ -68,6 +68,7 @@ class LMMParams:
     # Convergence
     converged: bool
     n_iter: int
+    is_singular: bool                  # boundary (singular) fit, lme4 isSingular
 
     # Random effects conditional modes (BLUPs)
     random_effects: dict[str, NDArray]  # group_name → (n_groups_j, n_re_terms_j)
