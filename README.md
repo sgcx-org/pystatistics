@@ -371,6 +371,12 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.5.3 — clearer errors for unsupported GLMM families
+
+`glmm()` now raises a clear error when given a Gaussian or Gamma family (which
+have a free dispersion parameter its Laplace fit does not estimate) instead of
+returning misleading fit statistics. Use `lmm()` for Gaussian mixed models.
+
 ### 4.5.2 — accurate generalized linear mixed models
 
 `glmm()` now fits the Laplace approximation (nAGQ = 1), matching the default fit of

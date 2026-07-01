@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.5.3
+
+- **`glmm()` now reports a clear error for Gaussian and Gamma families instead of
+  returning misleading fit statistics.** `glmm()` fits the likelihood with the
+  dispersion fixed at 1, which is correct for the binomial and Poisson families it
+  is intended for. Selecting a family with a free dispersion or scale parameter
+  (`gaussian`, `gamma`) previously completed but returned an incorrect
+  log-likelihood, deviance, AIC/BIC and variance component. It now raises a clear
+  error; fit a Gaussian mixed model with `lmm()`.
+
 ## 4.5.2
 
 - **`glmm()` now uses the Laplace approximation (nAGQ = 1), matching the default

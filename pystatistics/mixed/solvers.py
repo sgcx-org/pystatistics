@@ -308,6 +308,19 @@ def glmm(
     else:
         family_obj = family
 
+    # glmm's Laplace likelihood fixes the dispersion at 1 (correct for binomial
+    # and Poisson). A free-dispersion family (Gaussian σ², Gamma shape) would get
+    # a silently-wrong log-likelihood / deviance / AIC / BIC and a biased variance
+    # component — fail loud instead (A6), pointing Gaussian users to lmm().
+    if not family_obj.dispersion_is_fixed:
+        raise ValidationError(
+            f"glmm() supports only fixed-dispersion families (binomial, poisson); "
+            f"family {family_obj.name!r} has a free dispersion/scale parameter "
+            f"that glmm's Laplace approximation does not estimate (it fixes "
+            f"dispersion=1), which would produce an incorrect log-likelihood, "
+            f"deviance, AIC/BIC and variance components. For a Gaussian mixed "
+            f"model use lmm().")
+
     # Validate inputs
     design = MixedDesign.validate(
         np.asarray(y, dtype=np.float64),

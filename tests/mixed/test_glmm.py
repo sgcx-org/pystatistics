@@ -4,6 +4,24 @@ import numpy as np
 import pytest
 
 from pystatistics.mixed import glmm
+from pystatistics.core.exceptions import ValidationError
+
+
+class TestGLMMFamilyGuard:
+    """glmm() must fail loud on free-dispersion families (Gaussian, Gamma):
+    its Laplace likelihood fixes dispersion=1, so those families would yield a
+    silently-wrong log-likelihood/AIC/variance. Gaussian users are sent to lmm().
+    """
+
+    @pytest.mark.parametrize("family", ["gaussian", "gamma"])
+    def test_free_dispersion_family_raises(self, family):
+        rng = np.random.default_rng(0)
+        n = 80
+        g = np.repeat(np.arange(8), 10)
+        X = np.column_stack([np.ones(n), rng.normal(size=n)])
+        y = np.abs(rng.normal(size=n)) + 0.1  # positive (valid for gamma too)
+        with pytest.raises(ValidationError, match="dispersion"):
+            glmm(y, X, groups={"g": g}, family=family)
 
 
 class TestGLMMBinomial:
