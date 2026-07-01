@@ -20,8 +20,30 @@ below**, including §0 and the numbered/lettered rules. When any rule, habit, or
 convenience is in tension with this directive, the directive wins. The other
 rules are the *means*; this is the *end*.
 
-> **A working statistician must be able to reach for PyStatistics _instead of R_
-> and give up nothing.**
+> **A working statistician can reach for PyStatistics _instead of R_ and receive a
+> clear, justified deal — equivalent statistical results, stronger performance where
+> the hardware allows, explicit and justified limitations, and never a hidden change
+> to the question they asked.**
+
+(This is the honest, precise form of the original *"give up nothing."* A literal "give
+up **nothing**" is not an engineering law — every serious library makes tradeoffs; a
+*justified, transparent* deal is what we actually promise, and PyStatistics already asks
+users to accept transparent tradeoffs: condition gates, fail-loud refusals, explicitly
+labelled randomized solvers, GPU optionality.)
+
+Operationally the directive is **three guarantees, in strict priority order** — the same
+three standing obligations below, named and ranked:
+
+1. **Correctness.** Never return a result outside the documented correctness contract; if
+   correctness cannot be guaranteed, fail loudly rather than return a result.
+2. **Fidelity.** Never satisfy Correctness by silently solving a *different* problem — no
+   silent change of estimator, backend, precision, solver, or approximation (A6).
+3. **Performance.** Subject to Correctness and Fidelity, make every reasonable effort to
+   match or exceed the reference on **equivalent hardware** using the **same statistical
+   estimator**.
+
+(The validation program states these verbatim — see `RIGOR.md` → the three foundational
+guarantees.)
 
 Two tests decide whether we are meeting it:
 
@@ -548,3 +570,47 @@ choice:
    tolerance and rejected correct, well-conditioned fits that had reached the
    float32 floor; it now accepts a stationary fp32 optimum and fails loud only
    on a non-stationary one.)
+
+### A7 — Dependency tiering: slim numpy/scipy core, torch optional
+
+The hard runtime dependencies of every published `pystats*` package are **numpy and
+scipy** only. **torch is optional** (`[gpu]` / `[accel]` extras), never required for a
+default install. The packaging fact that forces this: as of PyTorch 2.11 (2026), PyPI
+ships CPU-only torch wheels for Windows/macOS but **CUDA wheels for Linux**, and the
+`+cpu` builds live only on `download.pytorch.org` — so a published package cannot pull
+CPU-only torch on Linux through dependency metadata. Requiring torch would force a
+multi-GB CUDA stack onto every Linux install (servers, regulated, air-gapped), violating
+the Prime Directive for exactly the users who can least afford it.
+
+Consequences:
+
+- **The implementation reference is the simplest, fastest, most numerically-trustworthy
+  *validated* path — which need NOT be numpy.** The *mathematical* reference is R;
+  "numpy is canonical" was historical, not scientific. A torch path (a GPU backend, or a
+  CPU accelerator such as an autodiff gradient) may be the default and **auto-preferred
+  when torch is present**, provided: (a) torch is never a hard dependency; (b) the package
+  runs **correctly** torch-free — degradation is *performance-only*, never function or
+  correctness; (c) the choice is disclosed (`backend_name` / solution metadata), so
+  default-selection is not a Fidelity (A6) violation; and (d) the torch path is validated
+  numerically equivalent to a torch-free reference.
+- **Where a torch accelerator delivers a speedup numpy cannot match** (e.g. MVNMLE's
+  forward-Cholesky, `mixed`'s autodiff θ-gradient), the module documents the performance
+  tradeoff; it does **not** obligate a numpy reimplementation of that mechanism (we do not
+  hand-roll autodiff to honor slimness). The slim install is correct-but-slower there; the
+  `[accel]` extra — or a provisioned CPU-torch, e.g. baked into the SGCX Docker image —
+  buys the fast path.
+- **Heavyweight dependencies are permitted when they are part of the validated
+  computational engine and materially benefit correctness, stability, performance, or
+  maintainability** — disclosed plainly, pinned compatibly, auditable/mirrorable, justified
+  in the validation record, and packaged to avoid dragging an unrequested GPU/CUDA stack
+  where the platform allows. **Slim installs are desirable, never at the cost of shipping
+  an inferior default algorithm.**
+- **Anti-rot:** CI must exercise a torch-free install of every package (full suite), so the
+  torch-free path stays correct and functional rather than rotting into a second-class
+  citizen.
+
+This resolves the long-standing drift (torch creeping from optional toward de-facto-required
+on CPU paths) deliberately, in favor of a slim public core plus a best-implementation
+reference. Ruling recorded 2026-06-30; capability-first Option B. (SGCX ships as a Docker
+image that bakes CPU-only torch, so managed clients get the fully accelerated build with no
+CUDA bloat — the packaging limitation never touches the product.)
