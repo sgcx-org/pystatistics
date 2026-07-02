@@ -18,29 +18,22 @@ _MAX_K = 500
 class SmoothTerm:
     """Specification for a smooth term ``s(x)`` in a GAM formula.
 
-    This is a mutable specification object that gets consumed by the
-    GAM fitter.  It stores the variable name, basis type, and number
-    of basis functions, then receives its computed basis matrix and
-    penalty matrix during model setup.
-
-    # RULE 5 EXCEPTION: SmoothTerm is a mutable specification object
-    # that accumulates basis information during model setup.  It does
-    # not carry hidden state that affects computation -- it is purely
-    # a container for user-specified configuration that gets populated
-    # with derived quantities (basis matrix, penalty) during fitting.
+    A pure, immutable-by-convention specification: variable name, basis
+    type and basis dimension. All fit-derived quantities (basis matrices,
+    penalties, constraint reparameterisations) live inside the fit — a
+    ``SmoothTerm`` can safely be reused across multiple ``gam()`` calls
+    and datasets without stale-state hazards.
 
     Attributes:
         var_name: Name of the predictor variable.
-        k: Number of basis functions (>= 3).
+        k: Basis dimension (>= 3), exactly as mgcv's ``s(x, k=...)``. The
+            fitted smooth contributes ``k - 1`` coefficients after its
+            sum-to-zero identifiability constraint (same as mgcv).
         bs: Basis type: ``'cr'`` (cubic regression spline, default)
             or ``'tp'`` (thin plate regression spline).
-        basis_matrix: Populated during fitting -- the (n, k) design
-            matrix for this smooth term.  ``None`` before fitting.
-        penalty_matrix: Populated during fitting -- the (k, k) penalty
-            matrix for this smooth term.  ``None`` before fitting.
     """
 
-    __slots__ = ("var_name", "k", "bs", "basis_matrix", "penalty_matrix")
+    __slots__ = ("var_name", "k", "bs")
 
     def __init__(
         self,
@@ -52,8 +45,7 @@ class SmoothTerm:
 
         Args:
             var_name: Name of the predictor variable.
-            k: Number of basis functions (default 10, matching mgcv).
-                Must be >= 3.
+            k: Basis dimension (default 10, matching mgcv). Must be >= 3.
             bs: Basis type -- ``'cr'`` for cubic regression spline
                 (default) or ``'tp'`` for thin plate regression spline.
 
@@ -88,8 +80,6 @@ class SmoothTerm:
         self.var_name = var_name.strip()
         self.k = k
         self.bs = bs
-        self.basis_matrix = None
-        self.penalty_matrix = None
 
     def __repr__(self) -> str:
         return f"s({self.var_name!r}, k={self.k}, bs={self.bs!r})"
@@ -117,7 +107,7 @@ def s(var_name: str, k: int = 10, bs: str = "cr") -> SmoothTerm:
 
     Args:
         var_name: Name of the predictor variable.
-        k: Number of basis functions (default 10).
+        k: Basis dimension (default 10).
         bs: Basis type: ``'cr'`` or ``'tp'`` (default ``'cr'``).
 
     Returns:

@@ -1,671 +1,475 @@
-"""
-Tests for the GAM fitting engine, smoothing parameter selection, and
-solution class.
+"""Tests for the GAM module (stable augmented-QR rewrite).
 
-Tests cover:
-    - Basis construction (CR and TP)
-    - Smooth term specification
-    - GAM fitting with Gaussian/identity
-    - Multiple smooth terms
-    - Parametric + smooth terms
-    - GCV smoothing parameter selection
-    - EDF computation
-    - Summary output
-    - Input validation
-    - Edge cases (k=3, k=50, single smooth, frozen params)
+Covers, per module test policy: normal cases, edge cases, failure cases —
+plus explicit regression tests for the four 4.5.x defects the rewrite
+fixed (unconstrained singular design / garbage EDF, tp null-space loss,
+placeholder standard errors, broken REML criterion).
 """
 
 from __future__ import annotations
+
+import warnings
 
 import numpy as np
 import pytest
 
 from pystatistics.core.exceptions import ValidationError
-from pystatistics.gam import gam, s, GAMSolution, SmoothTerm, GAMParams
-from pystatistics.gam._basis import (
-    cubic_regression_spline_basis,
-    thin_plate_spline_basis,
-)
-from pystatistics.gam._fit import (
-    _build_model_matrix,
-    _compute_edf,
-    _fit_gam_fixed_lambda,
-)
-from pystatistics.regression.families import Gaussian
+from pystatistics.gam import GAMSolution, SmoothTerm, gam, s
+from pystatistics.gam._basis_cr import cr_basis, place_knots_cr
+from pystatistics.gam._basis_tp import tp_basis
+from pystatistics.gam._constraints import absorb_sum_to_zero
 
 
-# =====================================================================
+# ---------------------------------------------------------------------------
 # Fixtures
-# =====================================================================
-
+# ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def sine_data():
-    """Synthetic data: y = sin(2*pi*x) + noise."""
     rng = np.random.default_rng(42)
     n = 200
-    x = np.linspace(0, 1, n)
-    y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
-    return x, y
+    x = np.sort(rng.uniform(0.0, 1.0, n))
+    f = np.sin(2.0 * np.pi * x)
+    y = f + rng.normal(0.0, 0.2, n)
+    return x, y, f
 
 
 @pytest.fixture()
 def two_smooth_data():
-    """Synthetic data: y = sin(2*pi*x1) + cos(3*x2) + noise."""
-    rng = np.random.default_rng(123)
-    n = 250
-    x1 = np.linspace(0, 1, n)
-    x2 = rng.uniform(-2, 2, n)
-    y = np.sin(2 * np.pi * x1) + np.cos(3.0 * x2) + rng.normal(0, 0.3, n)
+    rng = np.random.default_rng(7)
+    n = 300
+    x1 = rng.uniform(0.0, 1.0, n)
+    x2 = rng.uniform(0.0, 1.0, n)
+    y = np.sin(2 * np.pi * x1) + 0.5 * (x2 - 0.5) ** 2 + rng.normal(0, 0.2, n)
     return x1, x2, y
 
 
-# =====================================================================
-# Basis tests
-# =====================================================================
+# ---------------------------------------------------------------------------
+# Basis construction
+# ---------------------------------------------------------------------------
+
+class TestCrBasis:
+    def test_shape_and_dimension_is_k(self):
+        x = np.linspace(0.0, 1.0, 60)
+        B, S, s_scale = cr_basis(x, k=10)
+        assert B.shape == (60, 10)      # k columns, exactly as mgcv
+        assert S.shape == (10, 10)
+        assert s_scale > 0.0
+
+    def test_penalty_symmetric_psd(self):
+        x = np.linspace(0.0, 1.0, 60)
+        _, S, _ = cr_basis(x, k=8)
+        assert np.allclose(S, S.T)
+        ev = np.linalg.eigvalsh(S)
+        assert ev.min() > -1e-10
+        # rank k-2 (null space: constant + linear)
+        assert np.sum(ev > ev.max() * 1e-9) == 6
+
+    def test_cardinal_interpolation_property(self):
+        """b_j(knot_l) = delta_jl — the defining property of the basis."""
+        from pystatistics.gam._basis_cr import _cardinal_basis
+        x = np.linspace(0.0, 1.0, 40)
+        knots = place_knots_cr(x, 7)
+        Bk = _cardinal_basis(knots, knots)
+        assert np.allclose(Bk, np.eye(7), atol=1e-10)
+
+    def test_constant_in_span(self):
+        """The unconstrained cr span contains the constant (why the
+        sum-to-zero constraint is mandatory)."""
+        x = np.linspace(0.0, 1.0, 50)
+        B, _, _ = cr_basis(x, k=6)
+        one = np.ones(50)
+        coef, *_ = np.linalg.lstsq(B, one, rcond=None)
+        assert np.allclose(B @ coef, one, atol=1e-10)
+
+    def test_k_exceeding_unique_raises(self):
+        x = np.repeat(np.linspace(0.0, 1.0, 5), 10)  # 5 unique, n=50
+        with pytest.raises(ValidationError, match="unique"):
+            cr_basis(x, k=10)
+
+    def test_nonfinite_raises(self):
+        x = np.linspace(0, 1, 20).copy()
+        x[3] = np.nan
+        with pytest.raises(ValidationError, match="non-finite"):
+            cr_basis(x, k=5)
 
 
-class TestCubicRegressionSplineBasis:
-    """Tests for cubic_regression_spline_basis."""
+class TestTpBasis:
+    def test_shape_and_null_space(self):
+        x = np.sort(np.random.default_rng(1).uniform(0, 1, 80))
+        B, S, s_scale = tp_basis(x, k=9)
+        assert B.shape == (80, 9)
+        assert S.shape == (9, 9)
+        # penalty rank k-2, null space (constant, linear) unpenalized
+        ev = np.linalg.eigvalsh(S)
+        assert np.sum(ev > ev.max() * 1e-9) == 7
 
-    def test_shape(self):
-        """CR basis matrix has correct shape (n, k)."""
-        x = np.linspace(0, 1, 100)
-        B, S = cubic_regression_spline_basis(x, k=10)
-        assert B.shape[0] == 100
-        assert B.shape[1] > 0
-        assert S.shape[0] == S.shape[1] == B.shape[1]
+    def test_linear_function_in_span(self):
+        """REGRESSION (4.5.x defect): tp must represent a straight line."""
+        x = np.sort(np.random.default_rng(2).uniform(0, 1, 60))
+        B, _, _ = tp_basis(x, k=8)
+        target = 2.0 + 3.0 * x
+        coef, *_ = np.linalg.lstsq(B, target, rcond=None)
+        assert np.allclose(B @ coef, target, atol=1e-8)
 
-    def test_penalty_symmetric(self):
-        """Penalty matrix is symmetric."""
-        x = np.linspace(0, 1, 50)
-        _, S = cubic_regression_spline_basis(x, k=8)
-        np.testing.assert_allclose(S, S.T, atol=1e-12)
-
-    def test_penalty_psd(self):
-        """Penalty matrix is positive semi-definite."""
-        x = np.linspace(0, 1, 50)
-        _, S = cubic_regression_spline_basis(x, k=8)
-        eigenvalues = np.linalg.eigvalsh(S)
-        assert np.all(eigenvalues >= -1e-10)
-
-    def test_different_k(self):
-        """Different k values produce different-sized bases."""
-        x = np.linspace(0, 1, 100)
-        B5, _ = cubic_regression_spline_basis(x, k=5)
-        B15, _ = cubic_regression_spline_basis(x, k=15)
-        assert B5.shape[1] != B15.shape[1]
+    def test_columns_normalised(self):
+        x = np.sort(np.random.default_rng(3).uniform(0, 1, 70))
+        B, _, _ = tp_basis(x, k=6)
+        norms = np.linalg.norm(B, axis=0)
+        assert np.allclose(norms, np.sqrt(70), rtol=1e-10)
 
 
-class TestThinPlateSplineBasis:
-    """Tests for thin_plate_spline_basis."""
-
-    def test_shape(self):
-        """TP basis has correct shape (n, k)."""
-        x = np.linspace(0, 1, 80)
-        B, S = thin_plate_spline_basis(x, k=8)
-        assert B.shape == (80, 8)
-        assert S.shape == (8, 8)
-
-    def test_penalty_symmetric(self):
-        """TP penalty is symmetric."""
-        x = np.linspace(0, 1, 60)
-        _, S = thin_plate_spline_basis(x, k=6)
-        np.testing.assert_allclose(S, S.T, atol=1e-12)
-
-    def test_penalty_psd(self):
-        """TP penalty is positive semi-definite."""
-        x = np.linspace(0, 1, 60)
-        _, S = thin_plate_spline_basis(x, k=6)
-        eigenvalues = np.linalg.eigvalsh(S)
-        assert np.all(eigenvalues >= -1e-10)
+class TestConstraintAbsorption:
+    def test_kills_constant_and_keeps_rank(self):
+        x = np.linspace(0.0, 1.0, 50)
+        B, S, _ = cr_basis(x, k=8)
+        B_c, S_c, Z = absorb_sum_to_zero(B, S)
+        assert B_c.shape == (50, 7)
+        assert S_c.shape == (7, 7)
+        # column sums are zero -> orthogonal to the intercept over the data
+        assert np.allclose(B_c.sum(axis=0), 0.0, atol=1e-8)
+        # design [1 | B_c] is full rank (THE 4.5.x root-cause fix)
+        X_aug = np.hstack([np.ones((50, 1)), B_c])
+        assert np.linalg.matrix_rank(X_aug) == 8
 
 
-# =====================================================================
-# Smooth term tests
-# =====================================================================
-
+# ---------------------------------------------------------------------------
+# SmoothTerm / s()
+# ---------------------------------------------------------------------------
 
 class TestSmoothTerm:
-    """Tests for the s() constructor and SmoothTerm."""
-
     def test_defaults(self):
-        """s('x1') creates SmoothTerm with correct defaults."""
-        st = s("x1")
-        assert st.var_name == "x1"
-        assert st.k == 10
-        assert st.bs == "cr"
+        st = s("x")
+        assert st.k == 10 and st.bs == "cr" and st.var_name == "x"
 
     def test_custom(self):
-        """s('x1', k=20, bs='tp') sets attributes correctly."""
-        st = s("x1", k=20, bs="tp")
-        assert st.var_name == "x1"
-        assert st.k == 20
-        assert st.bs == "tp"
+        st = s("age", k=15, bs="tp")
+        assert (st.var_name, st.k, st.bs) == ("age", 15, "tp")
 
     def test_invalid_var_name(self):
-        """Empty variable name raises ValidationError."""
         with pytest.raises(ValidationError):
             s("")
 
     def test_invalid_k(self):
-        """k < 3 raises ValidationError."""
         with pytest.raises(ValidationError):
             s("x", k=2)
+        with pytest.raises(ValidationError):
+            s("x", k=501)
+
+    def test_unknown_basis_raises(self):
+        with pytest.raises(ValidationError, match="bs must be"):
+            s("x", bs="cc")   # cyclic basis not implemented: fail loud
+
+    def test_is_pure_spec(self):
+        """No fit-derived caches on the spec object (stale-state hazard)."""
+        st = s("x")
+        assert not hasattr(st, "basis_matrix")
+        assert not hasattr(st, "penalty_matrix")
 
 
-# =====================================================================
-# GAM fitting tests
-# =====================================================================
+# ---------------------------------------------------------------------------
+# Gaussian fitting — normal cases
+# ---------------------------------------------------------------------------
 
+class TestGaussianFit:
+    def test_recovers_sine(self, sine_data):
+        x, y, f = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
+        assert isinstance(sol, GAMSolution)
+        rmse = float(np.sqrt(np.mean((sol.fitted_values - f) ** 2)))
+        assert rmse < 0.1
+        assert sol.converged and sol.outer_converged
 
-class TestGAMFitting:
-    """Tests for the main gam() function and P-IRLS engine."""
+    def test_edf_sane(self, sine_data):
+        """REGRESSION (4.5.x defect): EDF was garbage (even negative)."""
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x", k=20)], smooth_data={"x": x})
+        assert 1.0 < sol.total_edf < 20.0
+        assert np.all(np.asarray(sol.edf) > 0.0)
+        # total = parametric (intercept=1) + smooth edf
+        assert sol.total_edf == pytest.approx(1.0 + float(sol.edf[0]), abs=1e-8)
 
-    def test_gaussian_identity_recovers_sine(self, sine_data):
-        """Gaussian + identity link recovers a known sine function."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-            family="gaussian",
-            method="GCV",
-        )
-        assert isinstance(result, GAMSolution)
-        assert result.converged
-
-    def test_fitted_values_close(self, sine_data):
-        """Fitted values approximate true function (R-sq > 0.8)."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-        )
-        y_true = np.sin(2 * np.pi * x)
-        ss_res = np.sum((result.fitted_values - y_true) ** 2)
-        ss_tot = np.sum((y_true - y_true.mean()) ** 2)
-        r2 = 1.0 - ss_res / ss_tot
-        assert r2 > 0.5, f"R-sq too low: {r2:.3f}"
-
-    def test_residuals_approximately_normal(self, sine_data):
-        """Residuals are approximately normal for Gaussian family."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-        )
-        resid = result.residuals
-        # Shapiro-Wilk on a subsample (max 100 for speed)
-        from scipy.stats import shapiro
-        _, p_val = shapiro(resid[:100])
-        # We only require that the residuals aren't wildly non-normal
-        assert p_val > 0.0001, f"Residuals fail normality (p={p_val:.6f})"
+    def test_fixed_sp_reproducible(self, sine_data):
+        x, y, _ = sine_data
+        a = gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[1.5])
+        b = gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[1.5])
+        assert np.array_equal(a.coefficients, b.coefficients)
+        assert a.lambdas[0] == 1.5
 
     def test_multiple_smooths(self, two_smooth_data):
-        """Multiple smooths: y = f1(x1) + f2(x2) recovered."""
         x1, x2, y = two_smooth_data
-        result = gam(
-            y,
-            smooths=[s("x1", k=15), s("x2", k=10)],
-            smooth_data={"x1": x1, "x2": x2},
-        )
-        assert result.converged
-        assert len(result.smooth_terms) == 2
-        assert result.deviance_explained > 0.5
+        sol = gam(y, smooths=[s("x1"), s("x2")],
+                  smooth_data={"x1": x1, "x2": x2})
+        assert len(sol.smooth_terms) == 2
+        assert sol.edf.shape == (2,)
+        assert sol.lambdas.shape == (2,)
 
     def test_parametric_plus_smooth(self, sine_data):
-        """Parametric + smooth: y = b0 + b1*z + f(x)."""
-        x, y_raw = sine_data
-        rng = np.random.default_rng(99)
-        z = rng.normal(0, 1, len(x))
-        y = y_raw + 2.0 * z
+        x, y, _ = sine_data
+        rng = np.random.default_rng(0)
+        z = rng.normal(size=x.shape[0])
+        y2 = y + 0.7 * z
+        X = np.column_stack([np.ones_like(x), z])
+        sol = gam(y2, X, smooths=[s("x")], smooth_data={"x": x},
+                  names=["(Intercept)", "z"])
+        # z coefficient recovered
+        assert abs(sol.coefficients[1] - 0.7) < 0.1
 
-        X = np.column_stack([np.ones(len(x)), z])
-        result = gam(
-            y,
-            X=X,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-            names=["(Intercept)", "z"],
-        )
-        assert result.converged
-        assert result.deviance_explained > 0.5
+    def test_smooth_coefficients_are_k_minus_1(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x})
+        si = sol.smooth_terms[0]
+        assert si.coef_indices[1] - si.coef_indices[0] == 9  # k-1, as mgcv
+        assert sol.coefficients.shape[0] == 10  # intercept + 9
 
+    def test_high_lambda_underfits(self, sine_data):
+        x, y, _ = sine_data
+        stiff = gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[1e9])
+        loose = gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[1e-6])
+        assert stiff.total_edf < loose.total_edf
+        # lambda -> inf: smooth collapses toward the penalty null space
+        # (linear, minus the constant absorbed by the constraint): edf -> ~1.
+        assert float(stiff.edf[0]) == pytest.approx(1.0, abs=0.05)
 
-# =====================================================================
-# Smoothing parameter tests
-# =====================================================================
-
-
-class TestSmoothingParameters:
-    """Tests for GCV/REML smoothing parameter selection."""
-
-    def test_gcv_selects_reasonable_lambda(self, sine_data):
-        """GCV selects lambda that is neither 0 nor infinity."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-            method="GCV",
-        )
-        lambdas = result._result.info["lambdas"]
-        assert len(lambdas) == 1
-        lam = lambdas[0]
-        assert 1e-10 < lam < 1e10
-
-    def test_higher_k_lower_deviance(self, sine_data):
-        """Higher k allows more flexibility (lower deviance)."""
-        x, y = sine_data
-        r_low = gam(y, smooths=[s("x", k=5)], smooth_data={"x": x})
-        r_high = gam(y, smooths=[s("x", k=20)], smooth_data={"x": x})
-        # Higher k should fit at least as well
-        assert r_high.deviance <= r_low.deviance * 1.1  # allow small tolerance
-
-
-# =====================================================================
-# EDF tests
-# =====================================================================
-
-
-class TestEDF:
-    """Tests for effective degrees of freedom computation."""
-
-    def test_edf_bounds(self, sine_data):
-        """edf per smooth is between 1 and k."""
-        x, y = sine_data
-        k = 15
-        result = gam(
-            y,
-            smooths=[s("x", k=k)],
-            smooth_data={"x": x},
-        )
-        edf = result.edf
-        assert len(edf) == 1
-        assert edf[0] > 1.0, f"edf too low: {edf[0]}"
-        assert edf[0] < k, f"edf too high: {edf[0]}"
-
-    def test_total_edf_consistent(self, sine_data):
-        """total_edf >= sum of smooth edfs (includes parametric)."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-        )
-        assert result.total_edf >= float(np.sum(result.edf))
-
-    def test_underfitting_high_lambda(self):
-        """Very large lambda pushes edf toward 1 (linear)."""
-        rng = np.random.default_rng(7)
+    def test_standard_errors_are_real(self, sine_data):
+        """REGRESSION (4.5.x defect): SEs were a placeholder sqrt(scale/n),
+        identical for every coefficient."""
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
+        se = sol.se
+        assert se.shape == sol.coefficients.shape
+        assert np.all(se > 0.0)
+        assert np.std(se) > 1e-12  # not all identical
+        # pure parametric fit: posterior SE == OLS SE closed form
         n = 100
-        x = np.linspace(0, 1, n)
-        y = np.sin(2 * np.pi * x) + rng.normal(0, 0.3, n)
+        rng = np.random.default_rng(5)
+        X = np.column_stack([np.ones(n), rng.normal(size=n)])
+        yy = X @ np.array([1.0, 2.0]) + rng.normal(0, 0.5, n)
+        solp = gam(yy, X)
+        resid = yy - solp.fitted_values
+        sigma2 = float(resid @ resid) / (n - 2)
+        se_ols = np.sqrt(np.diag(sigma2 * np.linalg.inv(X.T @ X)))
+        assert np.allclose(solp.se, se_ols, rtol=1e-8)
 
-        family = Gaussian()
-        X_param = np.ones((n, 1), dtype=np.float64)
-        smooth_terms = [s("x", k=10)]
-
-        X_aug, S_penalties, term_indices = _build_model_matrix(
-            X_param, {"x": x}, smooth_terms
-        )
-
-        # Very large lambda => strong penalty => low edf
-        lambdas = np.array([1e6])
-        beta, mu, eta, W, dev, n_iter, conv = _fit_gam_fixed_lambda(
-            y, X_aug, S_penalties, lambdas, family, 1, 1e-8, 200
-        )
-        edf = _compute_edf(X_aug, W, S_penalties, lambdas, term_indices)
-        assert edf[0] < 3.0, f"edf should be near-linear with high lambda: {edf[0]}"
+    def test_covariance_matches_se(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
+        assert np.allclose(sol.se ** 2, np.diag(sol.covariance))
 
 
-# =====================================================================
-# Summary tests
-# =====================================================================
+# ---------------------------------------------------------------------------
+# Selection criteria
+# ---------------------------------------------------------------------------
+
+class TestSelection:
+    def test_gcv_beats_fixed_neighbours(self, sine_data):
+        """The selected lambda is a local minimum of the GCV curve."""
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x}, method="GCV")
+        lam = float(sol.lambdas[0])
+        for factor in (0.5, 2.0):
+            other = gam(y, smooths=[s("x")], smooth_data={"x": x},
+                        sp=[lam * factor])
+            assert sol.gcv <= other.gcv + 1e-10
+
+    def test_reml_gaussian(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x}, method="REML")
+        assert sol.reml_score is not None and np.isfinite(sol.reml_score)
+        lam = float(sol.lambdas[0])
+        for factor in (0.5, 2.0):
+            other = gam(y, smooths=[s("x")], smooth_data={"x": x},
+                        sp=[lam * factor], method="REML")
+            assert sol.reml_score <= other.reml_score + 1e-10
+
+    def test_gcv_fit_has_no_reml_score(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x}, method="GCV")
+        assert sol.reml_score is None
+
+    def test_reml_unsupported_family_raises(self):
+        rng = np.random.default_rng(0)
+        x = np.sort(rng.uniform(0, 1, 100))
+        y = rng.gamma(2.0, np.exp(0.5 * x))
+        with pytest.raises(ValidationError, match="REML"):
+            gam(y, smooths=[s("x")], smooth_data={"x": x},
+                family="Gamma", method="REML")
 
 
-class TestSummary:
-    """Tests for the R-style summary output."""
+# ---------------------------------------------------------------------------
+# Non-Gaussian families
+# ---------------------------------------------------------------------------
 
-    def test_summary_contains_smooth_terms(self, sine_data):
-        """summary() contains 'Approximate significance of smooth terms'."""
-        x, y = sine_data
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        summ = result.summary()
-        assert "Approximate significance of smooth terms" in summ
+class TestFamilies:
+    def test_poisson(self):
+        rng = np.random.default_rng(4)
+        n = 300
+        x = np.sort(rng.uniform(0, 1, n))
+        y = rng.poisson(np.exp(1.2 + np.sin(3 * x))).astype(float)
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x},
+                  family="poisson")
+        assert sol.converged
+        assert sol.scale == 1.0
+        assert 1.0 < sol.total_edf < 10.0
 
-    def test_summary_contains_family(self, sine_data):
-        """summary() contains family and link names."""
-        x, y = sine_data
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        summ = result.summary()
-        assert "Family: gaussian" in summ
-        assert "Link function: identity" in summ
+    def test_binomial(self):
+        rng = np.random.default_rng(11)
+        n = 500
+        x = np.sort(rng.uniform(0, 1, n))
+        p = 1.0 / (1.0 + np.exp(-2.0 * np.sin(2 * np.pi * x)))
+        y = rng.binomial(1, p).astype(float)
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x},
+                  family="binomial")
+        assert sol.converged
+        assert np.all((sol.fitted_values > 0) & (sol.fitted_values < 1))
 
-    def test_summary_contains_deviance_explained(self, sine_data):
-        """summary() contains deviance explained."""
-        x, y = sine_data
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        summ = result.summary()
-        assert "Deviance explained" in summ
+    def test_binomial_separation_warns_not_crashes(self):
+        """Complete separation: R-style warning + finite fit, no inf/NaN."""
+        rng = np.random.default_rng(9)
+        n = 60
+        x = np.sort(rng.uniform(0, 1, n))
+        y = (x > 0.5).astype(float)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            sol = gam(y, smooths=[s("x", k=8)], smooth_data={"x": x},
+                      family="binomial")
+        assert np.all(np.isfinite(sol.coefficients))
+        assert any("numerically 0 or 1" in str(w.message) for w in rec)
 
-    def test_summary_contains_gcv(self, sine_data):
-        """summary() contains GCV score."""
-        x, y = sine_data
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        summ = result.summary()
-        assert "GCV" in summ
+    def test_quasipoisson_raises(self, sine_data):
+        x, y, _ = sine_data
+        with pytest.raises(ValidationError):
+            gam(y, smooths=[s("x")], smooth_data={"x": x},
+                family="quasipoisson")
 
 
-# =====================================================================
-# Validation tests
-# =====================================================================
-
+# ---------------------------------------------------------------------------
+# Failure / edge cases
+# ---------------------------------------------------------------------------
 
 class TestValidation:
-    """Tests for input validation in gam()."""
-
     def test_no_smooths_no_X_raises(self):
-        """No smooth terms and no X raises ValueError."""
-        y = np.ones(10)
-        with pytest.raises(ValidationError, match="smooths.*X"):
-            gam(y)
+        with pytest.raises(ValidationError):
+            gam(np.array([1.0, 2.0, 3.0]))
 
-    def test_missing_smooth_data_variable(self):
-        """smooth_data missing a required variable raises ValidationError."""
-        y = np.ones(50)
-        with pytest.raises(ValidationError, match="missing variable"):
-            gam(y, smooths=[s("x1")], smooth_data={})
+    def test_missing_smooth_data(self, sine_data):
+        x, y, _ = sine_data
+        with pytest.raises(ValidationError, match="missing"):
+            gam(y, smooths=[s("nope")], smooth_data={"x": x})
 
-    def test_invalid_family(self):
-        """Invalid family raises ValueError."""
-        y = np.ones(50)
-        x = np.linspace(0, 1, 50)
-        with pytest.raises(ValueError, match="Unknown family"):
-            gam(y, smooths=[s("x")], smooth_data={"x": x}, family="bogus")
+    def test_length_mismatch(self, sine_data):
+        x, y, _ = sine_data
+        with pytest.raises(ValidationError):
+            gam(y, smooths=[s("x")], smooth_data={"x": x[:-5]})
 
-    def test_invalid_method(self):
-        """Invalid method raises ValidationError."""
-        y = np.ones(50)
-        x = np.linspace(0, 1, 50)
+    def test_invalid_method(self, sine_data):
+        x, y, _ = sine_data
         with pytest.raises(ValidationError, match="method"):
             gam(y, smooths=[s("x")], smooth_data={"x": x}, method="AIC")
 
-    def test_length_mismatch(self):
-        """y length != smooth_data array length raises ValidationError."""
-        y = np.ones(50)
-        x = np.linspace(0, 1, 30)  # wrong length
-        with pytest.raises(ValidationError, match="obs"):
+    def test_invalid_family(self, sine_data):
+        x, y, _ = sine_data
+        with pytest.raises(ValidationError):
+            gam(y, smooths=[s("x")], smooth_data={"x": x}, family="beta")
+
+    def test_nonfinite_y_raises(self, sine_data):
+        x, y, _ = sine_data
+        y = y.copy()
+        y[0] = np.inf
+        with pytest.raises(ValidationError, match="non-finite"):
             gam(y, smooths=[s("x")], smooth_data={"x": x})
 
+    def test_sp_validation(self, sine_data):
+        x, y, _ = sine_data
+        with pytest.raises(ValidationError, match="sp"):
+            gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[1.0, 2.0])
+        with pytest.raises(ValidationError, match="sp"):
+            gam(y, smooths=[s("x")], smooth_data={"x": x}, sp=[-1.0])
 
-# =====================================================================
-# Edge case tests
-# =====================================================================
+    def test_backend_parameter_removed(self, sine_data):
+        """The GAM module is CPU-only; per library convention it exposes
+        NO backend= parameter at all (removed in 4.6.0)."""
+        x, y, _ = sine_data
+        with pytest.raises(TypeError):
+            gam(y, smooths=[s("x")], smooth_data={"x": x}, backend="gpu")
+
+    def test_k_exceeding_unique_values_raises(self):
+        rng = np.random.default_rng(1)
+        x = np.repeat(np.linspace(0, 1, 6), 20)   # 6 unique, n=120
+        y = rng.normal(size=120)
+        with pytest.raises(ValidationError, match="unique"):
+            gam(y, smooths=[s("x", k=10)], smooth_data={"x": x})
+
+    def test_duplicated_smooth_variable_warns_rank(self, sine_data):
+        """Perfect concurvity: the same variable smoothed twice."""
+        x, y, _ = sine_data
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            sol = gam(
+                y,
+                smooths=[s("x", k=8), s("x", k=8)],
+                smooth_data={"x": x},
+            )
+        assert any("rank deficient" in str(w.message) for w in rec)
+        assert np.all(np.isfinite(sol.coefficients))
 
 
-class TestEdgeCases:
-    """Tests for edge cases."""
+# ---------------------------------------------------------------------------
+# tp end-to-end (regression: the 4.5.x tp could not fit a line)
+# ---------------------------------------------------------------------------
 
-    def test_single_smooth(self):
-        """Single smooth term with default settings."""
-        rng = np.random.default_rng(10)
-        x = np.linspace(0, 1, 80)
-        y = np.sin(x * 4) + rng.normal(0, 0.2, 80)
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        assert result.converged
-        assert len(result.smooth_terms) == 1
+class TestTpFit:
+    def test_tp_recovers_linear_signal(self):
+        rng = np.random.default_rng(3)
+        n = 300
+        x = np.sort(rng.uniform(0, 1, n))
+        y = 2.0 + 3.0 * x + rng.normal(0, 0.1, n)
+        sol = gam(y, smooths=[s("x", k=10, bs="tp")], smooth_data={"x": x})
+        rmse = float(np.sqrt(np.mean((sol.fitted_values - (2 + 3 * x)) ** 2)))
+        assert rmse < 0.05
+        assert sol.total_edf < 4.0  # near-linear fit, not flat, not wiggly
 
-    def test_k_3_minimum(self):
-        """k=3 (minimum basis) works without error."""
-        rng = np.random.default_rng(11)
-        x = np.linspace(0, 1, 80)
-        y = x + rng.normal(0, 0.1, 80)
-        result = gam(y, smooths=[s("x", k=3)], smooth_data={"x": x})
-        assert result.converged
+    def test_tp_recovers_sine(self, sine_data):
+        x, y, f = sine_data
+        sol = gam(y, smooths=[s("x", bs="tp")], smooth_data={"x": x})
+        rmse = float(np.sqrt(np.mean((sol.fitted_values - f) ** 2)))
+        assert rmse < 0.1
 
-    def test_k_50_large(self):
-        """Very large k (k=50) works without error."""
-        rng = np.random.default_rng(12)
-        n = 200
-        x = np.linspace(0, 1, n)
-        y = np.sin(6 * np.pi * x) + rng.normal(0, 0.3, n)
-        result = gam(y, smooths=[s("x", k=50)], smooth_data={"x": x})
-        assert result.converged
 
-    def test_gam_params_frozen(self):
-        """GAMParams is frozen (immutable)."""
-        rng = np.random.default_rng(13)
-        x = np.linspace(0, 1, 80)
-        y = x + rng.normal(0, 0.1, 80)
-        result = gam(y, smooths=[s("x")], smooth_data={"x": x})
+# ---------------------------------------------------------------------------
+# Summary / solution surface
+# ---------------------------------------------------------------------------
+
+class TestSummary:
+    def test_summary_contents(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
+        txt = sol.summary()
+        for token in ("Family: gaussian", "s(x)", "GCV", "edf",
+                      "Deviance explained"):
+            assert token in txt
+
+    def test_reml_summary_shows_reml(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x}, method="REML")
+        assert "-REML" in sol.summary()
+
+    def test_smooth_info_fields(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x", k=12)], smooth_data={"x": x})
+        si = sol.smooth_terms[0]
+        assert si.k == 12
+        assert si.edf > 0 and si.ref_df >= si.edf - 1e-6
+        assert 0.0 <= si.p_value <= 1.0
+        assert si.lambda_ > 0 and si.s_scale > 0
+
+    def test_params_frozen(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
         with pytest.raises(AttributeError):
-            result.params.scale = 999.0
+            sol.params.scale = 1.0  # type: ignore[misc]
 
-    def test_reml_method(self, sine_data):
-        """REML method runs and produces reasonable results."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=15)],
-            smooth_data={"x": x},
-            method="REML",
-        )
-        assert result.converged
-        assert result.deviance_explained > 0.5
-
-    def test_tp_basis_type(self, sine_data):
-        """Thin plate basis type produces a valid fit."""
-        x, y = sine_data
-        result = gam(
-            y,
-            smooths=[s("x", k=10, bs="tp")],
-            smooth_data={"x": x},
-        )
-        assert result.converged
-        assert len(result.smooth_terms) == 1
-        assert result.smooth_terms[0].basis_type == "tp"
-
-
-# =====================================================================
-# GPU backend tests (two-tier validation: CPU vs R, GPU vs CPU)
-# =====================================================================
-
-
-class TestGAMGPU:
-    """Tests for the GPU GAM backend.
-
-    Two-tier validation: CPU is validated against R ``mgcv::gam()``;
-    GPU is validated against CPU at the ``GPU_FP32`` tier (rtol=1e-4,
-    atol=1e-5) from ``pystatistics.core.compute.tolerances``.
-
-    GAM raw coefficients lie in a penalty null space that is under-
-    determined by the design matrix + penalty — the fit pins the
-    *fitted values* uniquely but not the coefficient vector itself.
-    Accordingly, these tests compare fitted values, deviance, GCV,
-    and total EDF rather than raw beta coefficients, matching the
-    two-tier convention for polr and multinom where stationary-point
-    drift between FP64 and FP32 L-BFGS-B is documented-by-design.
-    """
-
-    def _gpu_available(self) -> bool:
-        try:
-            import torch
-        except ImportError:
-            return False
-        # GPU tests run on CUDA (FP64-validated) or Apple Silicon MPS
-        # (FP32 path). FP64-only tests skip themselves on MPS below.
-        return torch.cuda.is_available() or (
-            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        )
-
-    def test_invalid_backend_raises(self, sine_data):
-        x, y = sine_data
-        from pystatistics.core.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="backend"):
-            gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                backend="quantum")
-
-    def test_gpu_unavailable_raises_explicitly(self, sine_data, monkeypatch):
-        """backend='gpu' must raise when no GPU is available (Rule 1)."""
-        x, y = sine_data
-        from pystatistics.core.compute import device as dev_mod
-        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        with pytest.raises(RuntimeError, match="No GPU available"):
-            gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                backend="gpu")
-
-    def test_auto_backend_falls_back_to_cpu_when_no_gpu(
-        self, sine_data, monkeypatch,
-    ):
-        """backend='auto' silently falls back to CPU when no GPU."""
-        x, y = sine_data
-        from pystatistics.core.compute import device as dev_mod
-        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        r = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                backend="auto")
-        assert r.converged
-
-    def test_gpu_fp64_matches_cpu_fitted_and_gcv(self, sine_data):
-        """GPU FP64 matches CPU on fitted values, GCV, deviance, and
-        total EDF to near-machine precision (CUDA only — MPS has no
-        FP64)."""
-        if not self._gpu_available():
-            pytest.skip("no GPU available")
-        import torch
-        if not torch.cuda.is_available():
-            pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
-        x, y = sine_data
-        r_cpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="cpu")
-        r_gpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="gpu_fp64")
-        # GAM's penalised normal-equation matrix has cond ≈ 1e16-1e17
-        # for the small-lambda regime the L-BFGS-B search explores,
-        # so the outer lambda optimization lands at FP64-equivalent but
-        # not bitwise-identical stationary points across CPU / GPU —
-        # matching the multinom / polr two-tier convention. Pin
-        # statistical quantities at a conservative cross-implementation
-        # tier rather than demanding bitwise equivalence.
-        #
-        # Primary fit statistics (fitted_values, deviance, GCV) are at
-        # the minimum of GCV(λ), i.e. locally flat in λ, so the tiny
-        # cross-backend λ drift barely moves them — measured drift is
-        # ≤3e-5 on this fixture. The tolerance here (1e-4) has a
-        # comfortable ~30× safety margin. total_edf, by contrast, is
-        # NOT flat in λ: it passes through a trace of
-        # (X'WX + λ·S)⁻¹ · X'WX, which is linear in λ near the
-        # optimum. At cond ≈ 1e16 the trace moves O(10⁻³) per O(10⁻⁶)
-        # shift in λ, so EDF needs a ~5e-3 tolerance to absorb the
-        # λ-drift without masking real regressions. Empirically the
-        # measured total_edf drift on this fixture is ~1.4e-3 (well
-        # inside 5e-3 but narrowly over the old 1e-3 setting).
-        np.testing.assert_allclose(
-            r_cpu.fitted_values, r_gpu.fitted_values,
-            rtol=1e-4, atol=1e-6,
-        )
-        assert r_cpu.deviance == pytest.approx(r_gpu.deviance, rel=1e-4)
-        assert r_cpu.gcv == pytest.approx(r_gpu.gcv, rel=1e-4)
-        assert r_cpu.total_edf == pytest.approx(r_gpu.total_edf, rel=5e-3)
-        # Coefficient-level agreement. Pre-3.0.0, the GPU final beta
-        # could land on a different null-space representative than CPU
-        # (torch.linalg.solve and numpy Cholesky diverge on near-
-        # singular A), producing fitted values identical to FP64 but
-        # coefficients shifted by a constant in the penalty null space.
-        # That broke smooth_terms.chi_sq (which is computed from the
-        # coefficients directly) by factors of ~8×. The GPU backend now
-        # canonicalises the final beta through the same numpy Cholesky
-        # path CPU uses; these tolerances pin that invariant.
-        np.testing.assert_allclose(
-            r_cpu.coefficients, r_gpu.coefficients,
-            rtol=1e-3, atol=1e-4,
-        )
-        assert r_cpu.smooth_terms[0].chi_sq == pytest.approx(
-            r_gpu.smooth_terms[0].chi_sq, rel=1e-3,
-        )
-        assert r_cpu.smooth_terms[0].p_value == pytest.approx(
-            r_gpu.smooth_terms[0].p_value, rel=1e-2,
-        )
-
-    def test_gpu_fp32_matches_cpu_at_tier(self, sine_data):
-        """GPU FP32 matches CPU at the ``GPU_FP32`` tier on fitted
-        values, deviance, and GCV — the statistical answer."""
-        from pystatistics.core.compute.tolerances import GPU_FP32
-        if not self._gpu_available():
-            pytest.skip("no GPU available")
-        x, y = sine_data
-        r_cpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="cpu")
-        r_gpu = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                    backend="gpu")
-        np.testing.assert_allclose(
-            r_cpu.fitted_values, r_gpu.fitted_values,
-            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
-        )
-        assert r_cpu.deviance == pytest.approx(
-            r_gpu.deviance, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
-        )
-
-    def test_gpu_datasource_input_matches_gpu_numpy(self, sine_data):
-        """Passing a device-resident torch.Tensor for y (and the
-        smooth variable) is equivalent to passing numpy arrays with
-        ``backend='gpu'``. DataSource tensors for ``y`` are pulled to
-        numpy internally (gam's smooth_data dict is numpy-only) but
-        backend inference still routes to GPU when any input is a
-        GPU tensor — tested here via the explicit ``backend='gpu'``
-        contract."""
-        from pystatistics.core.compute.tolerances import GPU_FP32
-        if not self._gpu_available():
-            pytest.skip("no GPU available")
-        x, y = sine_data
-        r_numpy = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                      backend="gpu")
-        # Re-run the same fit with the same numpy inputs — the
-        # amortized DataSource path for GAM is not yet wired at the
-        # smooth-data level (basis construction still uses numpy), so
-        # this test asserts the numpy-input GPU fit is stable /
-        # deterministic given the same inputs, same as other
-        # repeated-fit contracts in the suite.
-        r_numpy_2 = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
-                        backend="gpu")
-        np.testing.assert_allclose(
-            r_numpy.fitted_values, r_numpy_2.fitted_values,
-            rtol=GPU_FP32.rtol, atol=GPU_FP32.atol,
-        )
-
-    def test_unsupported_family_explicit_gpu_raises(self, sine_data):
-        """For a family outside the GPU family table (gaussian /
-        binomial / poisson / gamma), explicit ``backend='gpu'`` must
-        raise rather than silently routing to CPU (Rule 1).
-        ``backend='auto'`` on the same family should fall back."""
-        if not self._gpu_available():
-            pytest.skip("no GPU available")
-        x, y = sine_data
-        # The 4 GPU-supported families cover the CPU list for now — no
-        # unsupported family exists to test here. Exercise the code
-        # path via a monkeypatch that makes ``resolve_gpu_family`` raise
-        # ValueError for the gaussian family.
-        import pystatistics.gam.backends._gpu_family as _gf
-        real_resolve = _gf.resolve_gpu_family
-
-        def _fail(name):
-            raise ValueError(f"forced: {name} unsupported")
-
-        import pystatistics.gam.backends.gpu_pirls as _gp
-        import pytest as _pt
-        monkey = _pt.MonkeyPatch()
-        try:
-            monkey.setattr(_gp, "resolve_gpu_family", _fail)
-            # auto should fall back to CPU silently
-            r_auto = gam(y, smooths=[s("x", k=10)],
-                         smooth_data={"x": x}, backend="auto")
-            assert r_auto.converged
-            # gpu must raise (Rule 1)
-            with pytest.raises(ValueError, match="forced"):
-                gam(y, smooths=[s("x", k=10)],
-                    smooth_data={"x": x}, backend="gpu")
-        finally:
-            monkey.undo()
+    def test_repr_not_huge(self, sine_data):
+        x, y, _ = sine_data
+        sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
+        assert len(repr(sol.params)) < 2000  # arrays are repr=False

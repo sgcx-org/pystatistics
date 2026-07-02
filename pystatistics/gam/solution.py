@@ -120,9 +120,46 @@ class GAMSolution(SolutionReprMixin):
         return self._result.params.scale
 
     @property
+    def ubre(self) -> float:
+        """UBRE / scaled-AIC score (the criterion mgcv's GCV.Cp minimises
+        for known-scale families)."""
+        return self._result.params.ubre
+
+    @property
+    def lambdas(self) -> NDArray:
+        """Selected (or user-fixed) smoothing parameters, one per smooth.
+
+        Reported in the same penalty scaling mgcv reports ``sp`` in; divide
+        by ``params.s_scales`` for function-space units.
+        """
+        return self._result.params.lambdas
+
+    @property
+    def covariance(self) -> NDArray:
+        """Bayesian posterior covariance of the coefficients (mgcv ``Vp``)."""
+        return self._result.params.covariance
+
+    @property
+    def se(self) -> NDArray:
+        """Standard errors for ALL coefficients (posterior, mgcv-style)."""
+        return np.sqrt(np.maximum(
+            np.diag(self._result.params.covariance), 0.0,
+        ))
+
+    @property
+    def reml_score(self) -> float | None:
+        """Laplace REML criterion (``None`` unless ``method='REML'``)."""
+        return self._result.params.reml_score
+
+    @property
     def converged(self) -> bool:
         """Whether the P-IRLS algorithm converged."""
         return self._result.params.converged
+
+    @property
+    def outer_converged(self) -> bool:
+        """Whether the smoothing-parameter search converged off-boundary."""
+        return self._result.params.outer_converged
 
     @property
     def n_iter(self) -> int:
@@ -196,12 +233,18 @@ class GAMSolution(SolutionReprMixin):
             f"{'z value':>10s} {'Pr(>|z|)':>10s}"
         )
 
+        # Known-scale families: z reference; estimated scale: t with the
+        # residual df (mgcv's summary.gam convention).
+        scale_known = p.family_name in ("binomial", "poisson")
+        resid_df = max(p.n_obs - p.total_edf, 1.0)
         for i, name in enumerate(param_names):
             coef_val = float(p.coefficients[i])
-            # Standard error from approximate covariance
             se = self._param_se(i)
             z_val = coef_val / se if se > 0 else 0.0
-            p_val = 2.0 * (1.0 - sp_stats.norm.cdf(abs(z_val)))
+            if scale_known:
+                p_val = 2.0 * (1.0 - sp_stats.norm.cdf(abs(z_val)))
+            else:
+                p_val = 2.0 * float(sp_stats.t.sf(abs(z_val), resid_df))
             stars = significance_stars(p_val)
             p_str = f"{p_val:.4e}" if p_val >= 1e-4 else "<2e-16"
             lines.append(
@@ -232,9 +275,15 @@ class GAMSolution(SolutionReprMixin):
             f"R-sq.(adj) = {r2:.3f}   "
             f"Deviance explained = {dev_expl_pct:.1f}%"
         )
-        lines.append(
-            f"GCV = {p.gcv:.4g}  Scale est. = {p.scale:.4g}  n = {p.n_obs}"
-        )
+        if p.method == "REML" and p.reml_score is not None:
+            lines.append(
+                f"-REML = {p.reml_score:.4g}  "
+                f"Scale est. = {p.scale:.4g}  n = {p.n_obs}"
+            )
+        else:
+            lines.append(
+                f"GCV = {p.gcv:.4g}  Scale est. = {p.scale:.4g}  n = {p.n_obs}"
+            )
 
         return "\n".join(lines)
 
@@ -243,24 +292,14 @@ class GAMSolution(SolutionReprMixin):
     # ------------------------------------------------------------------
 
     def _param_se(self, idx: int) -> float:
-        """Approximate standard error for the *idx*-th parametric coefficient.
+        """Standard error for the *idx*-th coefficient.
 
-        Uses the Bayesian posterior covariance approximation::
-
-            V_beta = scale * (X'WX + sum lam*S)^{-1}
-
-        Since we do not store the full covariance in GAMParams (to keep
-        it lightweight), we return a rough estimate from the scale and
-        the residual information.
+        From the stored Bayesian posterior covariance
+        ``V_beta = scale * (X'WX + sum lam*S)^{-1}`` (mgcv's ``Vp``) —
+        the same quantity ``summary.gam`` uses for its parametric table.
         """
-        p = self._result.params
-        # Rough SE: sqrt(scale / n)
-        # This is a placeholder; a full implementation would store
-        # the inverse of the penalised Fisher information.
-        n = p.n_obs
-        if n <= 1:
-            return 0.0
-        return float(np.sqrt(p.scale / n))
+        v = float(self._result.params.covariance[idx, idx])
+        return float(np.sqrt(v)) if v > 0.0 else 0.0
 
     def __repr__(self) -> str:
         p = self._result.params

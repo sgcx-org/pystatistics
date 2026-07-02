@@ -1,9 +1,17 @@
 """
 Main entry point for fitting Generalized Additive Models.
 
-Provides the ``gam()`` function which mirrors ``mgcv::gam()`` for
-common use cases: penalised regression splines with automatic
-smoothing parameter selection via GCV or REML.
+Provides the ``gam()`` function which mirrors ``mgcv::gam()`` for common
+use cases: penalized regression splines with automatic smoothing-parameter
+selection via GCV (mgcv ``GCV.Cp`` semantics: GCV for estimated scale,
+UBRE for known scale) or Laplace REML, fitted by stable augmented-QR
+P-IRLS with sum-to-zero identifiability constraints — the same numerical
+architecture mgcv uses (Wood 2011, 2017).
+
+The GAM module is CPU-only: there is no ``backend=`` parameter (the
+library convention is that a module with no GPU path exposes none). The
+former float32 GPU path was removed after failing its no-silent-wrong
+check — see the 4.6.0 changelog.
 """
 
 from __future__ import annotations
@@ -12,22 +20,32 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
-from pystatistics.core.compute.backend import resolve_backend
 from pystatistics.core.result import Result
+from pystatistics.gam._basis import BuiltSmooth, build_design
 from pystatistics.gam._common import GAMParams, SmoothInfo
-from pystatistics.gam._fit import (
-    _build_model_matrix,
-    _compute_edf,
-    _compute_hat_matrix_trace,
-    _fit_gam_fixed_lambda,
+from pystatistics.gam._criteria import (
+    estimate_scale,
+    gcv_score,
+    reml_score,
+    select_lambdas,
+    ubre_score,
 )
-from pystatistics.gam._gcv import select_smoothing_parameters
+from pystatistics.gam._edf import (
+    edf_per_block,
+    influence_matrix,
+    posterior_covariance,
+    ref_df_per_block,
+    total_edf as total_edf_of,
+)
+from pystatistics.gam._pirls import fit_fixed_lambda, make_penalty_roots
 from pystatistics.gam._smooth import SmoothTerm
+from pystatistics.gam._smooth_test import smooth_term_test
 from pystatistics.gam.solution import GAMSolution
 from pystatistics.regression.families import Family, resolve_family
+
+_BACKEND_NAME = "cpu_qr_pirls"
 
 
 def gam(
@@ -38,76 +56,64 @@ def gam(
     smooth_data: dict[str, ArrayLike] | None = None,
     family: str | Family = "gaussian",
     method: str = "GCV",
+    sp: ArrayLike | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
     names: list[str] | None = None,
-    backend: str | None = None,
 ) -> GAMSolution:
     """Fit a Generalized Additive Model.
 
-    Matches R's ``mgcv::gam()`` for common cases.  A GAM models the
+    Matches R's ``mgcv::gam()`` for common cases. A GAM models the
     response as::
 
         g(E[y]) = beta_0 + f_1(x_1) + f_2(x_2) + ... + X @ beta
 
-    where each ``f_j`` is a smooth function estimated from the data
-    using penalised regression splines.
+    where each ``f_j`` is a smooth function estimated from the data using
+    penalized regression splines, with per-smooth sum-to-zero
+    identifiability constraints (a smooth declared with ``k`` basis
+    functions contributes ``k - 1`` coefficients, exactly as mgcv).
 
     Args:
         y: Response variable, 1-D array of *n* observations.
-        X: Parametric design matrix ``(n, p)``.  May include an
-            intercept column.  If ``None``, an intercept-only parametric
-            part is used.
-        smooths: List of :class:`SmoothTerm` specifications, e.g.
-            ``[s('x1'), s('x2', k=20)]``.
-        smooth_data: Dict mapping variable names to arrays.  Must
-            contain all variables referenced in *smooths*.
-        family: GLM family -- ``'gaussian'``, ``'binomial'``,
-            ``'poisson'``, ``'gamma'``, or a :class:`Family` instance.
-        method: Smoothing parameter selection: ``'GCV'`` or ``'REML'``.
-        tol: Convergence tolerance for P-IRLS.
+        X: Parametric design matrix ``(n, p)``. May include an intercept
+            column. If ``None``, an intercept-only parametric part is used.
+        smooths: Smooth term specifications from :func:`s`.
+        smooth_data: Mapping from smooth variable names to ``(n,)`` arrays.
+        family: Exponential family, e.g. ``'gaussian'``, ``'binomial'``,
+            ``'poisson'``, ``'Gamma'``. ``method='REML'`` supports the
+            fixed-dispersion families and the Gaussian-identity model.
+        method: Smoothing-parameter selection criterion: ``'GCV'``
+            (mgcv ``GCV.Cp`` semantics — UBRE is used automatically for
+            known-scale families, as mgcv does) or ``'REML'`` (Laplace,
+            Wood 2011).
+        sp: Optional fixed smoothing parameters, one per smooth (mgcv's
+            ``sp=``). Skips selection; use for reproducing a specific fit.
+        tol: P-IRLS convergence tolerance (relative penalized deviance).
         max_iter: Maximum P-IRLS iterations.
-        names: Optional names for parametric coefficients.
-        backend: Compute backend = (device, precision). ``'cpu'`` (default):
-            the R-validated reference path. ``'gpu'``: float32 (raises if no
-            GPU). ``'gpu_fp64'``: float64, CUDA only (raises on MPS).
-            ``'auto'``: GPU-float32 if CUDA is present, else CPU.
+        names: Optional display names for the parametric coefficients.
 
     Returns:
-        :class:`GAMSolution` with fitted model, smooth-term info,
-        and diagnostics.
+        A :class:`GAMSolution`.
 
     Raises:
-        ValidationError: On invalid or inconsistent inputs.
-
-    Example::
-
-        >>> from pystatistics.gam import gam, s
-        >>> result = gam(y, smooths=[s('x1'), s('x2')],
-        ...              smooth_data={'x1': x1, 'x2': x2})
-        >>> print(result.summary())
+        ValidationError: invalid inputs, unknown family/method/basis,
+            ``k`` exceeding the unique values of a smooth variable, or a
+            ``sp`` vector of the wrong length/sign.
+        ConvergenceError: a genuinely divergent P-IRLS (loud, never a
+            silent answer).
     """
     # ------------------------------------------------------------------
-    # Backend resolution (see pystatistics/CONVENTIONS.md)
-    # ------------------------------------------------------------------
-    # An auto-selected device may fall back to CPU when the family has no GPU
-    # kernel; an explicit GPU request must fail loud instead.
-    allow_cpu_fallback = backend in (None, "auto")
-    _target = resolve_backend(backend, supports_fp64=True)
-    backend = _target.backend
-    use_fp64 = _target.use_fp64
-    gpu_device_type = _target.device_type
-
-    # ------------------------------------------------------------------
-    # Input validation
+    # Input validation (boundary — Rule 2)
     # ------------------------------------------------------------------
     y_arr = np.asarray(y, dtype=np.float64).ravel()
     n = y_arr.shape[0]
+    if n == 0:
+        raise ValidationError("y must be non-empty")
+    if not np.all(np.isfinite(y_arr)):
+        raise ValidationError("y contains non-finite values (NaN or Inf)")
 
-    if smooths is None:
-        smooths = []
-    if smooth_data is None:
-        smooth_data = {}
+    smooths = list(smooths) if smooths is not None else []
+    smooth_data = dict(smooth_data) if smooth_data is not None else {}
 
     if not smooths and X is None:
         raise ValidationError(
@@ -122,7 +128,6 @@ def gam(
             f"method must be 'GCV' or 'REML', got {method!r}"
         )
 
-    # Validate smooth_data lengths
     smooth_data_np: dict[str, NDArray] = {}
     for st in smooths:
         if st.var_name not in smooth_data:
@@ -137,7 +142,6 @@ def gam(
             )
         smooth_data_np[st.var_name] = arr
 
-    # Parametric design matrix
     if X is not None:
         X_param = np.asarray(X, dtype=np.float64)
         if X_param.ndim == 1:
@@ -146,206 +150,168 @@ def gam(
             raise ValidationError(
                 f"y has {n} obs but X has {X_param.shape[0]} rows"
             )
+        if not np.all(np.isfinite(X_param)):
+            raise ValidationError("X contains non-finite values")
     else:
-        # Intercept-only
         X_param = np.ones((n, 1), dtype=np.float64)
-
     parametric_cols = X_param.shape[1]
 
+    n_smooths = len(smooths)
+    sp_arr: NDArray | None = None
+    if sp is not None:
+        sp_arr = np.asarray(sp, dtype=np.float64).ravel()
+        if sp_arr.shape[0] != n_smooths:
+            raise ValidationError(
+                f"sp has {sp_arr.shape[0]} entries but there are "
+                f"{n_smooths} smooth terms"
+            )
+        if np.any(~np.isfinite(sp_arr)) or np.any(sp_arr <= 0.0):
+            raise ValidationError("sp entries must be finite and > 0")
+
     # ------------------------------------------------------------------
-    # Build model matrix
+    # Build the (full-rank, constrained) design + penalty roots
     # ------------------------------------------------------------------
-    X_aug, S_penalties, term_indices = _build_model_matrix(
-        X_param, smooth_data_np, smooths,
+    X_aug, built = build_design(X_param, smooth_data_np, smooths)
+    blocks = [b.block for b in built]
+    roots = make_penalty_roots([b.S_block for b in built], blocks)
+    smooth_names = [f"s({st.var_name})" for st in smooths]
+
+    # ------------------------------------------------------------------
+    # Smoothing-parameter selection (or user-fixed sp)
+    # ------------------------------------------------------------------
+    import warnings as _warnings
+
+    if n_smooths == 0:
+        lambdas = np.array([], dtype=np.float64)
+        outer_converged = True
+    elif sp_arr is not None:
+        lambdas = sp_arr
+        outer_converged = True
+    else:
+        with _warnings.catch_warnings():
+            # The lambda search runs ~50-150 P-IRLS fits; per-fit warnings
+            # (separation, rank deficiency) would repeat once per
+            # evaluation. Dedupe to one occurrence within this call.
+            _warnings.simplefilter("once", UserWarning)
+            lambdas, outer_converged = select_lambdas(
+                y_arr, X_aug, roots, fam, method_upper, tol, max_iter,
+                smooth_names=smooth_names,
+            )
+        if not outer_converged:
+            import warnings
+
+            warnings.warn(
+                f"smoothing-parameter search did not cleanly converge "
+                f"(method={method_upper}); results may sit on the search "
+                f"boundary — inspect solution.params.lambdas",
+                UserWarning, stacklevel=2,
+            )
+
+    # ------------------------------------------------------------------
+    # Final fit + inference quantities
+    # ------------------------------------------------------------------
+    fit = fit_fixed_lambda(
+        y_arr, X_aug, roots, lambdas, fam, tol, max_iter,
+        smooth_names=smooth_names,
+    )
+    H = influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank)
+    tot_edf = total_edf_of(H)
+    edf = edf_per_block(H, blocks)
+    ref_df = ref_df_per_block(H, blocks)
+
+    scale = estimate_scale(fit, y_arr, fam, tot_edf)
+    covariance = posterior_covariance(fit.R, fit.piv, fit.rank, scale)
+
+    gcv = gcv_score(fit.deviance, n, tot_edf)
+    ubre = ubre_score(fit.deviance, n, tot_edf, scale=scale)
+    reml = (
+        reml_score(fit, y_arr, fam, roots, lambdas)
+        if (method_upper == "REML" and n_smooths > 0) else None
     )
 
-    n_smooths = len(smooths)
-
-    # ------------------------------------------------------------------
-    # GPU path selection
-    # ------------------------------------------------------------------
-    # The GPU backend keeps X_aug, y, and the stacked penalty tensor
-    # device-resident across all L-BFGS-B evaluations in the lambda
-    # search (~50 P-IRLS fits per outer fit). Only the log_lambdas
-    # vector going in and the scalar scoring criterion coming out
-    # cross the bus per evaluation.
-    gpu_fitter = None
-    backend_name = "cpu_pirls"
-    if backend != "cpu":
-        # Device + precision resolved above (resolve_backend already raised for
-        # an explicit GPU request with no GPU, and downgraded 'auto' to CPU when
-        # no CUDA is present), so a non-'cpu' backend here means "run on GPU".
-        from pystatistics.gam.backends.gpu_pirls import GAMGPUFitter
-        try:
-            gpu_fitter = GAMGPUFitter(
-                y_arr, X_aug, S_penalties, family_name=fam.name,
-                parametric_cols=parametric_cols,
-                device=gpu_device_type, use_fp64=use_fp64,
-            )
-            backend_name = (
-                f"gpu_pirls ({gpu_device_type}, "
-                f"{'fp64' if use_fp64 else 'fp32'})"
-            )
-        except ValueError:
-            # Family not supported on GPU — fall back to CPU only when the
-            # device was auto-selected; an explicit GPU request fails loud.
-            if not allow_cpu_fallback:
-                raise
-            gpu_fitter = None
-            backend_name = "cpu_pirls"
-
-    # FP32 gradient precision is ~1e-7 — floor the P-IRLS tolerance on
-    # the GPU FP32 path, same rationale as the multinomial / polr
-    # entry points.
-    gpu_fp32_min_tol = 1e-5
-    effective_tol = tol
-    if gpu_fitter is not None and not use_fp64 and tol < gpu_fp32_min_tol:
-        effective_tol = gpu_fp32_min_tol
-
-    # ------------------------------------------------------------------
-    # Select smoothing parameters
-    # ------------------------------------------------------------------
-    if n_smooths > 0:
-        if gpu_fitter is not None:
-            from scipy.optimize import minimize as _minimize
-            log_lam0 = np.zeros(n_smooths, dtype=np.float64)
-            bounds = [(-10.0, 15.0)] * n_smooths
-            scorer = (
-                gpu_fitter.gcv_score
-                if method_upper == "GCV" else gpu_fitter.reml_score
-            )
-            opt_res = _minimize(
-                scorer, log_lam0,
-                args=(effective_tol, max_iter),
-                method="L-BFGS-B", bounds=bounds,
-                options={"maxiter": 50, "ftol": 1e-6},
-            )
-            lambdas = np.exp(opt_res.x)
-        else:
-            lambdas = select_smoothing_parameters(
-                y_arr, X_aug, S_penalties, fam, parametric_cols,
-                method_upper, tol, max_iter, n_smooths,
-            )
-    else:
-        lambdas = np.array([], dtype=np.float64)
-
-    # ------------------------------------------------------------------
-    # Final fit with optimal lambdas + per-term EDF
-    # ------------------------------------------------------------------
+    # Null deviance (intercept-only fitted mean is ybar for every
+    # supported family/link at the optimum).
     wt = np.ones(n, dtype=np.float64)
-    if gpu_fitter is not None:
-        (edf, total_edf, beta, mu, eta, W, deviance, n_iter,
-         converged) = gpu_fitter.edf_per_term(
-            lambdas, term_indices, effective_tol, max_iter,
-        )
-        if n_smooths == 0:
-            edf = np.array([], dtype=np.float64)
-    else:
-        beta, mu, eta, W, deviance, n_iter, converged = _fit_gam_fixed_lambda(
-            y_arr, X_aug, S_penalties, lambdas, fam, parametric_cols,
-            tol, max_iter,
-        )
-        if n_smooths > 0:
-            edf = _compute_edf(X_aug, W, S_penalties, lambdas, term_indices)
-        else:
-            edf = np.array([], dtype=np.float64)
-        total_edf = _compute_hat_matrix_trace(
-            X_aug, W, S_penalties, lambdas,
-        )
-
-    # Scale estimate
-    df_resid = max(n - total_edf, 1.0)
-    if fam.dispersion_is_fixed:
-        scale = 1.0
-    else:
-        scale = deviance / df_resid
-
-    # Null deviance
     mu_null = np.full(n, y_arr.mean(), dtype=np.float64)
     null_deviance = fam.deviance(y_arr, mu_null, wt)
 
-    # Log-likelihood and AIC
-    log_lik = fam.log_likelihood(y_arr, mu, wt, max(scale, 1e-20))
-    aic = -2.0 * log_lik + 2.0 * total_edf
-
-    # GCV
-    denom = max(n - total_edf, 1.0)
-    gcv = float(n) * deviance / (denom * denom)
-
-    # UBRE
-    ubre = deviance / n - scale + 2.0 * total_edf * scale / n
+    # Log-likelihood / AIC — classical GAM df convention (see GAMParams).
+    log_lik = fam.log_likelihood(y_arr, fit.mu, wt, max(scale, 1e-300))
+    aic_df = tot_edf + (0.0 if fam.dispersion_is_fixed else 1.0)
+    aic = -2.0 * log_lik + 2.0 * aic_df
 
     # ------------------------------------------------------------------
-    # Build SmoothInfo objects
+    # Per-smooth summaries
     # ------------------------------------------------------------------
     smooth_infos: list[SmoothInfo] = []
-    for i, (st, (s_start, s_end)) in enumerate(zip(smooths, term_indices)):
-        edf_i = float(edf[i])
-
-        # Approximate significance test (Wood, 2013)
-        ref_df = min(edf_i * 1.2, float(st.k - 1))
-        ref_df = max(ref_df, 1.0)
-
-        # Chi-squared statistic: beta_j' S_j^{-1} beta_j / scale
-        beta_j = beta[s_start:s_end]
-        S_j = S_penalties[i][s_start:s_end, s_start:s_end]
-        chi_sq = float(beta_j @ beta_j) / max(scale, 1e-20)
-
-        # p-value from chi-squared with ref_df degrees of freedom
-        p_value = float(1.0 - sp_stats.chi2.cdf(chi_sq, df=ref_df))
-
-        smooth_infos.append(
-            SmoothInfo(
-                term_name=f"s({st.var_name})",
-                var_name=st.var_name,
-                basis_type=st.bs,
-                k=st.k,
-                edf=edf_i,
-                ref_df=ref_df,
-                chi_sq=chi_sq,
-                p_value=p_value,
-                coef_indices=(s_start, s_end),
-            )
+    for i, b in enumerate(built):
+        s_, e_ = b.block
+        stat, p_val = smooth_term_test(
+            fit.beta[s_:e_], covariance[s_:e_, s_:e_],
+            edf=float(edf[i]), ref_df=float(ref_df[i]),
+            scale_known=fam.dispersion_is_fixed,
+            resid_df=n - tot_edf,
         )
+        smooth_infos.append(SmoothInfo(
+            term_name=smooth_names[i],
+            var_name=b.term.var_name,
+            basis_type=b.term.bs,
+            k=b.term.k,
+            edf=float(edf[i]),
+            ref_df=float(ref_df[i]),
+            chi_sq=stat,
+            p_value=p_val,
+            coef_indices=(s_, e_),
+            lambda_=float(lambdas[i]),
+            s_scale=float(b.s_scale),
+        ))
 
     # ------------------------------------------------------------------
-    # Assemble GAMParams and Result
+    # Assemble
     # ------------------------------------------------------------------
-    residuals = y_arr - mu
-
     gam_params = GAMParams(
-        coefficients=beta,
-        fitted_values=mu,
-        linear_predictor=eta,
-        residuals=residuals,
+        coefficients=fit.beta,
+        fitted_values=fit.mu,
+        linear_predictor=fit.eta,
+        residuals=y_arr - fit.mu,
         edf=edf,
-        total_edf=total_edf,
+        total_edf=tot_edf,
+        lambdas=lambdas,
+        s_scales=np.array([b.s_scale for b in built], dtype=np.float64),
+        covariance=covariance,
         scale=scale,
         gcv=gcv,
         ubre=ubre,
-        deviance=deviance,
+        reml_score=reml,
+        deviance=fit.deviance,
         null_deviance=null_deviance,
         log_likelihood=log_lik,
         aic=aic,
         n_obs=n,
         family_name=fam.name,
         link_name=fam.link.name,
-        converged=converged,
-        n_iter=n_iter,
+        converged=fit.converged,
+        outer_converged=outer_converged,
+        n_iter=fit.n_iter,
         method=method_upper,
+        backend_name=_BACKEND_NAME,
     )
 
     result = Result(
         params=gam_params,
         info={
             "method": method_upper,
-            "converged": converged,
-            "n_iter": n_iter,
+            "converged": fit.converged,
+            "outer_converged": outer_converged,
+            "n_iter": fit.n_iter,
             "n_smooths": n_smooths,
-            "lambdas": lambdas.tolist() if n_smooths > 0 else [],
+            "lambdas": lambdas.tolist(),
+            "rank": fit.rank,
+            "n_coefficients": int(X_aug.shape[1]),
+            "parametric_cols": parametric_cols,
         },
         timing=None,
-        backend_name=backend_name,
+        backend_name=_BACKEND_NAME,
     )
 
     return GAMSolution(result, smooth_infos, _names=names)
