@@ -33,6 +33,7 @@ from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.gam._edf import influence_matrix, logdet_penalized, total_edf
+from pystatistics.gam._gradient import gcv_gradient, reml_gradient_gauss
 from pystatistics.gam._pirls import (
     PenaltyRoot,
     PirlsFit,
@@ -235,6 +236,33 @@ def select_lambdas(
             return ubre_score(fit.deviance, n, edf, scale=1.0)
         return gcv_score(fit.deviance, n, edf)
 
+    # Analytic-gradient path (Gaussian-identity only): the constant IRLS
+    # weights make the criterion an exact closed form of log(lambda), so the
+    # outer L-BFGS-B is driven by the analytic gradient (one inner fit per
+    # step) instead of scipy's finite differences (2m+1 fits per step). GLM
+    # families keep the finite-difference `objective` above (their weights
+    # depend on beta -> an implicit d beta/d rho term not implemented here).
+    use_analytic = _is_gauss_identity(family)
+
+    def value_and_grad(
+        log_lam: NDArray[np.floating[Any]],
+    ) -> tuple[float, NDArray[np.floating[Any]]]:
+        lam = np.exp(np.asarray(log_lam, dtype=np.float64))
+        fit = fit_fixed_lambda(
+            y, X, roots, lam, family, tol_inner, max_iter,
+            smooth_names=smooth_names, gaussian_cache=gauss_cache,
+        )
+        edf = total_edf(influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
+        if method_u == "REML":
+            return (
+                reml_score(fit, y, family, roots, lam),
+                reml_gradient_gauss(fit, roots, lam, n),
+            )
+        return (
+            gcv_score(fit.deviance, n, edf),
+            gcv_gradient(fit, roots, lam, n, edf),
+        )
+
     # REML support check up front (fail before burning optimizer time).
     if method_u == "REML" and not (
         family.dispersion_is_fixed or _is_gauss_identity(family)
@@ -257,28 +285,44 @@ def select_lambdas(
     # the same data in different units (panel-verified). Normalize by the
     # objective at the starting point so the same fit is selected at every
     # response scale.
-    f0 = objective(log_lam0)
+    f0 = value_and_grad(log_lam0)[0] if use_analytic else objective(log_lam0)
     ref = max(abs(f0), 1e-300)
 
-    def objective_scaled(log_lam: NDArray[np.floating[Any]]) -> float:
-        return objective(log_lam) / ref
+    if use_analytic:
+        def fun_scaled(
+            log_lam: NDArray[np.floating[Any]],
+        ) -> tuple[float, NDArray[np.floating[Any]]]:
+            val, grad = value_and_grad(log_lam)
+            return val / ref, grad / ref
 
-    # eps: the FD step must sit WELL above the inner P-IRLS convergence
-    # noise floor or the quasi-Newton curvature estimate is built from
-    # noise and the line search collapses short of the optimum (observed
-    # on the flat Gamma-log GCV surface: effective evaluation noise
-    # ~1e-9 relative even at tol_inner=1e-12, so eps=1e-6 gave gradient
-    # noise the SAME size as the true gradient). eps=1e-4 keeps gradient
-    # noise ~1e-5 while the induced position error (~eps/2 in log-lambda)
-    # is a ~0.005% sp perturbation — far inside the optimizer tolerance
-    # tier of the validation contract.
-    result = minimize(
-        objective_scaled,
-        log_lam0,
-        method="L-BFGS-B",
-        bounds=bounds,
-        options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9, "eps": 1e-4},
-    )
+        result = minimize(
+            fun_scaled,
+            log_lam0,
+            method="L-BFGS-B",
+            jac=True,
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9},
+        )
+    else:
+        def objective_scaled(log_lam: NDArray[np.floating[Any]]) -> float:
+            return objective(log_lam) / ref
+
+        # eps: the FD step must sit WELL above the inner P-IRLS convergence
+        # noise floor or the quasi-Newton curvature estimate is built from
+        # noise and the line search collapses short of the optimum (observed
+        # on the flat Gamma-log GCV surface: effective evaluation noise
+        # ~1e-9 relative even at tol_inner=1e-12, so eps=1e-6 gave gradient
+        # noise the SAME size as the true gradient). eps=1e-4 keeps gradient
+        # noise ~1e-5 while the induced position error (~eps/2 in log-lambda)
+        # is a ~0.005% sp perturbation — far inside the optimizer tolerance
+        # tier of the validation contract.
+        result = minimize(
+            objective_scaled,
+            log_lam0,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9, "eps": 1e-4},
+        )
 
     # A coordinate sitting ON a search bound is fine when the criterion has
     # asymptoted there (|gradient| small): lambda -> inf is the CORRECT

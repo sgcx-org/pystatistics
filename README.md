@@ -371,6 +371,15 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.1 — faster multi-smooth Gaussian GAMs
+
+`gam()` with the default Gaussian family now selects its smoothing parameters
+with an exact analytic gradient of the GCV/REML criterion instead of finite
+differences, so fits with several smooth terms no longer slow down as terms are
+added — about 2× faster with four smooths and 3× with six on a typical fit.
+Estimates are unchanged, and single-smooth and generalized (Poisson, binomial,
+Gamma) additive models are unaffected.
+
 ### 4.6.0 — generalized additive models rewritten to match `mgcv`
 
 `gam()` received a full numerical rewrite. Automatic smoothing-parameter

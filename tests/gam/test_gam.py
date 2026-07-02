@@ -518,3 +518,119 @@ class TestSummary:
         x, y, _ = sine_data
         sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
         assert len(repr(sol.params)) < 2000  # arrays are repr=False
+
+
+# ---------------------------------------------------------------------------
+# Analytic smoothing-parameter gradient (Gaussian-identity path)
+# ---------------------------------------------------------------------------
+
+class TestAnalyticGradient:
+    """The Gaussian-identity outer search is driven by the exact analytic
+    gradient of the GCV/REML score (one inner fit per step) instead of finite
+    differences. These tests pin the gradient to a finite-difference check and
+    confirm the selected sp is the SAME optimum the FD path found."""
+
+    @staticmethod
+    def _design(n, m, seed):
+        from pystatistics.gam._constraints import absorb_sum_to_zero
+        from pystatistics.gam._pirls import make_penalty_roots
+        rng = np.random.default_rng(seed)
+        cols = [np.sort(rng.uniform(0.0, 1.0, n)) for _ in range(m)]
+        y = sum(np.sin(2 * np.pi * (j + 1) * cols[j]) for j in range(m))
+        y = y + rng.normal(0.0, 0.5, n)
+        parts, s_blocks, blocks, col = [np.ones((n, 1))], [], [], 1
+        for j in range(m):
+            b, s_pen, _ = cr_basis(cols[j], k=10)
+            bc, sc, _ = absorb_sum_to_zero(b, s_pen)
+            parts.append(bc)
+            s_blocks.append(sc)
+            blocks.append((col, col + bc.shape[1]))
+            col += bc.shape[1]
+        return y, np.hstack(parts), make_penalty_roots(s_blocks, blocks)
+
+    @pytest.mark.parametrize("method", ["GCV", "REML"])
+    def test_gradient_matches_finite_difference(self, method):
+        from pystatistics.gam._criteria import gcv_score, reml_score
+        from pystatistics.gam._edf import influence_matrix, total_edf
+        from pystatistics.gam._gradient import (
+            gcv_gradient, reml_gradient_gauss,
+        )
+        from pystatistics.gam._pirls import fit_fixed_lambda, reduce_wls
+        from pystatistics.regression.families import resolve_family
+
+        y, X, roots = self._design(400, 3, 0)
+        fam = resolve_family("gaussian")
+        n = len(y)
+        gc = reduce_wls(X, np.ones(n), y)
+
+        def score(rho):
+            lam = np.exp(rho)
+            fit = fit_fixed_lambda(y, X, roots, lam, fam, 1e-12, 50,
+                                   gaussian_cache=gc)
+            if method == "REML":
+                return reml_score(fit, y, fam, roots, lam)
+            edf = total_edf(
+                influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
+            return gcv_score(fit.deviance, n, edf)
+
+        def grad(rho):
+            lam = np.exp(rho)
+            fit = fit_fixed_lambda(y, X, roots, lam, fam, 1e-12, 50,
+                                   gaussian_cache=gc)
+            if method == "REML":
+                return reml_gradient_gauss(fit, roots, lam, n)
+            edf = total_edf(
+                influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
+            return gcv_gradient(fit, roots, lam, n, edf)
+
+        for rho0 in ([-1.0, 2.0, 5.0], [0.0, 0.0, 0.0], [3.0, 1.0, -1.0]):
+            rho = np.asarray(rho0, dtype=float)
+            g = grad(rho)
+            h = 1e-5
+            gfd = np.array([
+                (score(rho + h * e) - score(rho - h * e)) / (2 * h)
+                for e in np.eye(len(rho))
+            ])
+            rel = np.abs(g - gfd) / (np.abs(gfd) + 1e-9)
+            assert rel.max() < 1e-4, (method, rho0, rel)
+
+    @pytest.mark.parametrize("method", ["GCV", "REML"])
+    def test_selected_sp_matches_fd_optimum(self, method):
+        """Analytic and finite-difference searches land on the same optimum
+        (within the optimizer tolerance tier), not bit-identical sp."""
+        from scipy.optimize import minimize
+
+        from pystatistics.gam import _criteria as crit
+        from pystatistics.gam._edf import influence_matrix, total_edf
+        from pystatistics.gam._pirls import fit_fixed_lambda, reduce_wls
+        from pystatistics.regression.families import resolve_family
+
+        y, X, roots = self._design(2000, 4, 2)
+        fam = resolve_family("gaussian")
+        n = len(y)
+        gc = reduce_wls(X, np.ones(n), y)
+
+        def obj(rho):
+            lam = np.exp(rho)
+            fit = fit_fixed_lambda(y, X, roots, lam, fam, 1e-12, 50,
+                                   gaussian_cache=gc)
+            if method == "REML":
+                return crit.reml_score(fit, y, fam, roots, lam)
+            edf = total_edf(
+                influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
+            return crit.gcv_score(fit.deviance, n, edf)
+
+        r0 = crit.initial_log_lambdas(X, roots)
+        bounds = [(v - 15, v + 15) for v in r0]
+        ref = max(abs(obj(r0)), 1e-300)
+        fd = minimize(lambda r: obj(r) / ref, r0, method="L-BFGS-B",
+                      bounds=bounds,
+                      options={"maxiter": 200, "ftol": 1e-12,
+                               "gtol": 1e-9, "eps": 1e-4})
+        lam_fd = np.exp(fd.x)
+
+        lam_an, converged = crit.select_lambdas(
+            y, X, roots, fam, method, 1e-8, 50)
+        assert converged
+        rel = np.abs(lam_an - lam_fd) / (np.abs(lam_fd) + 1e-300)
+        assert rel.max() < 5e-3, (method, rel)

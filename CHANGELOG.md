@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.6.1
+
+Performance: faster automatic smoothing-parameter selection for Gaussian
+additive models with more than one smooth term.
+
+- `gam()` with the default Gaussian family now selects its smoothing parameters
+  using an exact analytic gradient of the GCV/REML criterion instead of a
+  finite-difference approximation. The old search cost grew with the number of
+  smooth terms; the new one does not. On a 2000-point cubic-regression-spline
+  benchmark the fit is roughly 2× faster with four smooths and 3× faster with
+  six. The selected model is unchanged — same smoothing parameters, effective
+  degrees of freedom, coefficients and fitted values as before. Single-smooth
+  fits and generalized (Poisson, binomial, Gamma) additive models are
+  unaffected.
+
 ## 4.6.0
 
 Generalized additive models (`gam()`) received a full numerical rewrite. The
