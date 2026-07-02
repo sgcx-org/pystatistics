@@ -209,33 +209,43 @@ class GAMSolution(SolutionReprMixin):
         lines.append(f"Link function: {p.link_name}")
         lines.append("")
 
-        # Formula reconstruction
-        smooth_str = " + ".join(
-            si.term_name for si in self._smooth_infos
+        # Formula reconstruction: parametric terms first, then smooths.
+        n_param = (
+            self._smooth_infos[0].coef_indices[0]
+            if self._smooth_infos else len(p.coefficients)
         )
-        formula = f"y ~ {smooth_str}" if smooth_str else "y ~ 1"
+        if self._names:
+            param_terms = [
+                nm for nm in self._names
+                if nm.strip("()") not in ("Intercept", "intercept")
+            ]
+        else:
+            # Unnamed: report the count honestly rather than inventing names.
+            param_terms = (
+                [f"X[{i}]" for i in range(1, n_param)] if n_param > 1 else []
+            )
+        pieces = param_terms + [si.term_name for si in self._smooth_infos]
+        formula = f"y ~ {' + '.join(pieces)}" if pieces else "y ~ 1"
         lines.append(f"Formula: {formula}")
         lines.append("")
 
         # Parametric coefficients
         lines.append("Parametric coefficients:")
-        n_param = (
-            len(self._names) if self._names
-            else (self._smooth_infos[0].coef_indices[0]
-                  if self._smooth_infos else len(p.coefficients))
-        )
+        # names length is validated against the parametric block in gam();
+        # n_param always comes from the model structure, never from names.
         param_names = (
             list(self._names) if self._names
             else [f"B[{i}]" for i in range(n_param)]
         )
+        stat_label = "z" if p.dispersion_fixed else "t"
         lines.append(
             f"{'':>16s} {'Estimate':>10s} {'Std. Error':>10s} "
-            f"{'z value':>10s} {'Pr(>|z|)':>10s}"
+            f"{stat_label + ' value':>10s} {'Pr(>|' + stat_label + '|)':>10s}"
         )
 
         # Known-scale families: z reference; estimated scale: t with the
         # residual df (mgcv's summary.gam convention).
-        scale_known = p.family_name in ("binomial", "poisson")
+        scale_known = p.dispersion_fixed
         resid_df = max(p.n_obs - p.total_edf, 1.0)
         for i, name in enumerate(param_names):
             coef_val = float(p.coefficients[i])
@@ -253,11 +263,13 @@ class GAMSolution(SolutionReprMixin):
             )
         lines.append("")
 
-        # Approximate significance of smooth terms
+        # Approximate significance of smooth terms (mgcv labels the
+        # statistic Chi.sq for fixed dispersion, F when it is estimated).
         lines.append("Approximate significance of smooth terms:")
+        smooth_stat = "Chi.sq" if p.dispersion_fixed else "F"
         lines.append(
             f"{'':>16s} {'edf':>8s} {'Ref.df':>8s} "
-            f"{'Chi.sq':>10s} {'p-value':>10s}"
+            f"{smooth_stat:>10s} {'p-value':>10s}"
         )
         for si in self._smooth_infos:
             stars = significance_stars(si.p_value)
@@ -279,6 +291,12 @@ class GAMSolution(SolutionReprMixin):
             lines.append(
                 f"-REML = {p.reml_score:.4g}  "
                 f"Scale est. = {p.scale:.4g}  n = {p.n_obs}"
+            )
+        elif p.dispersion_fixed:
+            # Known scale: UBRE was the selection criterion (mgcv GCV.Cp).
+            lines.append(
+                f"UBRE = {p.ubre:.4g}  Scale est. = {p.scale:.4g}  "
+                f"n = {p.n_obs}"
             )
         else:
             lines.append(

@@ -33,7 +33,12 @@ class GAMParams:
         edf: Effective degrees of freedom per smooth term.
         total_edf: Trace of the influence matrix (parametric + smooths).
         lambdas: Selected (or user-fixed) smoothing parameters, one per
-            smooth, in the same penalty scaling mgcv reports ``sp`` in.
+            smooth. For ``cr`` smooths these are directly comparable to
+            mgcv's ``sp`` (identical penalty construction and scaling);
+            for ``tp`` smooths the *fit* is function-space identical to
+            mgcv's but the penalty parameterisation (and hence the sp
+            units) differs by the eigenbasis convention — compare tp fits
+            via EDF/fitted values, not raw sp.
         s_scales: Per-smooth ``S.scale`` penalty normalisation factors
             (divide ``lambdas`` by these to get function-space units).
         covariance: Bayesian posterior covariance of the coefficients
@@ -56,6 +61,9 @@ class GAMParams:
         n_obs: Number of observations used in fitting.
         family_name: Name of the exponential family (e.g. 'gaussian').
         link_name: Name of the link function (e.g. 'identity').
+        dispersion_fixed: True when the family's dispersion is fixed at 1
+            (binomial, poisson, negative.binomial) — controls z-vs-t and
+            Chi.sq-vs-F conventions downstream.
         converged: Whether the P-IRLS algorithm converged.
         outer_converged: Whether the smoothing-parameter search converged
             away from its bounds (always True when ``sp`` was user-fixed).
@@ -85,6 +93,7 @@ class GAMParams:
     n_obs: int
     family_name: str
     link_name: str
+    dispersion_fixed: bool
     converged: bool
     outer_converged: bool
     n_iter: int
@@ -111,10 +120,14 @@ class SmoothInfo:
         edf: Effective degrees of freedom for this term.
         ref_df: Reference degrees of freedom, ``tr(2H - HH)`` over the
             term's block (mgcv's Ref.df convention).
-        chi_sq: Approximate significance statistic
-            (``beta' pinv_r(V_beta) beta`` with rank ``r ~ Ref.df``); a
-            simplified form of mgcv's Wood (2013) test — close to, but not
-            bit-identical with, mgcv's reported statistic.
+        chi_sq: Approximate significance statistic. For fixed-dispersion
+            families this is the chi-squared-referenced quadratic form
+            ``beta' pinv(V_beta) beta``; for estimated-dispersion families
+            it is that form divided by Ref.df, i.e. an F STATISTIC (the
+            summary labels the column accordingly, matching mgcv). A
+            simplified form of mgcv's Wood (2013) test — agrees with
+            mgcv's reported statistic to ~0.2% on validated cases, not
+            bit-identical.
         p_value: Approximate p-value for the term.
         coef_indices: ``(start, end)`` slice into the full coefficient
             vector identifying this term's (constrained) coefficients.

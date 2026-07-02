@@ -51,17 +51,17 @@ def smooth_term_test(
         than a division by zero.
     """
     r_df = max(float(ref_df), float(edf), 1e-8)
-    # Rank-truncated pseudo-inverse of the covariance block at r ~ Ref.df.
+    # Full pseudo-inverse quadratic form beta' V^+ beta. (A Ref.df-rank
+    # TRUNCATION of V's largest eigenvalues understates the statistic
+    # badly for tp smooths — the signal partly lives in well-determined,
+    # small-variance directions; panel-verified 14x too small. The full
+    # pinv matches mgcv's reported F on cr and tp to ~0.2%.)
     ev, U = np.linalg.eigh(0.5 * (V_block + V_block.T))
-    rank = int(min(np.ceil(r_df), ev.shape[0]))
-    order = np.argsort(ev)[::-1][:rank]
-    ev_r = ev[order]
-    keep = ev_r > (ev_r.max() * 1e-12 if ev_r.size and ev_r.max() > 0 else 0)
+    keep = ev > (ev.max() * 1e-10 if ev.size and ev.max() > 0 else np.inf)
     if not np.any(keep):
         return 0.0, 1.0
-    U_r = U[:, order][:, keep]
-    proj = U_r.T @ beta_block
-    stat = float(proj @ (proj / ev_r[keep]))
+    proj = U[:, keep].T @ beta_block
+    stat = float(proj @ (proj / ev[keep]))
 
     if scale_known:
         p = float(sp_stats.chi2.sf(stat, df=r_df))

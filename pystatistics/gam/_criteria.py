@@ -83,9 +83,13 @@ def reml_score(
             this implementation does not — use ``method='GCV'``).
     """
     n = y.shape[0]
-    p = fit.R.shape[0]
+    # Use the NUMERICAL rank throughout: on a rank-deficient design the
+    # dropped columns are out of the model (coefficients pinned at zero),
+    # so both the null-space dimension and the phi-corrections must count
+    # fit.rank coordinates, consistently with logdet_penalized's rank block.
+    p = fit.rank
     rank_s = sum(r.rank for r in roots)
-    m_p = p - rank_s
+    m_p = max(p - rank_s, 0)
     logdet_a = logdet_penalized(fit.R, fit.rank)
     logdet_s = float(sum(
         r.rank * np.log(lam) + r.logdet_pos
@@ -126,16 +130,29 @@ def estimate_scale(
     family: Family,
     edf: float,
 ) -> float:
-    """Dispersion estimate matching mgcv's ``sig2`` conventions."""
+    """Dispersion estimate matching mgcv's ``sig2`` conventions.
+
+    Gaussian-identity: RSS/(n - edf). Fixed-dispersion families: 1.
+    Other free-dispersion families (Gamma, ...): the Fletcher (2012)
+    dispersion estimator — mgcv's default ``scale.est`` for gam — which
+    divides the Pearson estimate by ``1 + mean(s)`` with
+    ``s_i = V'(mu_i) (y_i - mu_i) / V(mu_i)``.
+    """
     n = y.shape[0]
     if family.dispersion_is_fixed:
         return 1.0
     if _is_gauss_identity(family):
         return fit.deviance / max(n - edf, 1.0)
-    # Free dispersion, non-gaussian link: Pearson estimator (mgcv).
-    var = np.maximum(family.variance(fit.mu), 1e-300)
-    pearson = float(np.sum((y - fit.mu) ** 2 / var))
-    return pearson / max(n - edf, 1.0)
+    mu = fit.mu
+    var = np.maximum(family.variance(mu), 1e-300)
+    pearson = float(np.sum((y - mu) ** 2 / var)) / max(n - edf, 1.0)
+    # V'(mu) by centred finite difference on the family's variance
+    # function (exact for the polynomial variance functions in use;
+    # h scaled to mu to stay in-domain).
+    h = 1e-6 * np.maximum(np.abs(mu), 1e-6)
+    v_prime = (family.variance(mu + h) - family.variance(mu - h)) / (2 * h)
+    s_bar = float(np.mean(v_prime * (y - mu) / var))
+    return pearson / (1.0 + s_bar)
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +211,18 @@ def select_lambdas(
     # Warm start: nearby lambdas need ~2 PIRLS steps from the previous
     # evaluation's mu instead of ~6 from family.initialize.
     warm: dict[str, Any] = {"mu": None}
+    # The finite-difference gradient reads the criterion through the inner
+    # P-IRLS convergence noise; at the user tol (1e-8) that noise floor
+    # hides the gradient on flat GCV surfaces (e.g. Gamma-log) and stalls
+    # the search short of the optimum. Selection-time evaluations therefore
+    # run tighter — warm starts make the extra iterations cheap. The FINAL
+    # fit still honours the user's tol.
+    tol_inner = min(tol, 1e-12)
 
     def objective(log_lam: NDArray[np.floating[Any]]) -> float:
         lam = np.exp(np.asarray(log_lam, dtype=np.float64))
         fit = fit_fixed_lambda(
-            y, X, roots, lam, family, tol, max_iter,
+            y, X, roots, lam, family, tol_inner, max_iter,
             smooth_names=smooth_names, gaussian_cache=gauss_cache,
             mu_start=warm["mu"],
         )
@@ -225,29 +249,58 @@ def select_lambdas(
     bounds = [
         (lo - _BOUND_HALF_WIDTH, lo + _BOUND_HALF_WIDTH) for lo in log_lam0
     ]
-    # eps: the FD step must sit well above the inner P-IRLS convergence
-    # noise floor (~tol relative on the criterion) or the quasi-Newton
-    # gradients are noise. 1e-6 in log-lambda space clears a 1e-8 inner tol
-    # by ~two orders while staying far below the criterion's O(1) curvature
-    # scale. (Gaussian-identity fits are exact solves — no noise floor.)
+
+    # Scale-invariance: GCV scales as c^2 under y -> c*y, and L-BFGS-B's
+    # ftol/gtol tests are keyed to the ABSOLUTE objective/gradient
+    # magnitude — un-normalized, a small-magnitude response terminates the
+    # search immediately and silently selects a different smoothness than
+    # the same data in different units (panel-verified). Normalize by the
+    # objective at the starting point so the same fit is selected at every
+    # response scale.
+    f0 = objective(log_lam0)
+    ref = max(abs(f0), 1e-300)
+
+    def objective_scaled(log_lam: NDArray[np.floating[Any]]) -> float:
+        return objective(log_lam) / ref
+
+    # eps: the FD step must sit WELL above the inner P-IRLS convergence
+    # noise floor or the quasi-Newton curvature estimate is built from
+    # noise and the line search collapses short of the optimum (observed
+    # on the flat Gamma-log GCV surface: effective evaluation noise
+    # ~1e-9 relative even at tol_inner=1e-12, so eps=1e-6 gave gradient
+    # noise the SAME size as the true gradient). eps=1e-4 keeps gradient
+    # noise ~1e-5 while the induced position error (~eps/2 in log-lambda)
+    # is a ~0.005% sp perturbation — far inside the optimizer tolerance
+    # tier of the validation contract.
     result = minimize(
-        objective,
+        objective_scaled,
         log_lam0,
         method="L-BFGS-B",
         bounds=bounds,
-        options={"maxiter": 200, "ftol": 1e-10, "gtol": 1e-7, "eps": 1e-6},
+        options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9, "eps": 1e-4},
     )
 
-    at_bound = any(
-        abs(v - lo) < 1e-6 or abs(v - hi) < 1e-6
-        for v, (lo, hi) in zip(result.x, bounds)
+    # A coordinate sitting ON a search bound is fine when the criterion has
+    # asymptoted there (|gradient| small): lambda -> inf is the CORRECT
+    # optimum for a null smooth (edf at its null-space floor; mgcv reports
+    # the same fit), and lambda -> 0 the near-interpolation limit. Only "at
+    # the bound while the gradient still pushes outward" is a failure.
+    jac = (
+        np.abs(np.asarray(result.jac))
+        if result.jac is not None
+        else np.full(len(bounds), np.inf)
+    )
+    at_bound_unconverged = any(
+        (abs(v - lo) < 1e-6 or abs(v - hi) < 1e-6) and g > 1e-4
+        for v, g, (lo, hi) in zip(result.x, jac, bounds)
     )
     # L-BFGS-B can end with success=False (ABNORMAL_..._LNSRCH) when the
     # line search bottoms out on the finite-difference noise floor AFTER
-    # reaching the minimum; a small projected gradient means converged.
-    grad_small = (
-        result.jac is not None
-        and np.max(np.abs(np.asarray(result.jac))) < 1e-2
+    # reaching the minimum; a small normalized projected gradient means
+    # converged. (FD noise in normalized units is ~2*tol/eps ~ 2e-2 worst
+    # case for non-Gaussian fits, hence the 5e-2 threshold.)
+    grad_small = bool(np.max(jac) < 5e-2)
+    outer_converged = (
+        (bool(result.success) or grad_small) and not at_bound_unconverged
     )
-    outer_converged = (bool(result.success) or grad_small) and not at_bound
     return np.exp(result.x), outer_converged

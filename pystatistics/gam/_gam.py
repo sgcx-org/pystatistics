@@ -156,6 +156,13 @@ def gam(
         X_param = np.ones((n, 1), dtype=np.float64)
     parametric_cols = X_param.shape[1]
 
+    if names is not None and len(names) != parametric_cols:
+        raise ValidationError(
+            f"names has {len(names)} entries but the parametric design has "
+            f"{parametric_cols} column(s); they must match (smooth-term "
+            f"coefficients are not named)"
+        )
+
     n_smooths = len(smooths)
     sp_arr: NDArray | None = None
     if sp is not None:
@@ -290,6 +297,7 @@ def gam(
         n_obs=n,
         family_name=fam.name,
         link_name=fam.link.name,
+        dispersion_fixed=bool(fam.dispersion_is_fixed),
         converged=fit.converged,
         outer_converged=outer_converged,
         n_iter=fit.n_iter,

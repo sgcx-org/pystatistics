@@ -400,6 +400,32 @@ class TestValidation:
         with pytest.raises(ValidationError, match="unique"):
             gam(y, smooths=[s("x", k=10)], smooth_data={"x": x})
 
+    def test_names_length_mismatch_raises(self, sine_data):
+        """REGRESSION (review finding): wrong-length names silently
+        mislabelled smooth coefficients as parametric terms."""
+        x, y, _ = sine_data
+        X = np.column_stack([np.ones_like(x), x])
+        with pytest.raises(ValidationError, match="names"):
+            gam(y, X, smooths=[s("x")], smooth_data={"x": x},
+                names=["a", "b", "c", "d"])
+        with pytest.raises(ValidationError, match="names"):
+            gam(y, X, smooths=[s("x")], smooth_data={"x": x},
+                names=["only_a"])
+
+    def test_gcv_selection_scale_invariant(self):
+        """REGRESSION (review finding): GCV termination was keyed to the
+        absolute criterion magnitude, so y in different units silently
+        selected different smoothness."""
+        rng = np.random.default_rng(203)
+        n = 104
+        x = np.sort(rng.uniform(0, 1, n))
+        y = np.sin(3 * x) + 0.3 * rng.normal(size=n)
+        base = gam(y, smooths=[s("x", k=4, bs="tp")], smooth_data={"x": x})
+        for c in (1e-3, 1e-2, 1e6):
+            other = gam(y * c, smooths=[s("x", k=4, bs="tp")],
+                        smooth_data={"x": x})
+            assert other.total_edf == pytest.approx(base.total_edf, abs=1e-6)
+
     def test_duplicated_smooth_variable_warns_rank(self, sine_data):
         """Perfect concurvity: the same variable smoothed twice."""
         x, y, _ = sine_data
@@ -453,6 +479,25 @@ class TestSummary:
         x, y, _ = sine_data
         sol = gam(y, smooths=[s("x")], smooth_data={"x": x}, method="REML")
         assert "-REML" in sol.summary()
+
+    def test_summary_labels_follow_dispersion(self, sine_data):
+        """Estimated scale -> F + t; known scale -> Chi.sq + z + UBRE."""
+        x, y, _ = sine_data
+        txt = gam(y, smooths=[s("x")], smooth_data={"x": x}).summary()
+        assert " F" in txt and "t value" in txt and "Chi.sq" not in txt
+        rng = np.random.default_rng(4)
+        yp = rng.poisson(np.exp(1.0 + np.sin(3 * x))).astype(float)
+        txtp = gam(yp, smooths=[s("x")], smooth_data={"x": x},
+                   family="poisson").summary()
+        assert "Chi.sq" in txtp and "z value" in txtp and "UBRE" in txtp
+
+    def test_summary_formula_includes_parametric(self, sine_data):
+        """REGRESSION (review finding): parametric-only fits printed
+        'y ~ 1' while the table showed covariates."""
+        x, y, _ = sine_data
+        X = np.column_stack([np.ones_like(x), x, x ** 2])
+        txt = gam(y, X, names=["(Intercept)", "x", "x2"]).summary()
+        assert "y ~ x + x2" in txt
 
     def test_smooth_info_fields(self, sine_data):
         x, y, _ = sine_data

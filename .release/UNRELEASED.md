@@ -105,3 +105,35 @@
   p-space from one cached QR (O(p³) per evaluation instead of O(np²));
   non-Gaussian fits warm-start from the previous λ-evaluation's fit. mcycle
   free-GCV fit: 6 ms; 4-smooth gamSim (n=400): 24 ms.
+- **Fixed (adversarial review of the rewrite): GCV/UBRE selection is now
+  scale-invariant.** The outer optimizer's termination tests were keyed to
+  the absolute criterion magnitude (GCV scales as c² under y→c·y), so the
+  same data in different units silently selected different smoothness
+  (measured: EDF 4.00/2.19/3.77 for y×{1, 0.01, 1e6}; mgcv is invariant at
+  3.77). The criterion is now normalised by its value at the starting point
+  and the finite-difference step sized above the inner-P-IRLS noise floor;
+  the selected EDF is bit-identical across response scales and equals
+  mgcv's. Also fixes a stall-short-of-optimum on very flat GCV surfaces
+  (Gamma log-link: selected GCV now matches mgcv's to 7 digits).
+- **Fixed (review): `names` with the wrong length silently mislabelled
+  smooth coefficients as parametric terms** in `summary()` (or silently
+  dropped genuine parametric rows). `gam()` now raises `ValidationError`
+  when `len(names)` differs from the parametric column count.
+- **Fixed (review): smooth-term significance statistics for `tp` smooths
+  were understated up to ~14×** (a Ref.df-rank truncation of the covariance
+  pseudo-inverse discarded well-determined directions). The full
+  pseudo-inverse quadratic form now matches mgcv's reported F/Chi.sq to
+  ~0.2% on validated cases.
+- **Fixed (review): dispersion estimate for free-dispersion non-Gaussian
+  families (Gamma) now uses the Fletcher (2012) estimator** — mgcv's
+  default — instead of plain Pearson/(n−edf); matches mgcv `sig2` exactly
+  on the validated case (SEs previously ~1–2% off).
+- **Fixed (review): REML on rank-deficient designs mixed the full column
+  count with the numerical rank** (inconsistent φ-corrections and inflated
+  null-space dimension); all REML bookkeeping now uses the numerical rank.
+- **Fixed (review, summary output):** the summary now labels the smooth
+  statistic `F` (estimated scale) vs `Chi.sq` (known scale) and the
+  parametric statistic `t` vs `z`, driven by the family's dispersion flag
+  (negative-binomial was previously mis-branched by a name check); the
+  Formula line includes parametric terms instead of printing `y ~ 1`; the
+  footer reports `UBRE` for known-scale selection.

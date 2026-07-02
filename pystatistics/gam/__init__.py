@@ -6,13 +6,14 @@ penalized regression spline GAMs following Wood (2017).
 
 Usage::
 
-    from pystatistics.gam import s
+    from pystatistics.gam import gam, s
 
-    # Declare smooth terms
-    smooths = [s('x1', k=15), s('x2', bs='tp')]
-
-The fitting function ``gam()`` and ``GAMSolution`` will be added
-by the fitting module and appended to this file's exports.
+    sol = gam(
+        y,
+        smooths=[s('x1', k=15), s('x2', bs='tp')],
+        smooth_data={'x1': x1, 'x2': x2},
+    )
+    print(sol.summary())
 """
 
 from pystatistics.gam._common import GAMParams, SmoothInfo
