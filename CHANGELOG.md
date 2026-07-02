@@ -1,5 +1,54 @@
 # Changelog
 
+## 4.6.0
+
+Generalized additive models (`gam()`) received a full numerical rewrite. The
+previous implementation could select an essentially arbitrary amount of
+smoothing and report impossible diagnostics; results now match R's `mgcv::gam`.
+
+- **Automatic smoothing-parameter selection is fixed.** Smooth terms had no
+  identifiability constraint, which made the fitting problem singular and its
+  effective-degrees-of-freedom (EDF) computation unstable — so the GCV/REML
+  criterion the smoothing search minimizes was corrupted and the fit could
+  over- or under-smooth badly (and occasionally report a negative total EDF).
+  Every smooth is now centered exactly as `mgcv` does and the model is fit by a
+  stable QR method. Selected smoothing parameters, per-smooth and total EDF, the
+  GCV/REML score, deviance, AIC, coefficients, fitted values and standard errors
+  now agree with `mgcv::gam` (selected smoothing parameters to 4–5 significant
+  figures; criterion scores to ~7 figures on the same fit).
+- **Thin-plate smooths (`bs='tp'`) now behave correctly.** They previously
+  discarded their linear part, so a `tp` smooth could not represent a straight
+  line (a linear trend was fit as flat). The basis is now the standard
+  thin-plate regression spline with its null space retained, and large datasets
+  are handled by capping the number of knots at 2000 (as `mgcv` does) instead of
+  an expensive full-data eigendecomposition.
+- **Smoothing-parameter selection is invariant to the units of the response.**
+  The same data expressed in different units now selects the same amount of
+  smoothing.
+- **Standard errors are real.** Coefficient standard errors and the summary
+  significance tables were previously placeholders; they are now computed from
+  the Bayesian posterior covariance (`mgcv`'s `Vp`), and `summary()` labels the
+  statistics (`F`/`Chi.sq`, `t`/`z`) and reports the selection criterion
+  according to the family, matching `mgcv::summary.gam`.
+- **`method='REML'` is a correct Laplace REML criterion.** The previous
+  "simplified" REML was replaced; REML fits now match `mgcv`'s REML selection.
+  REML for free-dispersion families other than Gaussian (e.g. Gamma) raises a
+  clear error directing you to `method='GCV'`.
+- **New:** `gam(..., sp=[...])` fixes the smoothing parameters (skipping
+  selection); `GAMSolution` gains `.lambdas`, `.se`, `.covariance`, `.ubre`,
+  `.reml_score` and `.outer_converged`. A smooth declared with `k` basis
+  functions now contributes `k − 1` coefficients after centering, exactly as
+  `mgcv`.
+- **More honest failure behavior:** complete separation in a binomial GAM now
+  produces a warning and a finite fit instead of failing internally;
+  rank-deficient designs (concurvity, over-specified `k`) are detected and warned
+  about rather than silently regularized; `k` larger than the number of distinct
+  predictor values is rejected up front.
+- **Removed:** the experimental GPU backend for `gam()` (the `backend=`
+  argument). Its single-precision path could return silently wrong results and
+  its double-precision path was slower than the CPU on the hardware tested; GAM
+  fitting is CPU-only. Passing `backend=` now raises `TypeError`.
+
 ## 4.5.7
 
 - **`lmm()` fits correlated random-slope models faster.** The variance-parameter

@@ -371,6 +371,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.0 — generalized additive models rewritten to match `mgcv`
+
+`gam()` received a full numerical rewrite. Automatic smoothing-parameter
+selection is fixed (the previous version could over- or under-smooth badly and
+report impossible diagnostics), thin-plate smooths now represent linear trends
+correctly, standard errors and REML are real, and results agree with R's
+`mgcv::gam`. New: fix the smoothing parameters with `gam(..., sp=[...])`, and
+read `.lambdas`, `.se`, and `.covariance` off the result. The experimental GPU
+backend for `gam()` was removed — GAM fitting is CPU-only.
+
 ### 4.5.7 — faster random-slope LMMs
 
 `lmm()` now optimizes the variance parameters with an exact analytic gradient
