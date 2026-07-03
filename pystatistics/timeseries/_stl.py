@@ -237,6 +237,9 @@ def _resolve_config(
 ) -> tuple[dict, bool]:
     """Validate every STL parameter and fill R's defaults. See stl()."""
     periodic = False
+    if seasonal_window is None:
+        # None means "use the default", as for every other window param.
+        seasonal_window = "periodic"
     if isinstance(seasonal_window, str):
         if seasonal_window != "periodic":
             raise ValidationError(
@@ -314,7 +317,7 @@ def stl(
     x: ArrayLike,
     period: int,
     *,
-    seasonal_window: int | str = "periodic",
+    seasonal_window: int | str | None = "periodic",
     seasonal_degree: int = 0,
     trend_window: int | None = None,
     trend_degree: int = 1,
@@ -343,11 +346,12 @@ def stl(
         Time series (1-D, finite). Length must exceed ``2 * period``.
     period : int
         Seasonal period (>= 2), e.g. 12 for monthly data.
-    seasonal_window : int or "periodic"
+    seasonal_window : int, "periodic", or None
         Loess span for cycle-subseries smoothing (odd, >= 3), or
         ``"periodic"`` for an exactly periodic seasonal (equivalent to a
         span of ``10*n + 1`` with degree 0, followed by cycle-position
-        averaging). Default ``"periodic"``. R: ``s.window``.
+        averaging). Default ``"periodic"``; ``None`` also selects the
+        default, as for every other window parameter. R: ``s.window``.
     seasonal_degree : int
         Loess degree (0 or 1) for the seasonal smoother. Default 0,
         matching R. Must be 0 when ``seasonal_window="periodic"``.

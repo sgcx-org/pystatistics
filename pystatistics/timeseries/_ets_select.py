@@ -12,7 +12,9 @@ default) is returned, with the full candidate table disclosed on
 ``solution.info["selection"]``.
 
 The candidate set mirrors ``forecast::ets`` with its defaults
-(``restrict=TRUE``, ``allow.multiplicative.trend=FALSE``):
+(``restrict=TRUE``, ``allow.multiplicative.trend=FALSE``), enumerated in
+R's loop order (error, then trend type, then season, with the damped
+variant innermost):
 
 * error ``Z`` expands to {A, M}; trend ``Z`` to {N, A, Ad}; season ``Z``
   to {N, A, M};
@@ -22,9 +24,14 @@ The candidate set mirrors ``forecast::ets`` with its defaults
 * multiplicative-error candidates are dropped when the data are not
   strictly positive (an *explicitly requested* M error/season on such
   data raises instead — fail loud);
-* seasonal candidates are dropped when ``period == 1``, when
-  ``n <= period``, or when ``period > 24`` (as in R, which warns for
-  ``Z`` and stops for an explicit seasonal letter);
+* a ``Z`` season collapses to ``N`` when ``period == 1``, when
+  ``n <= period``, or when ``period > 24`` (as in R, which warns in the
+  last case — the warning is preserved on the solution);
+* an *explicit* seasonal letter with ``period == 1`` or ``period > 24``
+  raises, as R stops ("Nonseasonal data" / "Frequency too high").  For
+  ``n <= period`` R silently coerces an explicit seasonal letter to
+  non-seasonal; PyStatistics instead lets those seasonal candidates fail
+  their data requirements loudly (deliberate fail-loud divergence);
 * candidates whose fit fails are skipped and recorded (R silently
   assigns them infinite IC).
 
@@ -36,7 +43,9 @@ Deliberate divergences from ``forecast::ets`` (documented, fail-loud):
   ``damped=None`` *with* a ``"Z"`` string.
 * R falls back to unoptimised Holt-Winters fits for very short series
   (``n <= npars + 4``); PyStatistics raises instead of silently swapping
-  estimators.
+  estimators.  In particular the default ``ets(y)`` needs ``n >= 5`` for
+  AICc-based selection (the smallest candidate has k = 3 parameters and
+  AICc requires ``n > k + 1``); shorter series raise with a remedy.
 * Reported log-likelihood/AIC use the full-Gaussian convention (see
   ``_ets_fit.py``); model *rankings* are identical to R's.
 
@@ -66,7 +75,7 @@ from pystatistics.core.exceptions import (
     PyStatisticsError,
     ValidationError,
 )
-from pystatistics.core.validation import check_array, check_1d, check_finite
+from pystatistics.core.validation import check_array, check_finite
 from pystatistics.timeseries._ets_fit import ETSSolution, fit_ets_model
 
 _WILDCARD_RE = re.compile(
@@ -101,67 +110,59 @@ def _parse_letters(model: str) -> tuple[str, str, str]:
     return error, trend, season
 
 
-def _trend_candidates(trend: str, damped: bool | None) -> list[str]:
-    """
-    Concrete trend letters for one requested trend component.
+def _check_period(period: object) -> int:
+    """Periods are non-bool integers >= 1 (fail loud on floats/strings)."""
+    if isinstance(period, bool) or not isinstance(period, (int, np.integer)):
+        raise ValidationError(
+            f"period: expected integer, got {type(period).__name__}"
+        )
+    if period < 1:
+        raise ValidationError(f"period: must be >= 1, got {period}")
+    return int(period)
 
-    Enumeration order mirrors forecast::ets's loops (damped variants
-    first within each trend type), which also fixes tie-breaking.
+
+def _trend_options(
+    trend: str, damped: bool | None
+) -> list[tuple[str, list[bool]]]:
+    """
+    ``(trend_type, damped_flags)`` pairs for one requested trend component.
+
+    The pairs — and the flags within each pair — are ordered exactly as
+    forecast::ets's selection loops visit them (trend types outer, the
+    damped variant first within each type), which also fixes tie-breaks.
     """
     if trend == "Z":
-        options = {"N": ["N"], "A": ["Ad", "A"]}
         if damped is None:
-            return options["N"] + options["A"]
-        return ["Ad"] if damped else ["N", "A"]
+            return [("N", [False]), ("A", [True, False])]
+        return [("A", [True])] if damped else [("N", [False]), ("A", [False])]
     if trend == "N":
-        # damped=True with trend 'N' is rejected by the engine.
-        return ["N"]
+        if damped:
+            raise ValidationError(
+                "damped=True requires a trend component (model has trend='N')"
+            )
+        return [("N", [False])]
     if trend == "A":
         if damped is None:
-            return ["Ad", "A"]
-        return ["Ad"] if damped else ["A"]
+            return [("A", [True, False])]
+        return [("A", [True])] if damped else [("A", [False])]
     # trend == "Ad": explicitly damped in the string
     if damped is False:
         raise ValidationError(
             "damped: model specifies a damped trend ('Ad') but damped=False"
         )
-    return ["Ad"]
+    return [("A", [True])]
 
 
-def _season_candidates(
-    season: str,
-    period: int,
-    n_obs: int,
-    data_positive: bool,
+def _season_wildcard(
+    period: int, n_obs: int
 ) -> tuple[list[str], list[str]]:
     """
-    Concrete season letters plus any warnings, honouring R's limits.
+    Expand a ``Z`` season, honouring R's limits (see module docstring).
 
-    Explicit requests that cannot be honoured raise; ``Z`` requests
-    quietly narrow the candidate set exactly as forecast::ets does
-    (with its warning for period > 24 preserved).
+    Explicit seasonal letters are validated in :func:`ets` before the
+    candidate enumeration; this handles only the wildcard collapse rules.
     """
     warnings: list[str] = []
-    if season in ("A", "M"):
-        if period < 2:
-            raise ValidationError(
-                f"model: seasonal component {season!r} requires period >= 2, "
-                f"got period={period}"
-            )
-        if period > _MAX_SEASONAL_PERIOD:
-            raise ValidationError(
-                f"period: seasonal ETS supports period <= "
-                f"{_MAX_SEASONAL_PERIOD}, got {period} (matching R "
-                "forecast::ets's 'Frequency too high' limit)"
-            )
-        if season == "M" and not data_positive:
-            raise ValidationError(
-                "model: multiplicative season requires strictly positive data"
-            )
-        return [season], warnings
-    if season == "N":
-        return ["N"], warnings
-    # season == "Z"
     if period < 2 or n_obs <= period:
         return ["N"], warnings
     if period > _MAX_SEASONAL_PERIOD:
@@ -172,6 +173,22 @@ def _season_candidates(
         )
         return ["N"], warnings
     return ["N", "A", "M"], warnings
+
+
+def _validate_series(y: ArrayLike) -> np.ndarray:
+    """Boundary validation shared by both paths: 1-D, finite, n >= 3."""
+    arr = check_array(y, "y")
+    if sum(1 for size in arr.shape if size > 1) > 1:
+        raise ValidationError(
+            f"y: expected a 1-D series, got shape {arr.shape}"
+        )
+    y_arr = arr.ravel()
+    check_finite(y_arr, "y")
+    if len(y_arr) < 3:
+        raise ValidationError(
+            f"y: requires at least 3 observations, got {len(y_arr)}"
+        )
+    return y_arr
 
 
 def ets(
@@ -209,16 +226,19 @@ def ets(
         ``'ZZN'``.
     period : int
         Seasonal period (e.g. 12 for monthly, 4 for quarterly).
+        Seasonal models require ``2 <= period <= 24``.
     damped : bool or None
         Damped-trend control. With a concrete model string it forces or
         forbids damping; with a ``'Z'`` trend, ``None`` means both damped
         and undamped candidates are tried, ``True``/``False`` restricts
-        the candidate set accordingly.
+        the candidate set accordingly. ``damped=True`` with a trend fixed
+        to ``'N'`` raises (R: "Forbidden model combination").
     alpha, beta, gamma, phi : float or None
         Fix specific smoothing parameters (applies to every candidate).
     ic : str
         Selection criterion for wildcard models: ``'aicc'`` (default,
-        matching forecast::ets), ``'aic'``, or ``'bic'``.
+        matching forecast::ets), ``'aic'``, or ``'bic'``. AICc-based
+        selection needs ``n >= 5`` (see module docstring).
     tol : float
         Convergence tolerance for the optimiser.
     max_iter : int
@@ -235,28 +255,45 @@ def ets(
     Raises
     ------
     ValidationError
-        On invalid inputs, or an explicitly requested component that
+        On invalid inputs; on an explicitly requested component that
         cannot be honoured (e.g. multiplicative error on non-positive
-        data, seasonal component with ``period`` of 1 or > 24).
+        data, a seasonal letter with ``period`` of 1 or > 24,
+        ``damped=True`` with trend ``'N'``); when no candidate is
+        admissible; or when no candidate has a finite *ic* (series too
+        short for AICc).
     ConvergenceError
-        If no candidate model could be fitted.
+        If candidates were attempted but none could be fitted.
     """
     if ic not in _VALID_IC:
         raise ValidationError(f"ic: must be one of {_VALID_IC}, got {ic!r}")
 
     error, trend, season = _parse_letters(model)
+    period = _check_period(period)
+
+    # Explicit seasonal letters share R's hard limits on both paths.
+    if season in ("A", "M"):
+        if period < 2:
+            raise ValidationError(
+                f"model: seasonal component {season!r} requires "
+                f"period >= 2, got period={period}"
+            )
+        if period > _MAX_SEASONAL_PERIOD:
+            raise ValidationError(
+                f"period: seasonal ETS supports period <= "
+                f"{_MAX_SEASONAL_PERIOD}, got {period} (matching R "
+                "forecast::ets's 'Frequency too high' limit)"
+            )
+
+    y_arr = _validate_series(y)
 
     if "Z" not in (error, trend[0], season):
         # Fully specified: fit exactly what was asked (documented
         # divergence: R with damped=NULL would also try the damped twin).
         return fit_ets_model(
-            y, model=model, period=period, damped=damped, alpha=alpha,
+            y_arr, model=model, period=period, damped=damped, alpha=alpha,
             beta=beta, gamma=gamma, phi=phi, tol=tol, max_iter=max_iter,
         )
 
-    y_arr = check_array(y, "y").ravel()
-    check_1d(y_arr, "y")
-    check_finite(y_arr, "y")
     n_obs = len(y_arr)
     data_positive = bool(np.min(y_arr) > 0.0)
 
@@ -264,17 +301,23 @@ def ets(
         raise ValidationError(
             "model: multiplicative error requires strictly positive data"
         )
+    if season == "M" and not data_positive:
+        raise ValidationError(
+            "model: multiplicative season requires strictly positive data"
+        )
 
     error_letters = ["A", "M"] if error == "Z" else [error]
-    trend_letters = _trend_candidates(trend, damped)
-    season_letters, sel_warnings = _season_candidates(
-        season, period, n_obs, data_positive,
-    )
+    trend_options = _trend_options(trend, damped)
+    if season == "Z":
+        season_letters, sel_warnings = _season_wildcard(period, n_obs)
+    else:
+        season_letters, sel_warnings = [season], []
 
     skipped: list[dict] = []
     candidates: list[dict] = []
     best: ETSSolution | None = None
     best_ic = np.inf
+    attempted_failure = False
     for err in error_letters:
         if err == "M" and not data_positive:
             skipped.append({
@@ -283,40 +326,60 @@ def ets(
                           "positive data",
             })
             continue
-        for trd in trend_letters:
+        for trend_type, damped_flags in trend_options:
             for sea in season_letters:
-                name = f"{err}{trd}{sea}"
-                if err == "A" and sea == "M":
-                    skipped.append({
-                        "model": name,
-                        "reason": "additive error with multiplicative "
-                                  "season is excluded (forecast::ets "
-                                  "restrict=TRUE)",
-                    })
-                    continue
-                try:
-                    fit = fit_ets_model(
-                        y_arr, model=name, period=period, alpha=alpha,
-                        beta=beta, gamma=gamma, phi=phi, tol=tol,
-                        max_iter=max_iter,
-                    )
-                except PyStatisticsError as exc:
-                    skipped.append({"model": name, "reason": str(exc)})
-                    continue
-                ic_value = {"aic": fit.aic, "aicc": fit.aicc,
-                            "bic": fit.bic}[ic]
-                candidates.append({"model": fit.spec.name, ic: ic_value})
-                if np.isfinite(ic_value) and ic_value < best_ic:
-                    best = fit
-                    best_ic = ic_value
+                for is_damped in damped_flags:
+                    trd = "Ad" if is_damped else trend_type
+                    name = f"{err}{trd}{sea}"
+                    if err == "A" and sea == "M":
+                        skipped.append({
+                            "model": name,
+                            "reason": "additive error with multiplicative "
+                                      "season is excluded (forecast::ets "
+                                      "restrict=TRUE)",
+                        })
+                        continue
+                    try:
+                        fit = fit_ets_model(
+                            y_arr, model=name, period=period, alpha=alpha,
+                            beta=beta, gamma=gamma, phi=phi, tol=tol,
+                            max_iter=max_iter,
+                        )
+                    except PyStatisticsError as exc:
+                        skipped.append({"model": name, "reason": str(exc)})
+                        if isinstance(exc, ConvergenceError):
+                            attempted_failure = True
+                        continue
+                    ic_value = {"aic": fit.aic, "aicc": fit.aicc,
+                                "bic": fit.bic}[ic]
+                    candidates.append({"model": fit.spec.name, ic: ic_value})
+                    if np.isfinite(ic_value) and ic_value < best_ic:
+                        best = fit
+                        best_ic = ic_value
 
     if best is None:
-        raise ConvergenceError(
-            f"ets: no candidate model could be fitted for model={model!r} "
-            f"(period={period}, n={n_obs}). Skipped: "
-            + "; ".join(f"{s['model']}: {s['reason']}" for s in skipped),
-            iterations=0,
-            reason="no_fittable_candidate",
+        if candidates:
+            # Fits succeeded but every criterion value is non-finite
+            # (AICc is infinite whenever n <= k + 1).
+            raise ValidationError(
+                f"ets: all {len(candidates)} admissible candidates fitted "
+                f"but none has a finite {ic} (n={n_obs} is too small for "
+                f"{ic}-based selection; the smallest candidate needs "
+                "n >= 5). Fit a concrete model (e.g. model='ANN') or "
+                "select with ic='aic' or ic='bic'."
+            )
+        detail = "; ".join(f"{s['model']}: {s['reason']}" for s in skipped)
+        if attempted_failure:
+            raise ConvergenceError(
+                f"ets: no candidate model could be fitted for "
+                f"model={model!r} (period={period}, n={n_obs}). "
+                f"Skipped: {detail}",
+                iterations=0,
+                reason="no_fittable_candidate",
+            )
+        raise ValidationError(
+            f"ets: no admissible candidate for model={model!r} "
+            f"(period={period}, n={n_obs}). Skipped: {detail}"
         )
 
     selection = {

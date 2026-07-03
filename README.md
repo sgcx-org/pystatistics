@@ -371,6 +371,22 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.2 — STL matches R exactly; ETS automatic model selection
+
+`stl()` was rewritten after validation showed it leaking trend into the
+seasonal component on trending series (on the monthly CO2 benchmark the old
+"seasonal" had a range of ~83 where the truth is ~6). It is now an exact
+implementation of the STL procedure and reproduces R's `stats::stl`
+component-for-component (differences below 1e-10 across a reference suite
+including robust fits), with the full STL parameter set exposed
+(`seasonal_degree`, `trend_degree`, `lowpass_window`, jumps, and a
+`"periodic"` default seasonal window). `ets()` now auto-selects its model
+like `forecast::ets`: the new default `model="ZZZ"` tries every admissible
+error/trend/season combination and returns the best by AICc, with the full
+candidate table disclosed on the result; explicit component requests that
+cannot be honoured raise instead of being silently adjusted. `ndiffs()` now
+defaults to the KPSS test, matching `forecast::ndiffs`.
+
 ### 4.6.1 — faster multi-smooth Gaussian GAMs
 
 `gam()` with the default Gaussian family now selects its smoothing parameters

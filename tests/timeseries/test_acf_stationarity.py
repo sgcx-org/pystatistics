@@ -336,10 +336,25 @@ class TestNdiffs:
         d = ndiffs(white_noise, test="kpss")
         assert d == 0
 
-    def test_default_test_is_kpss(self, white_noise, random_walk):
+    def test_default_test_is_kpss_in_signature(self):
         """The default test is KPSS, matching R forecast::ndiffs."""
-        assert ndiffs(white_noise) == ndiffs(white_noise, test="kpss")
-        assert ndiffs(random_walk) == ndiffs(random_walk, test="kpss")
+        import inspect
+        assert inspect.signature(ndiffs).parameters["test"].default == "kpss"
+
+    def test_default_follows_kpss_where_tests_disagree(self):
+        """On a short persistent-but-stationary AR(1), ADF (low power)
+        wants differencing while KPSS does not; the default must side
+        with KPSS, proving the default actually changed."""
+        rng = np.random.default_rng(0)
+        n, ar = 40, 0.7
+        noise = rng.normal(0, 1, n)
+        y = np.zeros(n)
+        for t in range(1, n):
+            y[t] = ar * y[t - 1] + noise[t]
+        d_adf = ndiffs(y, test="adf")
+        d_kpss = ndiffs(y, test="kpss")
+        assert d_adf != d_kpss, "fixture regression: tests no longer disagree"
+        assert ndiffs(y) == d_kpss
 
     def test_default_random_walk_needs_differencing(self, random_walk):
         """Under the KPSS default a random walk still needs d >= 1."""

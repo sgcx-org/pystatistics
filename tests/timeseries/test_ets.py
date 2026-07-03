@@ -661,10 +661,10 @@ class TestZZZSelection:
         case = _r_reference()["selection"][name]
         sol = ets(np.asarray(case["x"]), model=case["model_arg"],
                   period=case["period"])
-        assert sol.spec.name.replace(",", "") == case["method"].replace(
-            "ETS(", "ETS(").replace(",", "")
+        assert sol.spec.name == case["method"]
 
     @pytest.mark.parametrize("name", ["airpassengers", "co2", "lynx",
+                                      "airpassengers_zzn",
                                       "airpassengers_azz",
                                       "airpassengers_mzz"])
     def test_selection_is_argmin_of_disclosed_table(self, name):
@@ -756,3 +756,85 @@ class TestLogLikelihoodConvention:
         """The documented example: n=100 -> constant 88.36."""
         const = 0.5 * 100 * (np.log(100 / (2.0 * np.pi)) - 1.0)
         assert abs(const - 88.3647) < 1e-3
+
+    @pytest.mark.parametrize("name", ["airpassengers_aaa",
+                                      "airpassengers_mam",
+                                      "usaccdeaths_ana"])
+    def test_seasonal_loglik_at_least_r_optimum(self, name):
+        """For seasonal models the engine optimises a wider parameter
+        space than R (see _ets_select.py), so after removing the
+        convention constant its log-likelihood should not fall
+        meaningfully below R's optimum."""
+        case = _r_reference()["fixed"][name]
+        x = np.asarray(case["x"])
+        sol = ets(x, model=case["model_arg"], period=case["period"])
+        n = case["n"]
+        const = 0.5 * n * (np.log(n / (2.0 * np.pi)) - 1.0)
+        assert sol.log_likelihood - const >= case["loglik"] - 0.5
+
+
+class TestWildcardValidation:
+    """Boundary validation of the public ets() (adversarial-review fixes)."""
+
+    def test_float_period_raises(self):
+        y = np.arange(40, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period.*integer"):
+            ets(y, period=12.0)
+
+    def test_string_period_raises(self):
+        y = np.arange(40, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period.*integer"):
+            ets(y, period="12")
+
+    def test_bool_period_raises(self):
+        y = np.arange(40, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period.*integer"):
+            ets(y, period=True)
+
+    def test_empty_series_raises(self):
+        with pytest.raises(ValidationError, match="at least 3 observations"):
+            ets(np.array([]))
+
+    def test_two_dimensional_series_raises(self):
+        y = np.arange(40, dtype=float).reshape(20, 2)
+        with pytest.raises(ValidationError, match="1-D"):
+            ets(y, model="ZZN")
+
+    def test_two_dimensional_series_raises_fully_specified(self):
+        y = np.arange(40, dtype=float).reshape(20, 2)
+        with pytest.raises(ValidationError, match="1-D"):
+            ets(y, model="ANN")
+
+    def test_column_vector_accepted(self):
+        """(n, 1) input is unambiguous and accepted."""
+        y = (np.arange(30, dtype=float) + 1.0).reshape(-1, 1)
+        sol = ets(y, model="ANN")
+        assert sol.n_obs == 30
+
+    def test_damped_true_with_trend_n_wildcard_raises(self):
+        """model='ZNN' + damped=True is a forbidden combination (as in R),
+        not a silent no-op."""
+        y = np.arange(40, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="trend component"):
+            ets(y, model="ZNN", damped=True)
+
+    def test_period_over_24_fully_specified_raises(self):
+        y = np.arange(120, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period <= 24"):
+            ets(y, model="MAM", period=25)
+
+    def test_tiny_series_aicc_selection_raises_with_remedy(self):
+        """n=3: every candidate fits but AICc is infinite -> a clear
+        ValidationError naming the remedy, not a false ConvergenceError."""
+        with pytest.raises(ValidationError, match="finite aicc"):
+            ets(np.array([1.0, 2.0, 3.0]))
+
+    def test_tiny_series_selectable_with_aic(self):
+        """The remedy works: ic='aic' selects at n=3."""
+        sol = ets(np.array([1.0, 2.0, 3.0]), ic="aic")
+        assert "selection" in sol.info
+
+    def test_n5_selects_under_default_aicc(self):
+        """n=5 is the smallest series the default ets(y) can select on."""
+        sol = ets(np.array([3.0, 1.0, 4.0, 1.0, 5.0]))
+        assert np.isfinite(sol.aicc)

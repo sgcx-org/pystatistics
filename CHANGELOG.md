@@ -1,5 +1,69 @@
 # Changelog
 
+## 4.6.2
+
+STL decomposition rewritten to match R exactly; ETS gains automatic model
+selection; `ndiffs` default aligned with R.
+
+- **`stl()` returned a materially wrong decomposition on trending series —
+  fixed by a full rewrite.** On strongly trending data (e.g. the monthly CO2
+  benchmark) the previous implementation leaked much of the trend into the
+  seasonal component: the extracted "seasonal" had a range of ~83 where the
+  true seasonal amplitude is ~6, and the reported trend could *decrease* while
+  the data rose — the components always summed back to the data, so the error
+  was invisible without an external reference. `stl()` is now an exact
+  implementation of the STL procedure (Cleveland, Cleveland, McRae &
+  Terpenning, 1990) and reproduces R's `stats::stl` component-for-component:
+  across a reference suite (CO2, AirPassengers, monthly sunspots, lynx, Nile;
+  periodic, robust, custom-window, and partial-period variants) the largest
+  seasonal/trend/remainder difference vs R is below 1e-10.
+- **`stl()` now exposes the full STL parameter set and uses R's defaults.**
+  New parameters: `seasonal_degree` (default 0, as in R — previously the
+  seasonal smoother was effectively degree 1), `trend_degree`,
+  `lowpass_window`, `lowpass_degree`, and the evaluation strides
+  `seasonal_jump` / `trend_jump` / `lowpass_jump` (R's `ceiling(window/10)`
+  defaults; set to 1 to evaluate the loess at every point instead of
+  interpolating). Behaviour changes: `seasonal_window` defaults to
+  `"periodic"` (R has no default and `"periodic"` is the standard published
+  choice); `robust=True` now runs R's iteration counts (1 inner, 15 outer
+  passes); the series must be longer than `2 * period` (R's rule); and window
+  spans must be odd integers >= 3 — even spans raise a `ValidationError`
+  where R silently rounds them up. The result's `info` now reports the
+  resolved windows/degrees/jumps and the final robustness weights. Note:
+  `stl()` currently runs slower than R's compiled implementation (roughly
+  3-15x depending on the call, milliseconds in absolute terms); a native
+  kernel is planned.
+- **`ets()` now performs automatic model selection, matching
+  `forecast::ets`.** The model string accepts a `"Z"` wildcard per component
+  and defaults to `model="ZZZ"` (select everything), as in R. Candidates
+  consistent with the fixed letters are enumerated under R's rules (additive
+  error with multiplicative season excluded; multiplicative components
+  require strictly positive data; seasonal candidates need `2 <= period <=
+  24` and enough data), each is fitted, and the model minimising the new `ic`
+  parameter (`"aicc"` default, `"aic"`, `"bic"`) is returned. The full
+  candidate table, the criterion values, and any skipped candidates with
+  reasons are disclosed in `solution.info["selection"]`. Explicit requests
+  that cannot be honoured (e.g. `model="MZZ"` on data with zeros or
+  negatives, a seasonal letter with `period=1`) raise instead of being
+  silently adjusted. The selected model can differ from `forecast::ets` when
+  candidates are nearly tied, because the optimiser searches a slightly
+  wider parameter space than R's defaults and can find better fits for
+  trended candidates; the disclosed candidate table makes any selection
+  auditable. A fully specified model string (no `"Z"`) is always fitted
+  exactly as written.
+- **`ndiffs()` now defaults to the KPSS test, matching `forecast::ndiffs`.**
+  KPSS and ADF have opposite null hypotheses and can recommend a different
+  number of differences on borderline series; pass `test="adf"` for the
+  previous behaviour. Both tests are numerically unchanged.
+- **ETS log-likelihood reporting convention documented (no numeric
+  change).** `ets()` reports the full Gaussian log-likelihood; R's
+  `forecast::ets` prints Hyndman's concentrated form. The two differ by the
+  exact constant `0.5*n*[log(n/(2*pi)) - 1]` (e.g. 88.36 at n=100) with the
+  same parameter count, so AIC/AICc/BIC differences, model rankings, and
+  automatic selection are identical — only the printed numbers differ. The
+  convention is now stated on the result's `log_likelihood`/`aic`/`aicc`/
+  `bic` accessors.
+
 ## 4.6.1
 
 Performance: faster automatic smoothing-parameter selection for Gaussian

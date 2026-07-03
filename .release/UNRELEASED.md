@@ -30,12 +30,13 @@
   averages in R's summation order, the outer bisquare robustness loop, and —
   required for robust parity on even-length series — R's partial-sort
   behaviour in the 6·MAD scale estimate, whose descending position requests
-  make it return a non-order-statistic element on some inputs (~5% of random
-  even-length vectors; R inherits this from the netlib `psort`). Verified
+  make it return a non-order-statistic element on some inputs (roughly 10% of random
+  even-length vectors, growing with length; R inherits this from the netlib
+  `psort`). Verified
   against R 4.5.2 on 15 reference cases (co2, AirPassengers, sunspots, lynx,
   Nile; periodic/robust/matched-window/jump=1/partial-period variants, stored
   in `tests/fixtures/stl_r_reference.json`): worst absolute component
-  difference 2.8e-11, most cases ≤ 1e-12.
+  difference 2.8e-11 (per-case worsts range 6e-13 to 2.8e-11).
 - **timeseries: `stl` API extended and defaults aligned to R (behaviour
   changes).** New parameters `seasonal_degree` (default 0, R's `s.degree` —
   the old code hardcoded degree 1), `trend_degree` (1), `lowpass_window`
@@ -92,6 +93,31 @@
   fitted exactly as written (R would also try the damped twin), and very
   short series raise instead of falling back to R's unoptimised Holt-Winters
   path.
+- **timeseries: `ets` wildcard-path hardening (adversarial-review fixes).**
+  `period` is validated as a non-bool integer at the public entry (floats/
+  strings previously crashed with a raw `TypeError` from deep in the engine
+  once seasonal candidates were enumerated); empty and too-short series raise
+  `ValidationError` instead of a raw numpy reduction error; 2-D input now
+  raises instead of being silently flattened (both the wildcard and the
+  fully-specified path); `damped=True` with a trend fixed to `'N'` (e.g.
+  `model="ZNN"`) raises like R's 'Forbidden model combination' instead of
+  being silently ignored; the `period <= 24` seasonal limit is enforced for
+  fully-specified strings too; candidate enumeration now follows R's exact
+  loop order (damped variant innermost, per season); and the
+  no-selectable-model errors are accurate — series too short for finite AICc
+  (n < 5 for the default `ets(y)`) raises `ValidationError` naming the
+  remedy (`ic='aic'`/`'bic'` or a concrete model) rather than a false 'no
+  candidate could be fitted' `ConvergenceError` (note: the pre-4.6.2 default
+  `model="ANN"` fitted n=3-4; the new selection default requires n >= 5).
+- **timeseries: `stl(x, p, seasonal_window=None)` selects the default**
+  (`"periodic"`), consistent with every other window parameter, instead of
+  raising.
+- **tests/fixtures:** R generator scripts committed alongside the fixtures
+  (`tests/fixtures/generate_stl_r_reference.R`,
+  `tests/fixtures/generate_ets_r_reference.R`) for provenance; ndiffs
+  default-flip tests made non-vacuous (signature default + a series where
+  KPSS and ADF disagree); ets small-n failure path and previously-unused
+  fixture entries wired into tests.
 - **timeseries: `ndiffs` default changed from `test="adf"` to `test="kpss"`
   to match R `forecast::ndiffs` (deliberate default change).** The two tests
   have opposite null hypotheses and can recommend different `d` on borderline

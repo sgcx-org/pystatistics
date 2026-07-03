@@ -334,6 +334,13 @@ class TestSTLValidation:
         with pytest.raises(ValidationError, match="seasonal_window.*>= 3"):
             stl(y, period=4, seasonal_window=1)
 
+    def test_seasonal_window_none_selects_default(self):
+        """None means "use the default" ('periodic'), like every other
+        window parameter (and the pre-4.6.2 default value keeps working)."""
+        y = np.arange(36, dtype=float) + 1.0
+        result = stl(y, period=12, seasonal_window=None)
+        assert result.info["seasonal_window_mode"] == "periodic"
+
     def test_seasonal_window_small_odd_accepted(self):
         """R accepts any odd span >= 3 (e.g. 5); so do we."""
         y = np.arange(24, dtype=float) + 1.0

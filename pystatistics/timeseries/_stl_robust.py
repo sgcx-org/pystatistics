@@ -28,8 +28,8 @@ def _psort_pair(a: NDArray, first: int, second: int) -> tuple[float, float]:
     arrive in the order ``(n//2 + 1, n - n//2)`` — *descending* whenever
     *n* is even.  psort's segment bookkeeping assumes ascending requests,
     so on some inputs one of the two returned positions holds an element
-    that is **not** the true order statistic (empirically ~5% of random
-    even-length vectors).  R inherits this behaviour, so exact parity
+    that is **not** the true order statistic (empirically roughly 10% of
+    random even-length vectors, growing with length; absent for n <= 4).  R inherits this behaviour, so exact parity
     requires reproducing the algorithm — median-of-three quicksort with
     insertion sort below length 11 and the exact stat-range pruning —
     rather than substituting a correct partial sort.  Reimplemented
