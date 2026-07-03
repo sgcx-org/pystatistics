@@ -13,13 +13,22 @@ Public API:
     ndiffs(x)       - Estimate differences for stationarity (matches R forecast::ndiffs)
     adf_test(x)     - Augmented Dickey-Fuller unit root test (matches R tseries::adf.test)
     kpss_test(x)    - KPSS stationarity test (matches R tseries::kpss.test)
-    ets(y)          - Fit an ETS state space model (matches R forecast::ets)
+    ets(y)          - Fit an ETS state space model (matches R forecast::ets,
+                      including "Z"-wildcard automatic selection; default
+                      model="ZZZ". Reported log-likelihood/AIC use the full-
+                      Gaussian convention — R's concentrated numbers differ by
+                      a constant in n; model rankings/selection are identical.
+                      See timeseries._ets_fit and ._ets_select docstrings.)
     forecast_ets(f) - Forecast from a fitted ETS model
     arima(y)        - Fit an ARIMA model (matches R stats::arima)
     forecast_arima(f, y) - Forecast from a fitted ARIMA model
     auto_arima(y)   - Automatic ARIMA order selection (matches R forecast::auto.arima)
     decompose(x)    - Classical time series decomposition (matches R stats::decompose)
-    stl(x)          - STL decomposition (matches R stats::stl)
+    stl(x)          - STL decomposition (matches R stats::stl; identical parameters
+                      reproduce R's components to floating-point noise. Interface
+                      divergences, both deliberate: seasonal_window defaults to
+                      "periodic" where R requires it explicitly, and even/short
+                      loess spans raise instead of being silently rounded up.)
 """
 
 from pystatistics.timeseries._acf import acf, pacf
@@ -28,7 +37,8 @@ from pystatistics.timeseries._stationarity import adf_test, kpss_test
 from pystatistics.timeseries._common import (
     ACFParams, ACFSolution, StationarityParams, StationaritySolution,
 )
-from pystatistics.timeseries._ets_fit import ets, ETSParams, ETSSolution
+from pystatistics.timeseries._ets_fit import ETSParams, ETSSolution
+from pystatistics.timeseries._ets_select import ets
 from pystatistics.timeseries._ets_forecast import forecast_ets, ETSForecast
 from pystatistics.timeseries._ets_models import ETSSpec
 from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
@@ -41,8 +51,9 @@ from pystatistics.timeseries._arima_order import (
     auto_arima, AutoARIMAParams, AutoARIMASolution,
 )
 from pystatistics.timeseries._decomposition import (
-    decompose, stl, DecompositionParams, DecompositionSolution,
+    decompose, DecompositionParams, DecompositionSolution,
 )
+from pystatistics.timeseries._stl import stl
 
 __all__ = [
     "acf",

@@ -13,7 +13,8 @@ from numpy.testing import assert_allclose
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.timeseries._ets_models import ETSSpec, ets_recursion, parse_ets_spec
-from pystatistics.timeseries._ets_fit import ETSSolution, ets
+from pystatistics.timeseries._ets_fit import ETSSolution
+from pystatistics.timeseries._ets_select import ets
 from pystatistics.timeseries._ets_forecast import ETSForecast, forecast_ets
 
 
@@ -437,7 +438,7 @@ class TestValidation:
     def test_invalid_model_string(self):
         y = np.arange(20, dtype=np.float64) + 1.0
         with pytest.raises(ValidationError, match="cannot parse"):
-            ets(y, model="ZZZ")
+            ets(y, model="XQW")
 
     def test_nan_values(self):
         y = np.array([1.0, 2.0, np.nan, 4.0, 5.0])
@@ -570,3 +571,188 @@ class TestRecursion:
         assert fitted.shape == (10,)
         assert resid.shape == (10,)
         assert states.shape == (11, 2)
+
+
+# ---------------------------------------------------------------------------
+# "Z"-wildcard automatic model selection (matches forecast::ets)
+# ---------------------------------------------------------------------------
+
+import json
+from pathlib import Path
+
+_ETS_FIXTURE = Path(__file__).parent.parent / "fixtures" / "ets_r_reference.json"
+
+
+def _r_reference():
+    with open(_ETS_FIXTURE) as fh:
+        return json.load(fh)
+
+
+class TestZZZCandidateSet:
+    """The enumerated candidate set mirrors forecast::ets exactly."""
+
+    def test_full_zzz_seasonal_positive_has_15_candidates(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["airpassengers"]["x"])
+        sol = ets(x, model="ZZZ", period=12)
+        sel = sol.info["selection"]
+        names = {c["model"] for c in sel["candidates"]}
+        assert len(sel["candidates"]) == 15
+        # A-error x multiplicative-season trio excluded (restrict=TRUE).
+        skipped_models = {s["model"] for s in sel["skipped"]}
+        assert {"ANM", "AAdM", "AAM"} <= skipped_models
+        assert "ETS(M,A,M)" in names and "ETS(A,N,N)" in names
+
+    def test_zzn_has_6_candidates(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["airpassengers"]["x"])
+        sol = ets(x, model="ZZN", period=12)
+        sel = sol.info["selection"]
+        names = {c["model"] for c in sel["candidates"]}
+        assert names == {
+            "ETS(A,N,N)", "ETS(A,Ad,N)", "ETS(A,A,N)",
+            "ETS(M,N,N)", "ETS(M,Ad,N)", "ETS(M,A,N)",
+        }
+
+    def test_nonseasonal_period1_zzz(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["nile"]["x"])
+        sol = ets(x, model="ZZZ", period=1)
+        assert len(sol.info["selection"]["candidates"]) == 6
+
+    def test_negative_data_drops_multiplicative_error(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["diff_nile"]["x"])
+        sol = ets(x, model="ZZZ", period=1)
+        sel = sol.info["selection"]
+        assert all(c["model"].startswith("ETS(A") for c in sel["candidates"])
+        assert any("strictly positive" in s["reason"] for s in sel["skipped"])
+
+    def test_damped_true_restricts_trend_candidates(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["nile"]["x"])
+        sol = ets(x, model="ZZN", period=1, damped=True)
+        names = {c["model"] for c in sol.info["selection"]["candidates"]}
+        assert names == {"ETS(A,Ad,N)", "ETS(M,Ad,N)"}
+
+    def test_damped_false_excludes_damped(self):
+        ref = _r_reference()
+        x = np.asarray(ref["selection"]["nile"]["x"])
+        sol = ets(x, model="ZZN", period=1, damped=False)
+        names = {c["model"] for c in sol.info["selection"]["candidates"]}
+        assert names == {"ETS(A,N,N)", "ETS(A,A,N)",
+                         "ETS(M,N,N)", "ETS(M,A,N)"}
+
+
+class TestZZZSelection:
+    """Selection agrees with R where the engines' optima agree, and is
+    always internally consistent with the disclosed candidate table."""
+
+    @pytest.mark.parametrize("name", ["usaccdeaths", "nile", "wwwusage",
+                                      "diff_nile"])
+    def test_selection_matches_r(self, name):
+        """Datasets where pystatistics and forecast::ets agree exactly.
+
+        (On near-tied candidate sets the selected model can differ from R
+        because the fitting engine optimises a slightly wider parameter
+        space — see timeseries/_ets_select.py; those datasets are
+        exercised by test_selection_is_argmin_of_disclosed_table.)
+        """
+        case = _r_reference()["selection"][name]
+        sol = ets(np.asarray(case["x"]), model=case["model_arg"],
+                  period=case["period"])
+        assert sol.spec.name.replace(",", "") == case["method"].replace(
+            "ETS(", "ETS(").replace(",", "")
+
+    @pytest.mark.parametrize("name", ["airpassengers", "co2", "lynx",
+                                      "airpassengers_azz",
+                                      "airpassengers_mzz"])
+    def test_selection_is_argmin_of_disclosed_table(self, name):
+        case = _r_reference()["selection"][name]
+        sol = ets(np.asarray(case["x"]), model=case["model_arg"],
+                  period=case["period"])
+        sel = sol.info["selection"]
+        best = min(sel["candidates"], key=lambda c: c[sel["ic"]])
+        assert sel["selected"] == best["model"]
+        assert sel["selected"] == sol.spec.name
+
+    def test_default_model_is_zzz(self):
+        """ets(y) now auto-selects, matching forecast::ets's default."""
+        case = _r_reference()["selection"]["nile"]
+        sol = ets(np.asarray(case["x"]))
+        assert "selection" in sol.info
+        assert sol.info["selection"]["requested"] == "ZZZ"
+
+    def test_selection_uses_requested_ic(self):
+        case = _r_reference()["selection"]["nile"]
+        x = np.asarray(case["x"])
+        sol = ets(x, model="ZZN", ic="bic")
+        sel = sol.info["selection"]
+        assert sel["ic"] == "bic"
+        best = min(sel["candidates"], key=lambda c: c["bic"])
+        assert sel["selected"] == best["model"]
+
+    def test_fully_specified_model_bypasses_selection(self):
+        """No 'Z' -> fit exactly what was asked, no selection metadata."""
+        case = _r_reference()["selection"]["nile"]
+        sol = ets(np.asarray(case["x"]), model="ANN")
+        assert sol.spec.name == "ETS(A,N,N)"
+        assert "selection" not in sol.info
+
+
+class TestZZZFailures:
+    """Explicit requests that cannot be honoured fail loud."""
+
+    def test_multiplicative_error_wildcard_on_negative_data(self):
+        y = np.array([1.0, -2.0, 3.0, -1.0, 2.0, 0.5, 1.5, -0.5] * 3)
+        with pytest.raises(ValidationError, match="strictly positive"):
+            ets(y, model="MZZ", period=1)
+
+    def test_explicit_seasonal_with_period_one(self):
+        y = np.arange(30, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period >= 2"):
+            ets(y, model="ZZA", period=1)
+
+    def test_explicit_seasonal_with_period_over_24(self):
+        y = np.arange(120, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="period <= 24"):
+            ets(y, model="ZZA", period=25)
+
+    def test_wildcard_seasonal_with_period_over_24_warns_and_drops(self):
+        rng = np.random.default_rng(8)
+        y = rng.normal(100.0, 5.0, 200)
+        sol = ets(y, model="ZZZ", period=30)
+        assert any("period 30" in w for w in sol.warnings)
+        assert all("N)" in c["model"] for c in sol.info["selection"]["candidates"])
+
+    def test_damped_false_with_explicit_ad_string(self):
+        y = np.arange(30, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="damped"):
+            ets(y, model="AAdZ", period=1, damped=False)
+
+    def test_invalid_ic(self):
+        y = np.arange(30, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="ic"):
+            ets(y, model="ZZN", ic="hqic")
+
+
+class TestLogLikelihoodConvention:
+    """The documented full-Gaussian vs R-concentrated constant.
+
+    ll_pystat = ll_R + 0.5 * n * [log(n / (2*pi)) - 1]; verified against
+    stored forecast::ets fits where both optimisers find the same optimum.
+    """
+
+    @pytest.mark.parametrize("name", ["nile_ann", "nile_aan"])
+    def test_constant_offset_vs_r(self, name):
+        case = _r_reference()["fixed"][name]
+        x = np.asarray(case["x"])
+        sol = ets(x, model=case["model_arg"], period=case["period"])
+        n = case["n"]
+        const = 0.5 * n * (np.log(n / (2.0 * np.pi)) - 1.0)
+        assert abs((sol.log_likelihood - case["loglik"]) - const) < 0.01
+
+    def test_constant_value_n100(self):
+        """The documented example: n=100 -> constant 88.36."""
+        const = 0.5 * 100 * (np.log(100 / (2.0 * np.pi)) - 1.0)
+        assert abs(const - 88.3647) < 1e-3

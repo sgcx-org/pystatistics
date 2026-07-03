@@ -336,6 +336,15 @@ class TestNdiffs:
         d = ndiffs(white_noise, test="kpss")
         assert d == 0
 
+    def test_default_test_is_kpss(self, white_noise, random_walk):
+        """The default test is KPSS, matching R forecast::ndiffs."""
+        assert ndiffs(white_noise) == ndiffs(white_noise, test="kpss")
+        assert ndiffs(random_walk) == ndiffs(random_walk, test="kpss")
+
+    def test_default_random_walk_needs_differencing(self, random_walk):
+        """Under the KPSS default a random walk still needs d >= 1."""
+        assert ndiffs(random_walk) >= 1
+
     def test_invalid_test_raises(self, white_noise):
         """Invalid test name should raise."""
         with pytest.raises(ValidationError, match="must be one of"):

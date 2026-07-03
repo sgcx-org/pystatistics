@@ -6,7 +6,21 @@ log-likelihood over smoothing parameters and initial states.  Uses
 ``scipy.optimize.minimize(method='L-BFGS-B')`` with logit-transformed
 parameters for numerical stability.
 
-Design matches R's ``forecast::ets()`` for specified model types.
+Design matches R's ``forecast::ets()`` for specified model types, with
+one deliberate reporting divergence: PyStatistics reports the **full
+Gaussian log-likelihood**, while ``forecast::ets`` reports Hyndman's
+concentrated pseudo-log-likelihood ``-0.5 * n * log(SSE)`` (plus the
+same multiplicative-error Jacobian term both conventions share).  The
+two differ by the exact deterministic constant
+
+    ``0.5 * n * [log(n / (2*pi)) - 1]``
+
+which depends only on the sample size — e.g. +88.36 for n = 100.  The
+parameter count ``k`` is identical under both conventions, so AIC/AICc/
+BIC *differences and rankings* between models on the same data are
+identical, and automatic model selection (``model="ZZZ"``) picks the
+same model either way.  Only the printed log-likelihood/AIC numbers
+differ from R's.  Public model selection lives in ``_ets_select.py``.
 """
 
 from __future__ import annotations
@@ -62,13 +76,20 @@ class ETSParams:
     states : NDArray
         Full state history, shape ``(n + 1, n_states)``.
     log_likelihood : float
-        Maximised log-likelihood.
+        Maximised **full Gaussian** log-likelihood.  R's ``forecast::ets``
+        reports the concentrated pseudo-log-likelihood
+        ``-0.5*n*log(SSE)`` instead; this value equals R's plus the
+        constant ``0.5*n*[log(n/(2*pi)) - 1]`` (sample-size only, so all
+        model *comparisons* on the same data are unaffected).
     aic : float
-        Akaike Information Criterion.
+        Akaike Information Criterion, ``-2*log_likelihood + 2*k`` with the
+        full-Gaussian log-likelihood above.  Differs from
+        ``forecast::ets``'s printed AIC by ``-n*[log(n/(2*pi)) - 1]``;
+        AIC *differences and rankings* between models match R exactly.
     aicc : float
-        Corrected AIC (for small samples).
+        Corrected AIC (for small samples); same convention note as `aic`.
     bic : float
-        Bayesian Information Criterion.
+        Bayesian Information Criterion; same convention note as `aic`.
     mse : float
         Mean squared error of residuals.
     mae : float
@@ -161,18 +182,33 @@ class ETSSolution(SolutionReprMixin):
 
     @property
     def log_likelihood(self) -> float:
+        """Full Gaussian log-likelihood.
+
+        R's ``forecast::ets`` reports the concentrated pseudo-
+        log-likelihood ``-0.5*n*log(SSE)``; this value equals R's plus
+        the deterministic constant ``0.5*n*[log(n/(2*pi)) - 1]``.  Model
+        comparisons on the same data are identical either way.
+        """
         return self._result.params.log_likelihood
 
     @property
     def aic(self) -> float:
+        """AIC under the full-Gaussian log-likelihood.
+
+        Differs from ``forecast::ets``'s printed AIC by the constant
+        ``-n*[log(n/(2*pi)) - 1]``; AIC differences and model rankings
+        match R exactly (same parameter count ``k``).
+        """
         return self._result.params.aic
 
     @property
     def aicc(self) -> float:
+        """AICc; same convention note as :attr:`aic`."""
         return self._result.params.aicc
 
     @property
     def bic(self) -> float:
+        """BIC; same convention note as :attr:`aic`."""
         return self._result.params.bic
 
     @property
@@ -463,10 +499,10 @@ def _neg_loglik(
 # Public API
 # ---------------------------------------------------------------------------
 
-def ets(
+def fit_ets_model(
     y: ArrayLike,
     *,
-    model: str = "ANN",
+    model: str,
     period: int = 1,
     damped: bool | None = None,
     alpha: float | None = None,
@@ -477,18 +513,23 @@ def ets(
     max_iter: int = 1000,
 ) -> ETSSolution:
     """
-    Fit an ETS (ExponenTial Smoothing) state space model.
+    Fit one fully-specified ETS state space model (the fitting engine).
 
     Estimates smoothing parameters and initial states by maximising the
     Gaussian log-likelihood, matching R's ``forecast::ets()`` for
-    specified model types.
+    specified model types (see the module docstring for the
+    log-likelihood reporting convention).  The public entry point —
+    including ``"Z"`` wildcard model selection — is
+    ``pystatistics.timeseries.ets`` in ``_ets_select.py``; this function
+    accepts only concrete model letters.
 
     Parameters
     ----------
     y : ArrayLike
         Time series (1-D, must be positive for multiplicative error/season).
     model : str
-        ETS model string, e.g. ``'ANN'``, ``'AAN'``, ``'AAA'``, ``'MAM'``.
+        Concrete ETS model string, e.g. ``'ANN'``, ``'AAN'``, ``'AAdA'``,
+        ``'MAM'`` (no ``'Z'`` wildcards).
     period : int
         Seasonal period (e.g. 12 for monthly, 4 for quarterly).
     damped : bool or None

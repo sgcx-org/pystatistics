@@ -331,8 +331,39 @@ class TestSTLValidation:
 
     def test_seasonal_window_too_small(self):
         y = np.arange(24, dtype=float) + 1.0
-        with pytest.raises(ValidationError, match="seasonal_window.*>= 7"):
-            stl(y, period=4, seasonal_window=5)
+        with pytest.raises(ValidationError, match="seasonal_window.*>= 3"):
+            stl(y, period=4, seasonal_window=1)
+
+    def test_seasonal_window_small_odd_accepted(self):
+        """R accepts any odd span >= 3 (e.g. 5); so do we."""
+        y = np.arange(24, dtype=float) + 1.0
+        result = stl(y, period=4, seasonal_window=5)
+        assert result.method == "stl"
+
+    def test_seasonal_degree_invalid(self):
+        y = np.arange(24, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="seasonal_degree.*0 or 1"):
+            stl(y, period=4, seasonal_window=7, seasonal_degree=2)
+
+    def test_periodic_with_nonzero_degree_raises(self):
+        y = np.arange(24, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="periodic.*seasonal_degree=0"):
+            stl(y, period=4, seasonal_window="periodic", seasonal_degree=1)
+
+    def test_unknown_seasonal_window_string(self):
+        y = np.arange(24, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="periodic"):
+            stl(y, period=4, seasonal_window="monthly")
+
+    def test_jump_invalid(self):
+        y = np.arange(24, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="trend_jump.*>= 1"):
+            stl(y, period=4, trend_jump=0)
+
+    def test_lowpass_window_even(self):
+        y = np.arange(24, dtype=float) + 1.0
+        with pytest.raises(ValidationError, match="lowpass_window.*odd"):
+            stl(y, period=4, lowpass_window=6)
 
     def test_trend_window_even(self):
         y = np.arange(24, dtype=float) + 1.0
@@ -350,8 +381,15 @@ class TestSTLValidation:
             stl(y, period=1)
 
     def test_series_too_short(self):
+        """R's rule: STL needs strictly more than two full periods."""
         y = np.arange(5, dtype=float)
-        with pytest.raises(ValidationError, match="length.*>= 2 \\* period"):
+        with pytest.raises(ValidationError, match="more than two full periods"):
+            stl(y, period=4)
+
+    def test_exactly_two_periods_raises(self):
+        """n == 2 * period is rejected, exactly as in R."""
+        y = np.arange(8, dtype=float)
+        with pytest.raises(ValidationError, match="more than two full periods"):
             stl(y, period=4)
 
 
@@ -359,13 +397,24 @@ class TestSTLEdgeCases:
     """Edge cases for STL."""
 
     def test_minimum_viable_length(self):
-        """Minimum viable series length = 2 * period."""
+        """Minimum viable series length = 2 * period + 1 (R's rule)."""
         rng = np.random.default_rng(20)
         period = 4
-        n = 2 * period
+        n = 2 * period + 1
         y = rng.normal(100, 5, n)
         result = stl(y, period)
         assert len(result.observed) == n
+
+    def test_info_discloses_resolved_parameters(self):
+        """info records the resolved windows/degrees/jumps and weights."""
+        y = np.arange(36, dtype=float) + 1.0
+        result = stl(y, period=12)
+        info = result.info
+        assert info["seasonal_window_mode"] == "periodic"
+        assert info["windows"]["lowpass"] == 13
+        assert info["degrees"]["seasonal"] == 0
+        assert info["jumps"]["trend"] >= 1
+        assert len(info["robustness_weights"]) == len(y)
 
     def test_result_is_frozen(self):
         """DecompositionSolution from stl is frozen."""

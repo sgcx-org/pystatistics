@@ -81,23 +81,26 @@ def diff(
 def ndiffs(
     x: ArrayLike,
     *,
-    test: str = "adf",
+    test: str = "kpss",
     alpha: float = 0.05,
     max_d: int = 2,
 ) -> int:
     """
     Estimate the number of differences needed for stationarity.
 
-    Matches R's forecast::ndiffs(). Repeatedly differences and tests for
-    stationarity until either the test indicates stationarity or max_d
-    is reached.
+    Matches R's forecast::ndiffs(), including its default test. Repeatedly
+    differences and tests for stationarity until either the test indicates
+    stationarity or max_d is reached.
 
     Parameters
     ----------
     x : ArrayLike
         Time series.
     test : str
-        Stationarity test to use: 'adf' or 'kpss'.
+        Stationarity test to use: 'kpss' (default, matching R
+        forecast::ndiffs) or 'adf'. The two tests have opposite null
+        hypotheses (KPSS: stationary; ADF: unit root) and can recommend
+        different d on borderline series.
     alpha : float
         Significance level for the test.
     max_d : int
