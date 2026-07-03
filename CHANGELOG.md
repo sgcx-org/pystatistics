@@ -50,7 +50,11 @@ selection; `ndiffs` default aligned with R.
   wider parameter space than R's defaults and can find better fits for
   trended candidates; the disclosed candidate table makes any selection
   auditable. A fully specified model string (no `"Z"`) is always fitted
-  exactly as written.
+  exactly as written. Note two consequences of the new default: automatic
+  AICc selection needs at least 5 observations (shorter series raise with a
+  suggested remedy — pick a concrete model or `ic="aic"`), and `period` must
+  now be a true integer (float periods raise a clear error instead of
+  crashing).
 - **`ndiffs()` now defaults to the KPSS test, matching `forecast::ndiffs`.**
   KPSS and ADF have opposite null hypotheses and can recommend a different
   number of differences on borderline series; pass `test="adf"` for the
