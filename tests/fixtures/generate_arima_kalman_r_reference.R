@@ -48,7 +48,11 @@ fit_ref <- function(x, order, seasonal, label) {
     coef = as.list(coef(f)),
     se = as.list(sqrt(diag(f$var.coef))),
     fc_mean = as.numeric(pr$pred),
-    fc_se = as.numeric(pr$se)
+    fc_se = as.numeric(pr$se),
+    # R's residuals() = standardized Kalman innovations v_t/sqrt(F_t);
+    # length is the ORIGINAL series length (the first d + D*m entries
+    # belong to observations consumed by differencing).
+    resid = as.numeric(residuals(f))
   )
 }
 
@@ -73,7 +77,13 @@ fits <- list(
   # co2 (2,1,1): the CSS stage aborts (NaN objective) while the ML
   # refinement converges to R's optimum — guards the converged-flag
   # bookkeeping.
-  co2_211 = fit_ref(co2, c(2, 1, 1), NULL, "co2_211")
+  co2_211 = fit_ref(co2, c(2, 1, 1), NULL, "co2_211"),
+  # MA-mirror cases: the exact-ML optimizer can land on the
+  # non-invertible reflection (theta -> 1/theta, identical likelihood);
+  # these guard the invertibility normalization (coefficients, sigma2).
+  ap_111_111 = fit_ref(AirPassengers, c(1, 1, 1), c(1, 1, 1),
+                       "ap_111_111"),
+  co2_101m = fit_ref(co2, c(1, 0, 1), NULL, "co2_101m")
 )
 
 out <- list(

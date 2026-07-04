@@ -30,6 +30,8 @@ cross term.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize
@@ -126,6 +128,182 @@ def _multiply_ma_polynomials(
     product = np.convolve(poly1, poly2)
     return product[1:]
 
+
+
+def normalize_ma_coefficients(ma: NDArray) -> tuple[NDArray, bool]:
+    """Return the invertible (canonical) representative of an MA factor.
+
+    The Gaussian likelihood of an MA polynomial ``1 + c_1 z + ... +
+    c_q z^q`` is invariant under reflecting any root across the unit
+    circle (with a matching sigma2 rescale), so the parameterization is
+    only identified up to this choice. The statistical convention is
+    the INVERTIBLE representative: it is the fundamental (Wold)
+    representation whose disturbances are the innovations actually
+    recoverable from data, so sigma2 is the one-step prediction-error
+    variance and the MA inversion converges. This is a port of R
+    ``stats::arima``'s internal ``maInvert``, which R applies post-fit
+    to the fitted non-seasonal and seasonal MA blocks of ML-family
+    fits (then recomputes the Hessian and sigma2 at the inverted
+    coefficients) — with an added likelihood-invariance guard R does
+    not have. Roots
+    strictly inside the unit circle are reflected ``r -> 1/conj(r)``;
+    roots on (or numerically at) the circle are left alone — the MA
+    unit-root pile-up under over-differencing is a genuine boundary
+    optimum where both representatives coincide.
+
+    Callers must recompute sigma2 (and anything derived from the
+    coefficients) at the returned parameters; the exact-ML profile
+    sigma2 absorbs the rescale automatically. Only valid for exact-ML
+    objectives — the CSS criterion is NOT reflection-invariant.
+
+    NOTE: for pathologically clustered high-order roots (e.g. several
+    near-identical pairs hugging the circle) np.roots' conditioning can
+    spread the cluster by ~1e-3, so strict invertibility of the output
+    is not guaranteed in that corner; the caller's likelihood-invariance
+    guard bounds any damage. R's polyroot-based ``maInvert`` shares the
+    same conditioning limit and runs UNGUARDED, so this corner is at
+    parity-or-better with the reference.
+
+    Parameters
+    ----------
+    ma : NDArray
+        MA factor coefficients ``[c_1, ..., c_q]`` (sign convention
+        ``1 + c_1 z + ...``). May be empty.
+
+    Returns
+    -------
+    tuple[NDArray, bool]
+        The invertible coefficients and whether any root was flipped.
+    """
+    q = len(ma)
+    if q == 0:
+        return ma, False
+
+    # Roots of 1 + c_1 z + ... + c_q z^q (np.roots wants descending).
+    poly = np.concatenate((ma[::-1], [1.0]))
+    roots = np.roots(poly)
+    # Leave near-circle roots untouched: reflecting them is numerically
+    # a no-op that would only churn boundary fits.
+    inside = np.abs(roots) < 1.0 - 1e-8
+    if not np.any(inside):
+        return ma, False
+
+    roots = roots.copy()
+    roots[inside] = 1.0 / np.conj(roots[inside])
+
+    # Rebuild 1 + c'_1 z + ...: product of (1 - z / r_j).
+    coefs = np.array([1.0 + 0.0j])
+    for r in roots:
+        coefs = np.convolve(coefs, np.array([1.0, -1.0 / r]))
+    new_ma = coefs[1:]
+    # Reflected complex roots keep their conjugate pairing, so the
+    # product is real up to float noise. Anything larger means the
+    # root set was corrupted — fail loud rather than return a mangled
+    # polynomial.
+    if np.abs(new_ma.imag).max() > 1e-8:
+        raise ConvergenceError(
+            "MA invertibility normalization produced complex "
+            "coefficients; the fitted MA polynomial is numerically "
+            "degenerate",
+            iterations=0,
+            reason="ma_normalization_failed",
+        )
+    out = new_ma.real
+    # np.roots drops leading zero coefficients (degenerate degree);
+    # pad back to the requested order.
+    if len(out) < q:
+        out = np.concatenate((out, np.zeros(q - len(out))))
+    return out, True
+
+
+def normalize_to_invertible(
+    opt_params: NDArray,
+    opt_factored: NDArray | None,
+    nll: float,
+    y_diff: NDArray,
+    p: int, q: int, sp: int, sq: int, period: int,
+    include_mean: bool,
+) -> tuple[NDArray, NDArray | None, float]:
+    """Normalize an exact-ML optimum to the invertible MA representative.
+
+    The exact-ML likelihood is invariant under reflecting MA roots
+    across the unit circle (with a matching sigma2 rescale), so the
+    optimizer may land on the non-invertible mirror (theta -> 1/theta)
+    of the standard solution: same fit, but the reported sigma2 is then
+    the variance of a NON-fundamental noise (not the one-step
+    prediction-error variance) and the CSS residual recursion diverges.
+    This applies :func:`normalize_ma_coefficients` to each MA factor
+    (preserving the multiplicative seasonal structure) and accepts the
+    result only if the exact-ML objective is numerically unchanged —
+    reflection is likelihood-invariant in exact arithmetic, so anything
+    beyond float noise means the flip went wrong and the original
+    representation is kept with a loud warning.
+
+    Callers must recompute sigma2/residuals/vcov at the returned
+    parameters. Only valid for exact-ML optima: the CSS criterion is
+    not reflection-invariant, so callers must not pass CSS fits.
+
+    Parameters
+    ----------
+    opt_params : NDArray
+        Effective parameter vector ``[ar_eff, ma_eff, mean?]``.
+    opt_factored : NDArray or None
+        Factored vector ``[ar, ma, sar, sma, mean?]`` for seasonal
+        fits; ``None`` for non-seasonal fits.
+    nll : float
+        Negative log-likelihood at the optimum.
+    y_diff : NDArray
+        Differenced series.
+    p, q, sp, sq, period : int
+        Factored SARIMA orders and period.
+    include_mean : bool
+        Whether the parameter vectors carry a trailing mean.
+
+    Returns
+    -------
+    tuple[NDArray, NDArray | None, float]
+        ``(opt_params, opt_factored, nll)`` — normalized, or the
+        originals if nothing flipped or the invariance guard failed.
+    """
+    p_eff = p + sp * period
+    q_eff = q + sq * period
+
+    if opt_factored is not None:
+        ma_norm, flip1 = normalize_ma_coefficients(opt_factored[p:p + q])
+        sma_norm, flip2 = normalize_ma_coefficients(
+            opt_factored[p + q + sp:p + q + sp + sq]
+        )
+        if not (flip1 or flip2):
+            return opt_params, opt_factored, nll
+        cand_factored: NDArray | None = opt_factored.copy()
+        cand_factored[p:p + q] = ma_norm
+        cand_factored[p + q + sp:p + q + sp + sq] = sma_norm
+        cand_params = _factored_to_effective(
+            cand_factored, p, q, sp, sq, period, include_mean,
+            _multiply_polynomials, _multiply_ma_polynomials,
+        )
+    else:
+        ma_norm, flipped = normalize_ma_coefficients(
+            opt_params[p_eff:p_eff + q_eff]
+        )
+        if not flipped:
+            return opt_params, opt_factored, nll
+        cand_factored = None
+        cand_params = opt_params.copy()
+        cand_params[p_eff:p_eff + q_eff] = ma_norm
+
+    nll_norm = arima_negloglik(
+        cand_params, y_diff, (p_eff, q_eff), include_mean, "ML",
+    )
+    if abs(nll_norm - nll) <= 1e-6 * (1.0 + abs(nll)):
+        return cand_params, cand_factored, nll_norm
+
+    warnings.warn(
+        "MA invertibility normalization changed the log-likelihood; "
+        "keeping the non-invertible representation",
+        stacklevel=3,
+    )
+    return opt_params, opt_factored, nll
 
 
 def _factored_to_effective(

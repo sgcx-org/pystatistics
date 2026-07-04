@@ -243,17 +243,64 @@
   drift ~1e-12 on near-unit systems), and stale "innovations algorithm"
   docstrings now say Kalman filter.
 
-- **timeseries: known convention differences documented, not changed:**
-  (a) `residuals`/`fitted_values` remain CSS-conditioned innovations
-  while `log_likelihood`/`sigma2` are Kalman-exact for ML fits, so
-  `mean(residuals**2)` can differ from `sigma2` near an MA unit root
-  (R returns Kalman innovations) — documented on `ARIMAParams`;
-  (b) ~10% of boundary fits converge to the non-invertible MA mirror
-  representation (theta → 1/theta, identical likelihood, sigma2 scaled
-  accordingly; R lands on the invertible one) — R's own evaluator
-  reproduces our sigma2 exactly at our params; auto_arima's root veto
-  rejects such candidates during selection; (c) `arima_batch` (Whittle)
-  still reports a documented per-series sample mean under d > 0.
+- **timeseries: exact-ML fits now report the invertible (canonical) MA
+  representation.** The exact-ML likelihood is invariant under
+  reflecting MA roots across the unit circle (theta → 1/theta with a
+  matching sigma2 rescale), so the optimizer landed on the
+  non-invertible mirror on ~10% of boundary-ish fits (AirPassengers
+  (1,1,1)(1,1,1)[12]: sma1=1.19, sigma2 30% below R; co2 (1,0,1)+mean:
+  ma1=1.46, sigma2 53% below). Statistically the invertible
+  representative is the identified/fundamental (Wold) one: only its
+  sigma2 is the one-step prediction-error variance, and the
+  non-invertible representation made the CSS residual recursion
+  diverge. R does exactly this: `stats::arima`'s internal `maInvert`
+  normalizes the fitted MA blocks of ML-family fits post-fit and
+  recomputes the Hessian/sigma2 at the inverted coefficients — so this
+  is required R parity, not an extra nicety (verified by seeding R's
+  optimizer in the mirror basin via `init=`: R still reports the
+  invertible fit). New `normalize_ma_coefficients` in `_arima_factored.py`
+  reflects inside-circle roots per MA FACTOR (preserving the
+  multiplicative seasonal structure); roots on the circle are left
+  alone (the MA unit-root pile-up under over-differencing is a genuine
+  boundary optimum where both representatives coincide); a
+  likelihood-invariance guard reverts loudly if the flip is not
+  numerically neutral. NOT applied to pure-CSS fits — the CSS criterion
+  is not reflection-invariant, so the flipped parameters would not be
+  the optimum of the fitted criterion (R's split too). All downstream
+  artifacts (sigma2, residuals, vcov, the auto_arima root veto) are
+  computed at the normalized point; sigma2 on the previously-mirror
+  fits now matches R (0.09% worst), and mirror candidates now survive
+  the selection veto exactly when R keeps them. Likelihood, AICc, and
+  forecasts are unchanged (equivalence class).
+
+- **timeseries: ML-family `residuals` are now the standardized Kalman
+  innovations `v_t/sqrt(F_t)`,** matching R `stats::arima`'s
+  `residuals()` (arima.c scales by `sqrt(gain)`). These are the
+  model's actual innovations with CONSTANT variance sigma2 at every t —
+  the homoscedastic white noise Ljung-Box/ACF/normality diagnostics
+  assume — and satisfy `mean(residuals**2) == sigma2` identically
+  (verified to machine precision on every reference fit). CSS
+  residuals approximate them only up to a conditioning transient
+  decaying like the largest MA root modulus^t (~7% still alive at
+  t=131 for ma1=−0.98), and diverged outright on the mirror fits.
+  Verified against R `residuals()` on the reference battery (aligned
+  after the d+D·m observations differencing consumes): max diff ≤6e-4
+  at matched fits. `sigma2` for ML fits is now computed as
+  `mean(residuals**2)` directly (algebraically identical to the Kalman
+  profile estimator; removes a redundant filter pass and the silent
+  failure sentinel — `kalman_arma_innovations` raises loudly instead).
+  Pure-CSS fits keep the CSS recursion and sigma2 = SSE/n (R's CSS
+  convention). New `kalman_arma_innovations` in `_arima_kalman.py`;
+  the normalization orchestration lives in
+  `_arima_factored.normalize_to_invertible` (keeps `_arima_fit.py`
+  under the LOC limit and dedupes the seasonal/non-seasonal guard).
+  `kalman_arma_forecast`/`kalman_arma_innovations` raise
+  `ConvergenceError` (not `ValidationError`) on internal numerical
+  failure — these are not user-input errors.
+
+- **timeseries: remaining convention notes:** `arima_batch` (Whittle)
+  still reports a documented per-series sample mean under d > 0;
+  drift/intercept terms for d + D = 1 models remain unsupported.
 
 - **tests:** new `tests/timeseries/test_arima_kalman_r_parity.py`
   (SAR loglik/coef/IC parity on both failing models, stationary-init

@@ -50,7 +50,7 @@ import numpy as np
 from numba import njit
 from numpy.typing import NDArray
 
-__all__ = ["kalman_arma_forecast", "kalman_arma_loglik"]
+__all__ = ["kalman_arma_forecast", "kalman_arma_innovations", "kalman_arma_loglik"]
 
 # Non-stationary fallback: matches R's `kappa` in stats:::makeARIMA.
 _DIFFUSE_KAPPA = 1.0e6
@@ -439,11 +439,11 @@ def kalman_arma_forecast(
 
     Raises
     ------
-    ValidationError
+    ConvergenceError
         If the Kalman filter fails at the supplied parameters (only
         possible at numerically pathological parameter values).
     """
-    from pystatistics.core.exceptions import ValidationError
+    from pystatistics.core.exceptions import ConvergenceError
 
     _, R_vec, r = _build_state_space(ar, ma)
     phi = np.zeros(r, dtype=np.float64)
@@ -462,10 +462,12 @@ def kalman_arma_forecast(
         np.ascontiguousarray(z, dtype=np.float64), phi, R_vec, a, P,
     )
     if not ok:
-        raise ValidationError(
+        raise ConvergenceError(
             "Kalman filter failed at the fitted parameters; cannot "
             "produce forecasts (non-finite state or non-positive "
-            "innovation variance)."
+            "innovation variance).",
+            iterations=0,
+            reason="kalman_eval_failed",
         )
 
     # T materialized once for the h-step state iteration.
@@ -490,3 +492,70 @@ def kalman_arma_forecast(
         a = T @ a
         P = T @ P @ T.T + RR
     return fc, err_cov
+
+
+def kalman_arma_innovations(
+    z: NDArray,
+    ar: NDArray,
+    ma: NDArray,
+) -> NDArray:
+    """Standardized one-step innovations of a zero-mean ARMA via the
+    Kalman filter.
+
+    Returns v_t / sqrt(F_t), where v_t = z_t - E[z_t | z_1..z_{t-1}]
+    and F_t is the innovation variance under sigma2 = 1 — exactly what
+    R's ``stats::arima`` returns as ``residuals()`` for ML-family fits
+    (``arima.c`` scales by ``sqrt(gain)``). The standardization gives
+    the residuals CONSTANT variance sigma2 at every t (raw innovations
+    are heteroscedastic early, where the state is still uncertain), so
+    ``mean(residuals**2)`` equals the profile ML sigma2 identically and
+    Ljung-Box/ACF/normality diagnostics see the homoscedastic white
+    noise the model asserts. CSS residuals approximate these only up to
+    a conditioning transient decaying like the largest MA root
+    modulus^t — materially different near an MA unit root, and
+    divergent beyond it.
+
+    Parameters
+    ----------
+    z : NDArray
+        Centered (mean-subtracted) differenced series.
+    ar : NDArray
+        Effective AR coefficients.
+    ma : NDArray
+        Effective MA coefficients.
+
+    Returns
+    -------
+    NDArray
+        Standardized innovations, same length as ``z``.
+
+    Raises
+    ------
+    ConvergenceError
+        If the filter fails at the supplied parameters.
+    """
+    from pystatistics.core.exceptions import ConvergenceError
+
+    _, R_vec, r = _build_state_space(ar, ma)
+    phi = np.zeros(r, dtype=np.float64)
+    p = len(ar)
+    if p > 0:
+        phi[:p] = ar
+
+    P, init_ok = _stationary_init(phi, R_vec)
+    if not init_ok:
+        P = _DIFFUSE_KAPPA * np.eye(r, dtype=np.float64)
+    a = np.zeros(r, dtype=np.float64)
+
+    innov, F, ok = _kalman_loop(
+        np.ascontiguousarray(z, dtype=np.float64), phi, R_vec, a, P,
+    )
+    if not ok:
+        raise ConvergenceError(
+            "Kalman filter failed at the fitted parameters; "
+            "innovations cannot be computed (non-finite state or "
+            "non-positive innovation variance).",
+            iterations=0,
+            reason="kalman_eval_failed",
+        )
+    return innov / np.sqrt(F)

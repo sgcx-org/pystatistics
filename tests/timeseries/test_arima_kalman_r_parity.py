@@ -192,14 +192,25 @@ class TestForecastRParity:
         # filter fails at pathological parameters (non-finite AR poisons
         # the covariance propagation; the explosive-but-finite case is
         # self-stabilizing because the measurement is exact).
-        from pystatistics.core.exceptions import ValidationError
+        from pystatistics.core.exceptions import ConvergenceError
         from pystatistics.timeseries._arima_kalman import (
             kalman_arma_forecast,
         )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConvergenceError):
             kalman_arma_forecast(
                 np.ones(50), np.array([np.nan]), np.array([]), 5,
+            )
+
+    def test_innovations_failure_is_loud(self, fits):
+        from pystatistics.core.exceptions import ConvergenceError
+        from pystatistics.timeseries._arima_kalman import (
+            kalman_arma_innovations,
+        )
+
+        with pytest.raises(ConvergenceError):
+            kalman_arma_innovations(
+                np.ones(50), np.array([np.nan]), np.array([]),
             )
 
     def test_random_walk_se_is_analytic(self, fits):
@@ -267,6 +278,228 @@ class TestSigma2AndSE:
         n_coef = (len(fit.ar) + len(fit.ma)
                   + len(fit.seasonal_ar) + len(fit.seasonal_ma))
         assert fit.vcov.shape == (n_coef, n_coef)
+
+
+# =========================================================================
+# Invertible MA normalization (canonical representation)
+# =========================================================================
+
+def _min_ma_root_modulus(coefs):
+    if len(coefs) == 0:
+        return np.inf
+    poly = np.concatenate((np.asarray(coefs)[::-1], [1.0]))
+    roots = np.roots(poly)
+    return np.abs(roots).min() if len(roots) else np.inf
+
+
+class TestInvertibleNormalization:
+    """Exact-ML fits report the invertible MA representative.
+
+    The likelihood is invariant under reflecting MA roots across the
+    unit circle; only the invertible representative's sigma2 is the
+    one-step prediction-error variance. Before normalization ~10% of
+    boundary-ish fits reported the mirror (ap_111_111: sma1=1.19,
+    sigma2 30% below R; co2_101m: ma1=1.46, sigma2 53% below R).
+    """
+
+    @pytest.mark.parametrize("label", ["ap_111_111", "co2_101m"])
+    def test_ma_factors_invertible(self, fits, label):
+        fit, _, _ = fits[label]
+        assert _min_ma_root_modulus(fit.ma) >= 1.0 - 1e-6
+        assert _min_ma_root_modulus(fit.seasonal_ma) >= 1.0 - 1e-6
+
+    @pytest.mark.parametrize("label", ["ap_111_111", "co2_101m"])
+    def test_sigma2_matches_r(self, fits, label):
+        fit, m, _ = fits[label]
+        assert_allclose(fit.sigma2, m["sigma2"], rtol=1e-2, err_msg=label)
+
+    @pytest.mark.parametrize("label", ["ap_111_111", "co2_101m"])
+    def test_loglik_invariant(self, fits, label):
+        # Normalization must not move the likelihood.
+        fit, m, _ = fits[label]
+        assert_allclose(fit.log_likelihood, m["loglik"], atol=0.05)
+
+    def test_ma_coefficients_match_r(self, fits):
+        # ap_111_111's seasonal MA was the mirror 1.19 -> R's ~0.83.
+        fit, m, _ = fits["ap_111_111"]
+        assert_allclose(
+            fit.seasonal_ma[0], m["coef"]["sma1"], atol=0.05,
+        )
+
+    def test_boundary_roots_untouched(self, fits):
+        # nottem (1,1,1)(1,1,0): ma1 ~ -1 is a genuine pile-up optimum;
+        # normalization must not churn it.
+        fit, m, _ = fits["nottem_111_110"]
+        assert_allclose(fit.ma[0], m["coef"]["ma1"], atol=5e-3)
+
+
+class TestNormalizeMACoefficients:
+    """Unit tests for the polynomial normalization itself."""
+
+    def test_mirror_flip(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        out, flipped = normalize_ma_coefficients(np.array([1.192]))
+        assert flipped
+        assert_allclose(out, [1.0 / 1.192], atol=1e-12)
+
+    def test_acf_invariance(self):
+        # The flip must preserve the autocovariance structure up to the
+        # sigma2 rescale: for MA(1), gamma1/gamma0 is invariant.
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        theta = 1.7
+        out, _ = normalize_ma_coefficients(np.array([theta]))
+        rho_before = theta / (1 + theta**2)
+        rho_after = out[0] / (1 + out[0] ** 2)
+        assert_allclose(rho_before, rho_after, atol=1e-12)
+
+    def test_invertible_untouched(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        ma = np.array([-0.4, 0.2])
+        out, flipped = normalize_ma_coefficients(ma)
+        assert not flipped
+        assert out is ma
+
+    def test_boundary_untouched(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        out, flipped = normalize_ma_coefficients(np.array([-0.99999999]))
+        assert not flipped
+
+    def test_empty(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        out, flipped = normalize_ma_coefficients(np.array([]))
+        assert not flipped and len(out) == 0
+
+    def test_multiple_roots_flipped(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        # (1 - 1.5z)(1 - 1.2z): both roots inside; both must flip.
+        ma = np.convolve([1, -1.5], [1, -1.2])[1:]
+        out, flipped = normalize_ma_coefficients(np.asarray(ma))
+        assert flipped
+        expected = np.convolve([1, -1 / 1.5], [1, -1 / 1.2])[1:]
+        assert_allclose(out, expected, atol=1e-12)
+
+    def test_complex_pair_flip_stays_real(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        # Conjugate pair at modulus 0.5 (inside): 1 + z + 4z^2 has
+        # roots (-1 +/- i*sqrt(15))/8, |r| = 0.5. Both flip to
+        # modulus 2; coefficients must stay real and the flipped
+        # polynomial has roots at 1/conj(r).
+        ma = np.array([1.0, 4.0])
+        out, flipped = normalize_ma_coefficients(ma)
+        assert flipped
+        assert out.dtype.kind == "f"
+        roots = np.roots(np.concatenate((out[::-1], [1.0])))
+        assert_allclose(np.abs(roots), [2.0, 2.0], atol=1e-10)
+
+    def test_trailing_zero_padding(self):
+        from pystatistics.timeseries._arima_factored import (
+            normalize_ma_coefficients,
+        )
+
+        # Degenerate degree: [2.0, 0.0] is really MA(1) with theta=2
+        # (root 0.5 inside). Output must flip and keep length 2.
+        out, flipped = normalize_ma_coefficients(np.array([2.0, 0.0]))
+        assert flipped
+        assert len(out) == 2
+        assert_allclose(out, [0.5, 0.0], atol=1e-12)
+
+    def test_invariance_guard_reverts_loudly(self):
+        # Feed normalize_to_invertible a WRONG nll so the invariance
+        # guard must fail: it has to warn and return the ORIGINALS.
+        import warnings as _warnings
+
+        from pystatistics.timeseries._arima_factored import (
+            normalize_to_invertible,
+        )
+
+        rng = np.random.default_rng(11)
+        y = rng.normal(size=80)
+        params = np.array([1.5])  # MA(1) mirror, p=0/q=1
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            out_params, out_factored, out_nll = normalize_to_invertible(
+                params, None, -12345.0, y, 0, 1, 0, 0, 1, False,
+            )
+        assert out_params is params
+        assert out_nll == -12345.0
+        assert any(
+            "invertibility normalization" in str(w.message) for w in caught
+        )
+
+
+# =========================================================================
+# Kalman residuals (R's residuals() convention)
+# =========================================================================
+
+class TestKalmanResiduals:
+    @pytest.mark.parametrize(
+        "label", ["airline", "s211_010", "logap_111_110", "co2_101m"],
+    )
+    def test_matches_r_residuals(self, fits, label):
+        # R's residual vector spans the ORIGINAL series; the first
+        # d + D*m entries belong to observations consumed by
+        # differencing. Tolerance is scaled to the residual magnitude
+        # (fit-point noise); the CSS-vs-Kalman discrepancy this guards
+        # is ~50x larger at the head of the sample.
+        fit, m, _ = fits[label]
+        r_res = np.asarray(m["resid"], dtype=np.float64)
+        offset = len(r_res) - len(fit.residuals)
+        aligned = r_res[offset:]
+        scale = float(np.std(aligned))
+        assert np.abs(fit.residuals - aligned).max() < 0.1 * scale, label
+
+    def test_mean_square_equals_sigma2(self, fits):
+        # v_t/sqrt(F_t) has variance sigma2 at every t, and the profile
+        # ML estimator is exactly mean(res^2): an identity, not an
+        # approximation.
+        for label, (fit, _, _) in fits.items():
+            assert_allclose(
+                np.mean(fit.residuals**2), fit.sigma2, rtol=1e-10,
+                err_msg=label,
+            )
+
+    def test_fitted_plus_residuals_reconstruct(self, fits):
+        fit, _, x = fits["airline"]
+        from pystatistics.timeseries._differencing import diff
+
+        y_diff = diff(diff(x, differences=1, lag=12), differences=1, lag=1)
+        assert_allclose(fit.fitted_values + fit.residuals, y_diff, atol=1e-10)
+
+    def test_css_fits_keep_css_residuals(self, fits):
+        from pystatistics.timeseries._arima_likelihood import (
+            arima_css_residuals,
+        )
+
+        _, _, x = fits["ns211"]
+        fit = arima(x, order=(2, 1, 1), method="CSS")
+        from pystatistics.timeseries._differencing import diff
+
+        y_diff = diff(x, differences=1, lag=1)
+        expected = arima_css_residuals(
+            y_diff, fit.ar, fit.ma, 0.0,
+        )
+        assert_allclose(fit.residuals, expected, atol=1e-12)
 
 
 # =========================================================================

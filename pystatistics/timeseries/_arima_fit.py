@@ -32,6 +32,7 @@ from pystatistics.timeseries._arima_factored import (
     _factored_to_effective,
     _multiply_ma_polynomials,
     _multiply_polynomials,
+    normalize_to_invertible,
     optimize_arima_factored as _optimize_arima_factored_impl,
 )
 from pystatistics.timeseries._arima_likelihood import (
@@ -644,6 +645,19 @@ def arima(
             reason="optimizer_failed",
         )
 
+    # ----- Canonical (invertible) MA representation -----
+    # Exact-ML fits are reported in the invertible representative (the
+    # identified/fundamental parameterization; ~10% of boundary-ish
+    # fits landed on the non-invertible mirror with sigma2 up to 53%
+    # below R). Not applied to pure-CSS fits — the CSS criterion is not
+    # reflection-invariant. See normalize_to_invertible for the full
+    # rationale and the likelihood-invariance guard.
+    if method_used in ("ML", "CSS-ML"):
+        opt_params, opt_factored, nll = normalize_to_invertible(
+            opt_params, opt_factored, nll, y_diff,
+            p, q, sp, sq, m, include_mean,
+        )
+
     # ----- Extract results -----
     ar_eff = opt_params[:p_eff]
     ma_eff = opt_params[p_eff:p_eff + q_eff]
@@ -651,34 +665,30 @@ def arima(
 
     mean_val = mean_est if include_mean else 0.0
 
-    # Compute final residuals and fitted values
-    residuals = arima_css_residuals(y_diff, ar_eff, ma_eff, mean_val)
-    fitted = y_diff - residuals
-
-    # Innovation variance. For ML-family fits report the Kalman profile
-    # estimate ((1/n) sum innov_t^2 / F_t), matching R stats::arima's
-    # sigma2. The CSS-residual SSE/n overstates it when an MA root is
-    # near the unit circle (AirPassengers (2,1,1)(0,1,0)[12], ma1=-0.98:
-    # 133.09 vs R's 129.31), which propagated into forecast standard
-    # errors (RIGOR R18 follow-up). Pure-CSS fits keep SSE/n — R's CSS
-    # convention.
+    # Residuals and innovation variance. ML-family fits report the
+    # standardized Kalman innovations v_t/sqrt(F_t) — homoscedastic
+    # white noise with variance sigma2 under the model (the object
+    # Ljung-Box/ACF diagnostics assume) and R's residuals() convention
+    # (arima.c scales by sqrt(gain)). The profile ML variance is then
+    # EXACTLY mean(residuals^2) ((1/n) sum v_t^2/F_t — R's sigma2; the
+    # CSS SSE/n overstated it 2.9% at an MA-boundary fit and CSS
+    # residuals carry a conditioning transient decaying like the
+    # largest MA root modulus^t, still ~7% at t=131 for ma1=-0.98).
+    # kalman_arma_innovations raises loudly if the filter fails at the
+    # fitted parameters (Rule 1). Pure-CSS fits keep the CSS recursion
+    # and SSE/n — R's CSS convention.
     if method_used in ("ML", "CSS-ML"):
-        from pystatistics.timeseries._arima_kalman import kalman_arma_loglik
-        nll_check, sigma2 = kalman_arma_loglik(y_diff, ar_eff, ma_eff, mean_val)
-        # kalman_arma_loglik signals failure with a penalty nll and a
-        # PLACEHOLDER sigma2 of 1.0 — silently reporting that would
-        # mask the failure (Rule 1). It cannot happen at parameters the
-        # ML stage just evaluated successfully, so treat it as the
-        # internal error it is.
-        if nll_check >= 1e17:
-            raise ConvergenceError(
-                "exact-ML evaluation failed at the fitted parameters; "
-                "sigma2 cannot be computed",
-                iterations=n_iter,
-                reason="ml_eval_failed_at_optimum",
-            )
+        from pystatistics.timeseries._arima_kalman import (
+            kalman_arma_innovations,
+        )
+        residuals = kalman_arma_innovations(
+            y_diff - mean_val, ar_eff, ma_eff,
+        )
+        sigma2 = float(np.mean(residuals * residuals))
     else:
+        residuals = arima_css_residuals(y_diff, ar_eff, ma_eff, mean_val)
         sigma2 = np.dot(residuals, residuals) / n_used
+    fitted = y_diff - residuals
 
     # ----- Decompose effective coefficients into seasonal and non-seasonal -----
     if seasonal_fit:
