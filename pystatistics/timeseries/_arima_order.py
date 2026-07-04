@@ -42,7 +42,8 @@ class AutoARIMAParams:
         Total number of models successfully evaluated.
     search_results : list[tuple[tuple, float]]
         ``(order, ic_value)`` pairs for every model tried (including
-        those that failed, recorded with ``inf``).
+        those that failed, recorded with ``inf``). For seasonal
+        searches ``order`` is the pair ``((p, d, q), (P, D, Q, m))``.
     """
 
     best_model: object  # ARIMASolution (forward reference)
@@ -75,7 +76,8 @@ class AutoARIMASolution(SolutionReprMixin):
         Total number of models successfully evaluated.
     search_results : list[tuple[tuple, float]]
         ``(order, ic_value)`` pairs for every model tried (including
-        those that failed, recorded with ``inf``).
+        those that failed, recorded with ``inf``). For seasonal
+        searches ``order`` is the pair ``((p, d, q), (P, D, Q, m))``.
 
     Methods
     -------
@@ -299,14 +301,28 @@ def _stepwise_search(
     d: int,
     max_p: int,
     max_q: int,
-    seasonal_order: tuple[int, int, int, int] | None,
+    seasonal_start: tuple[int, int, int, int] | None,
     ic: str,
     tol: float,
     max_iter: int,
     method: str = "CSS-ML",
     backend: str | None = None,
-) -> tuple[object, tuple[int, int, int], float, list[tuple[tuple, float]]]:
-    """Stepwise ARIMA order selection.
+    max_P: int = 2,
+    max_Q: int = 2,
+) -> tuple[
+    object,
+    tuple[int, int, int],
+    tuple[int, int, int, int] | None,
+    float,
+    list[tuple[tuple, float]],
+]:
+    """Stepwise ARIMA order selection (Hyndman-Khandakar 2008).
+
+    For seasonal models the seasonal AR/MA orders (P, Q) are searched
+    alongside (p, q) — matching R ``forecast::auto.arima`` — while the
+    differencing orders d and D stay fixed. Previously (P, Q) was
+    pinned at the starting value, which made models such as
+    (2,1,1)(0,1,0)[12] unreachable (RIGOR R18).
 
     Parameters
     ----------
@@ -316,48 +332,80 @@ def _stepwise_search(
         Differencing order.
     max_p, max_q : int
         Upper bounds on p and q.
-    seasonal_order : tuple or None
-        Fixed seasonal order.
+    seasonal_start : tuple or None
+        ``(P, D, Q, m)`` starting seasonal order (D and m are kept
+        fixed; P and Q are searched), or ``None`` for non-seasonal.
     ic : str
         Information criterion.
     tol : float
         Convergence tolerance.
     max_iter : int
         Maximum iterations.
+    method, backend : str, str or None
+        Forwarded to every candidate fit.
+    max_P, max_Q : int
+        Upper bounds on the seasonal AR / MA orders.
 
     Returns
     -------
     tuple
-        ``(best_result, best_order, best_ic, search_results)``
+        ``(best_result, best_order, best_seasonal, best_ic,
+        search_results)``. For seasonal searches each
+        ``search_results`` entry is ``(((p,d,q), (P,D,Q,m)), ic)``;
+        for non-seasonal searches it is ``((p,d,q), ic)``.
     """
-    search_results: list[tuple[tuple, float]] = []
+    seasonal = seasonal_start is not None
+    if seasonal:
+        D, m = seasonal_start[1], seasonal_start[3]
+    else:
+        D, m = 0, 1
 
-    # Initial candidates: (0,d,0), (1,d,0), (0,d,1), (2,d,2)
-    initial_orders = [
-        (2, d, 2),
-        (0, d, 0),
-        (1, d, 0),
-        (0, d, 1),
-    ]
-    # Filter to valid ranges
-    initial_orders = [
-        (p, dd, q) for p, dd, q in initial_orders
-        if p <= max_p and q <= max_q
-    ]
+    def _orders(
+        key: tuple[int, int, int, int],
+    ) -> tuple[tuple[int, int, int], tuple[int, int, int, int] | None]:
+        p, q, P, Q = key
+        return (p, d, q), ((P, D, Q, m) if seasonal else None)
 
-    best_result = None
-    best_order: tuple[int, int, int] = (0, d, 0)
-    best_ic = math.inf
-
-    for order in initial_orders:
-        result, ic_val = _try_fit(
-            y, order, seasonal_order, ic, tol, max_iter, method, backend,
+    # Initial candidates (Hyndman-Khandakar 2008), capped by the user
+    # limits and de-duplicated: (2,d,2)(1,D,1), (0,d,0)(0,D,0),
+    # (1,d,0)(1,D,0), (0,d,1)(0,D,1).
+    raw_initial = [(2, 2, 1, 1), (0, 0, 0, 0), (1, 0, 1, 0), (0, 1, 0, 1)]
+    initial: list[tuple[int, int, int, int]] = []
+    for p, q, P, Q in raw_initial:
+        cand = (
+            min(p, max_p), min(q, max_q),
+            min(P, max_P) if seasonal else 0,
+            min(Q, max_Q) if seasonal else 0,
         )
-        search_results.append((order, ic_val))
+        if cand not in initial:
+            initial.append(cand)
+
+    search_results: list[tuple[tuple, float]] = []
+    best_result: object | None = None
+    best_key = initial[0]
+    best_ic = math.inf
+    visited: set[tuple[int, int, int, int]] = set()
+
+    def _evaluate(key: tuple[int, int, int, int]) -> bool:
+        """Fit one candidate; update the incumbent. Returns True on improvement."""
+        nonlocal best_result, best_key, best_ic
+        visited.add(key)
+        order, s_order = _orders(key)
+        result, ic_val = _try_fit(
+            y, order, s_order, ic, tol, max_iter, method, backend,
+        )
+        search_results.append(
+            ((order, s_order) if seasonal else order, ic_val)
+        )
         if ic_val < best_ic:
             best_ic = ic_val
-            best_order = order
+            best_key = key
             best_result = result
+            return True
+        return False
+
+    for key in initial:
+        _evaluate(key)
 
     if best_result is None:
         raise ConvergenceError(
@@ -366,39 +414,38 @@ def _stepwise_search(
             reason="all_failed",
         )
 
-    # Stepwise neighbourhood search
-    improved = True
-    visited: set[tuple[int, int, int]] = {o for o in initial_orders}
+    # Neighbourhood moves: p/q +/- 1 alone and jointly; for seasonal
+    # models also P/Q +/- 1 alone and jointly (Hyndman-Khandakar).
+    pq_moves = [
+        (-1, 0), (1, 0), (0, -1), (0, 1),
+        (-1, -1), (-1, 1), (1, -1), (1, 1),
+    ]
+    PQ_moves = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)]
 
+    improved = True
     while improved:
         improved = False
-        p, _d, q = best_order
+        p, q, P, Q = best_key
 
-        # Generate neighbours: p +/- 1, q +/- 1, and combinations
-        neighbours = []
-        for dp, dq in [
-            (-1, 0), (1, 0), (0, -1), (0, 1),
-            (-1, -1), (-1, 1), (1, -1), (1, 1),
-        ]:
-            np_, nq = p + dp, q + dq
-            if 0 <= np_ <= max_p and 0 <= nq <= max_q:
-                candidate = (np_, _d, nq)
-                if candidate not in visited:
-                    neighbours.append(candidate)
+        neighbours: list[tuple[int, int, int, int]] = []
+        for dp, dq in pq_moves:
+            cand = (p + dp, q + dq, P, Q)
+            if (0 <= cand[0] <= max_p and 0 <= cand[1] <= max_q
+                    and cand not in visited):
+                neighbours.append(cand)
+        if seasonal:
+            for dP, dQ in PQ_moves:
+                cand = (p, q, P + dP, Q + dQ)
+                if (0 <= cand[2] <= max_P and 0 <= cand[3] <= max_Q
+                        and cand not in visited):
+                    neighbours.append(cand)
 
-        for order in neighbours:
-            visited.add(order)
-            result, ic_val = _try_fit(
-                y, order, seasonal_order, ic, tol, max_iter, method, backend,
-            )
-            search_results.append((order, ic_val))
-            if ic_val < best_ic:
-                best_ic = ic_val
-                best_order = order
-                best_result = result
+        for cand in neighbours:
+            if _evaluate(cand):
                 improved = True
 
-    return best_result, best_order, best_ic, search_results  # type: ignore[return-value]
+    best_order, best_seasonal = _orders(best_key)
+    return best_result, best_order, best_seasonal, best_ic, search_results
 
 
 # ---------------------------------------------------------------------------
@@ -410,14 +457,23 @@ def _grid_search(
     d: int,
     max_p: int,
     max_q: int,
-    seasonal_order: tuple[int, int, int, int] | None,
+    seasonal_start: tuple[int, int, int, int] | None,
     ic: str,
     tol: float,
     max_iter: int,
     method: str = "CSS-ML",
     backend: str | None = None,
-) -> tuple[object, tuple[int, int, int], float, list[tuple[tuple, float]]]:
-    """Exhaustive grid search over all (p, d, q) combinations.
+    max_P: int = 2,
+    max_Q: int = 2,
+) -> tuple[
+    object,
+    tuple[int, int, int],
+    tuple[int, int, int, int] | None,
+    float,
+    list[tuple[tuple, float]],
+]:
+    """Exhaustive grid search over all (p, q) — and, for seasonal
+    models, (P, Q) — combinations.
 
     Parameters
     ----------
@@ -427,34 +483,59 @@ def _grid_search(
         Differencing order.
     max_p, max_q : int
         Upper bounds.
-    seasonal_order : tuple or None
-        Fixed seasonal order.
+    seasonal_start : tuple or None
+        ``(P, D, Q, m)`` — D and m are kept fixed, the P/Q grid is
+        searched. ``None`` for non-seasonal.
     ic : str
         Information criterion.
     tol : float
         Convergence tolerance.
     max_iter : int
         Maximum iterations.
+    method, backend : str, str or None
+        Forwarded to every candidate fit.
+    max_P, max_Q : int
+        Upper bounds on the seasonal AR / MA orders.
 
     Returns
     -------
     tuple
-        ``(best_result, best_order, best_ic, search_results)``
+        ``(best_result, best_order, best_seasonal, best_ic,
+        search_results)`` — same conventions as
+        :func:`_stepwise_search`.
     """
+    seasonal = seasonal_start is not None
+    if seasonal:
+        D, m = seasonal_start[1], seasonal_start[3]
+        P_range: range | list[int] = range(max_P + 1)
+        Q_range: range | list[int] = range(max_Q + 1)
+    else:
+        D, m = 0, 1
+        P_range, Q_range = [0], [0]
+
     search_results: list[tuple[tuple, float]] = []
     best_result = None
     best_order: tuple[int, int, int] = (0, d, 0)
+    best_seasonal: tuple[int, int, int, int] | None = (
+        (0, D, 0, m) if seasonal else None
+    )
     best_ic = math.inf
 
-    for p, q in itertools.product(range(max_p + 1), range(max_q + 1)):
+    for p, q, P, Q in itertools.product(
+        range(max_p + 1), range(max_q + 1), P_range, Q_range,
+    ):
         order = (p, d, q)
+        s_order = (P, D, Q, m) if seasonal else None
         result, ic_val = _try_fit(
-            y, order, seasonal_order, ic, tol, max_iter, method, backend,
+            y, order, s_order, ic, tol, max_iter, method, backend,
         )
-        search_results.append((order, ic_val))
+        search_results.append(
+            ((order, s_order) if seasonal else order, ic_val)
+        )
         if ic_val < best_ic:
             best_ic = ic_val
             best_order = order
+            best_seasonal = s_order
             best_result = result
 
     if best_result is None:
@@ -464,7 +545,7 @@ def _grid_search(
             reason="all_failed",
         )
 
-    return best_result, best_order, best_ic, search_results  # type: ignore[return-value]
+    return best_result, best_order, best_seasonal, best_ic, search_results
 
 
 # ---------------------------------------------------------------------------
@@ -494,10 +575,12 @@ def auto_arima(
 
     For ``stepwise=True`` the Hyndman--Khandakar (2008) algorithm is
     used: start from a set of initial candidates and greedily explore
-    neighbouring orders.
+    neighbouring orders. For seasonal models (``period > 1``) the
+    seasonal AR/MA orders (P, Q) are searched alongside (p, q).
 
     For ``stepwise=False`` an exhaustive grid search over all
-    ``p = 0 .. max_p``, ``q = 0 .. max_q`` combinations is performed
+    ``p = 0 .. max_p``, ``q = 0 .. max_q`` — and, for seasonal models,
+    ``P = 0 .. max_P``, ``Q = 0 .. max_Q`` — combinations is performed
     (much slower but thorough).
 
     Parameters
@@ -560,32 +643,37 @@ def auto_arima(
             f"max_p, max_q, max_d must be non-negative, "
             f"got max_p={max_p}, max_q={max_q}, max_d={max_d}"
         )
+    if max_P < 0 or max_Q < 0 or max_D < 0:
+        raise ValidationError(
+            f"max_P, max_Q, max_D must be non-negative, "
+            f"got max_P={max_P}, max_Q={max_Q}, max_D={max_D}"
+        )
     if period < 1:
         raise ValidationError(f"period: must be >= 1, got {period}")
 
     # --- Determine differencing order ---
     d = _determine_d(arr, max_d)
 
-    # --- Seasonal order ---
-    seasonal_order: tuple[int, int, int, int] | None = None
+    # --- Seasonal starting order (P and Q are then searched) ---
+    seasonal_start: tuple[int, int, int, int] | None = None
     if period > 1:
         D = _determine_D(arr, period, max_D)
-        # For the seasonal component, use simple fixed P=1, Q=1 when
-        # the data is seasonal, capped by user limits.
-        P = min(1, max_P)
-        Q = min(1, max_Q)
-        seasonal_order = (P, D, Q, period)
+        seasonal_start = (min(1, max_P), D, min(1, max_Q), period)
 
     # --- Search ---
     if stepwise:
-        best_result, best_order, best_ic_val, search_results = _stepwise_search(
-            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter,
-            method, backend,
+        best_result, best_order, best_seasonal, best_ic_val, search_results = (
+            _stepwise_search(
+                arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
+                method, backend, max_P, max_Q,
+            )
         )
     else:
-        best_result, best_order, best_ic_val, search_results = _grid_search(
-            arr, d, max_p, max_q, seasonal_order, ic, tol, max_iter,
-            method, backend,
+        best_result, best_order, best_seasonal, best_ic_val, search_results = (
+            _grid_search(
+                arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
+                method, backend, max_P, max_Q,
+            )
         )
 
     models_fitted = sum(1 for _, v in search_results if v < math.inf)
@@ -595,7 +683,7 @@ def auto_arima(
             params=AutoARIMAParams(
                 best_model=best_result,
                 best_order=best_order,
-                best_seasonal=seasonal_order,
+                best_seasonal=best_seasonal,
                 best_aic=best_ic_val,
                 models_fitted=models_fitted,
                 search_results=search_results,

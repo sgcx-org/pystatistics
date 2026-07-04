@@ -502,7 +502,9 @@ def arima(
         ``(P, D, Q, m)`` — seasonal AR order, seasonal differencing order,
         seasonal MA order, and period. ``None`` for non-seasonal models.
     include_mean : bool
-        Whether to include a mean term. Default ``True``.
+        Whether to include a mean term. Default ``True``. Ignored (no
+        mean is estimated) when the model has any differencing
+        (``d + D > 0``), matching R ``stats::arima``'s ``include.mean``.
     method : str
         ``'CSS'``, ``'ML'``, or ``'CSS-ML'``. Default ``'CSS-ML'``.
     tol : float
@@ -525,6 +527,15 @@ def arima(
     arr = _validate_arima_inputs(y, order, seasonal, include_mean, method)
     n_obs = len(arr)
     p, d, q = order
+
+    # R parity (stats::arima): ``include.mean`` "is ignored for ARIMA
+    # models with differencing" — when d + D > 0 no mean/intercept is
+    # estimated. Estimating one anyway would act as an implicit drift
+    # term, changing both the fit and the free-parameter count used by
+    # the information criteria (RIGOR R18).
+    d_seasonal = seasonal[1] if seasonal is not None else 0
+    if d + d_seasonal > 0:
+        include_mean = False
 
     # ----- Apply differencing -----
     y_diff = arr.copy()
@@ -623,6 +634,12 @@ def arima(
             + 0.5 * n_used * np.log(max(sigma2, 1e-15))
             + 0.5 * n_used
         )
+        # Only free parameter is sigma2 (k = 1), so
+        # AICc = AIC + 2k(k+1)/(n-k-1) = AIC + 4/(n-2).
+        aic_triv = 2.0 * nll + 2.0
+        aicc_triv = (
+            aic_triv + 4.0 / (n_used - 2) if n_used > 2 else np.inf
+        )
         return ARIMASolution(
             _result=Result(
                 params=ARIMAParams(
@@ -638,8 +655,8 @@ def arima(
                     residuals=residuals,
                     fitted_values=y_diff - residuals,
                     log_likelihood=-nll,
-                    aic=2.0 * nll + 2.0,
-                    aicc=2.0 * nll + 2.0 + (2.0 / max(n_used - 2, 1)),
+                    aic=aic_triv,
+                    aicc=aicc_triv,
                     bic=2.0 * nll + np.log(n_used),
                     n_obs=n_obs,
                     n_used=n_used,
@@ -745,8 +762,15 @@ def arima(
         )
 
     # ----- Information criteria -----
-    # k = number of estimated parameters (coefficients + sigma2)
-    k = n_coef + 1  # +1 for sigma2
+    # k = number of FREE estimated parameters, matching R stats::arima:
+    # p + q + P + Q coefficients, + 1 if a mean is estimated, + 1 for
+    # sigma2 (R's AIC uses length(coef) + 1). NOT len(opt_params): for
+    # seasonal models opt_params holds the multiplied-out effective
+    # polynomials (order p + P*m etc.), which silently inflated the IC —
+    # the airline model (0,1,1)(0,1,1)[12] was counted as k=15 instead
+    # of k=3, making auto_arima rank and select the wrong models
+    # (RIGOR R18). Must equal ARIMASolution.n_params.
+    k = p + q + sp + sq + (1 if include_mean else 0) + 1
     loglik = -nll
     aic = -2.0 * loglik + 2.0 * k
     bic = -2.0 * loglik + k * np.log(n_used)

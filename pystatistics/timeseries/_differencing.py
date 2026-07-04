@@ -144,12 +144,23 @@ def ndiffs(
             return d
 
         if test == "adf":
-            result = adf_test(current)
+            # Pinned to the constant-only ("drift") variant that
+            # forecast::ndiffs uses for its ADF test — adf_test's own
+            # default is 'ct' (tseries::adf.test parity) and must not
+            # leak into ndiffs semantics.
+            result = adf_test(current, regression="c")
             # ADF: H0 = unit root. Reject H0 (p < alpha) means stationary.
             if result.p_value < alpha:
                 return d
         else:
-            result = kpss_test(current)
+            # Pinned to forecast::ndiffs's bandwidth: it calls
+            # urca::ur.kpss with use.lag = trunc(3*sqrt(n)/13), NOT the
+            # tseries lshort rule that is now kpss_test's default.
+            # Verified on WWWusage (n=100): forecast uses 2 lags and
+            # returns d=1; the lshort default (4 lags) would flip it
+            # to d=0.
+            use_lag = int(np.trunc(3.0 * np.sqrt(len(current)) / 13.0))
+            result = kpss_test(current, n_lags=use_lag)
             # KPSS: H0 = stationary. Fail to reject (p > alpha) means stationary.
             if result.p_value > alpha:
                 return d

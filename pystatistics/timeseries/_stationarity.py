@@ -2,8 +2,10 @@
 Stationarity tests for time series.
 
 Provides adf_test() matching R's tseries::adf.test() and kpss_test()
-matching R's tseries::kpss.test(). Both use embedded critical value
-tables and linear interpolation for p-value computation.
+matching R's tseries::kpss.test(). ADF p-values and critical values
+come from the MacKinnon response surfaces (:mod:`_adf_mackinnon`);
+KPSS p-values use linear interpolation in the Kwiatkowski et al.
+(1992) critical-value table, exactly as tseries does.
 """
 
 from __future__ import annotations
@@ -14,150 +16,25 @@ from numpy.typing import ArrayLike, NDArray
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
+from pystatistics.timeseries._adf_mackinnon import (
+    adf_critical_values,
+    adf_pvalue,
+)
 from pystatistics.timeseries._common import StationarityParams, StationaritySolution
-
-
-# ---------------------------------------------------------------------------
-# ADF critical value tables (MacKinnon 1996)
-# ---------------------------------------------------------------------------
-# Tables indexed by sample size. Critical values for tau statistic at
-# 1%, 5%, 10% significance levels.
-# Source: MacKinnon, J.G. (1996), "Numerical Distribution Functions for
-# Unit Root and Cointegration Tests", Journal of Applied Econometrics.
-#
-# These are the asymptotic (large-n) critical values widely used in
-# the ADF literature.
-
-_ADF_CRITICAL_VALUES = {
-    "nc": {
-        # No constant, no trend
-        "1%": -2.58,
-        "5%": -1.95,
-        "10%": -1.62,
-    },
-    "c": {
-        # Constant, no trend
-        "1%": -3.43,
-        "5%": -2.86,
-        "10%": -2.57,
-    },
-    "ct": {
-        # Constant + trend
-        "1%": -3.96,
-        "5%": -3.41,
-        "10%": -3.12,
-    },
-}
-
-# Finite-sample adjustment coefficients for ADF critical values.
-# cv(n) = cv_inf + c1/n + c2/n^2
-# From MacKinnon (1996) Table 1 (tau statistics).
-_ADF_CV_ADJUSTMENTS = {
-    "nc": {
-        "1%": (-2.5658, -1.960, -10.04),
-        "5%": (-1.9393, -0.398, 0.0),
-        "10%": (-1.6156, -0.181, 0.0),
-    },
-    "c": {
-        "1%": (-3.4336, -5.999, -29.25),
-        "5%": (-2.8621, -2.738, -8.36),
-        "10%": (-2.5671, -1.438, -4.48),
-    },
-    "ct": {
-        "1%": (-3.9638, -8.353, -47.44),
-        "5%": (-3.4126, -4.039, -17.83),
-        "10%": (-3.1279, -2.418, -7.58),
-    },
-}
-
-
-def _adf_critical_values_for_n(
-    regression: str, n: int
-) -> dict[str, float]:
-    """
-    Compute ADF critical values adjusted for finite sample size.
-
-    Uses MacKinnon (1996) response surface regression:
-        cv(n) = c_inf + c1/n + c2/n^2
-
-    Parameters
-    ----------
-    regression : str
-        Regression type: 'nc', 'c', or 'ct'.
-    n : int
-        Number of observations.
-
-    Returns
-    -------
-    dict[str, float]
-        Critical values at 1%, 5%, 10% levels.
-    """
-    adjustments = _ADF_CV_ADJUSTMENTS[regression]
-    result = {}
-    for level, (c_inf, c1, c2) in adjustments.items():
-        result[level] = c_inf + c1 / n + c2 / (n * n)
-    return result
-
-
-def _adf_pvalue(statistic: float, regression: str, n: int) -> float:
-    """
-    Compute ADF p-value by interpolation from critical values.
-
-    Uses linear interpolation between the standard critical value levels
-    (1%, 5%, 10%). Values beyond the table range are clamped.
-
-    Parameters
-    ----------
-    statistic : float
-        ADF test statistic.
-    regression : str
-        Regression type.
-    n : int
-        Sample size.
-
-    Returns
-    -------
-    float
-        Approximate p-value.
-    """
-    cv = _adf_critical_values_for_n(regression, n)
-
-    # Critical values sorted from most negative (1%) to least negative (10%)
-    # p-values: 0.01, 0.05, 0.10
-    cv_levels = [0.01, 0.05, 0.10]
-    cv_vals = [cv["1%"], cv["5%"], cv["10%"]]
-
-    # If statistic is more extreme than 1% CV
-    if statistic <= cv_vals[0]:
-        return 0.01
-
-    # If statistic is less extreme than 10% CV
-    if statistic >= cv_vals[2]:
-        # Extrapolate toward p=1 using the slope between 5% and 10%
-        slope = (0.10 - 0.05) / (cv_vals[2] - cv_vals[1])
-        p = 0.10 + slope * (statistic - cv_vals[2])
-        return min(max(p, 0.10), 0.9999)
-
-    # Linear interpolation between adjacent CV levels
-    for i in range(len(cv_vals) - 1):
-        if cv_vals[i] <= statistic <= cv_vals[i + 1]:
-            frac = (statistic - cv_vals[i]) / (cv_vals[i + 1] - cv_vals[i])
-            return cv_levels[i] + frac * (cv_levels[i + 1] - cv_levels[i])
-
-    # Fallback (should not reach here)
-    return 0.5
 
 
 def adf_test(
     x: ArrayLike,
     *,
     n_lags: int | None = None,
-    regression: str = "c",
+    regression: str = "ct",
 ) -> StationaritySolution:
     """
     Augmented Dickey-Fuller test for unit root.
 
-    Matches R's tseries::adf.test().
+    Matches R's tseries::adf.test() (statistic and lag convention) with
+    MacKinnon (1994) p-values (the surface used by statsmodels
+    ``adfuller`` and by ``urca::ur.df``'s critical values).
 
     Tests H0: x has a unit root (non-stationary)
     vs   H1: x is stationary
@@ -169,8 +46,10 @@ def adf_test(
     The test statistic is the t-statistic for gamma. The ``regression``
     parameter controls which deterministic terms are included:
     - 'nc': no constant, no trend
-    - 'c': constant only (default, matches R)
-    - 'ct': constant + linear trend
+    - 'c': constant only
+    - 'ct': constant + linear trend (default). This is what R's
+      tseries::adf.test always uses; with matching ``n_lags`` the
+      statistic reproduces it exactly.
 
     Parameters
     ----------
@@ -180,7 +59,7 @@ def adf_test(
         Number of lagged difference terms. Default: floor((n-1)^(1/3)),
         matching R's tseries::adf.test().
     regression : str
-        'nc' (none), 'c' (constant), 'ct' (constant + trend).
+        'nc' (none), 'c' (constant), 'ct' (constant + trend, default).
 
     Returns
     -------
@@ -194,7 +73,13 @@ def adf_test(
 
     Notes
     -----
-    Validated against R tseries::adf.test().
+    Statistic validated against both R tseries::adf.test() and
+    statsmodels ``adfuller``; p-values validated against statsmodels
+    (MacKinnon 1994 surface, full range — both tails and the middle).
+    tseries::adf.test itself interpolates a small table and caps its
+    p-values at [0.01, 0.99]; inside that range the two agree, outside
+    it this implementation keeps resolving while tseries saturates.
+    Critical values use the MacKinnon (2010) finite-sample surface.
     """
     arr = check_array(x, "x")
     arr = arr.ravel()
@@ -299,9 +184,13 @@ def adf_test(
 
     tau = coeffs[0] / se_gamma
 
-    # Critical values and p-value
-    critical_values = _adf_critical_values_for_n(regression, n_eff)
-    p_value = _adf_pvalue(float(tau), regression, n_eff)
+    # Critical values (MacKinnon 2010 finite-sample surface) and
+    # p-value (MacKinnon 1994 surface — valid across the whole range,
+    # not interpolated from the 1/5/10% points; RIGOR R18 fixed a
+    # near-unit-root series reporting p=0.44 where the correct value
+    # is ~0.92).
+    critical_values = adf_critical_values(regression, n_eff)
+    p_value = adf_pvalue(float(tau), regression)
 
     return StationaritySolution(
         _result=Result(
@@ -387,7 +276,11 @@ def _kpss_pvalue(statistic: float, regression: str) -> float:
             p = alphas[i] - frac * (alphas[i] - alphas[i + 1])
             return p
 
-    return 0.05  # fallback
+    # Unreachable for finite statistics (the clamps above cover both
+    # tails); reachable only on NaN, which upstream validation blocks.
+    raise ValidationError(
+        f"KPSS p-value interpolation failed for statistic={statistic!r}"
+    )
 
 
 def kpss_test(
@@ -395,11 +288,12 @@ def kpss_test(
     *,
     regression: str = "c",
     n_lags: int | None = None,
+    lshort: bool = True,
 ) -> StationaritySolution:
     """
     KPSS test for stationarity.
 
-    Matches R's tseries::kpss.test().
+    Matches R's tseries::kpss.test(), including its default bandwidth.
 
     Tests H0: x is (level or trend) stationary
     vs   H1: x has a unit root
@@ -419,10 +313,17 @@ def kpss_test(
     x : ArrayLike
         Time series (1-D array). Must have at least 3 observations.
     regression : str
-        'c' (level stationarity) or 'ct' (trend stationarity).
+        'c' (level stationarity, tseries ``null="Level"``) or 'ct'
+        (trend stationarity, tseries ``null="Trend"``).
     n_lags : int or None
-        Number of lags for Bartlett kernel. Default: floor(3*sqrt(n)/13),
-        matching R.
+        Number of lags for the Bartlett kernel. Default ``None`` uses
+        the tseries::kpss.test rule selected by ``lshort``:
+        ``trunc(4*(n/100)^(1/4))`` when ``lshort=True`` (tseries
+        default) or ``trunc(12*(n/100)^(1/4))`` when ``lshort=False``.
+        An explicit ``n_lags`` overrides ``lshort``.
+    lshort : bool
+        Bandwidth rule used when ``n_lags`` is ``None`` — the
+        equivalent of tseries's ``lshort`` argument. Default ``True``.
 
     Returns
     -------
@@ -436,7 +337,11 @@ def kpss_test(
 
     Notes
     -----
-    Validated against R tseries::kpss.test().
+    Validated against R tseries::kpss.test() for both ``null="Level"``
+    and ``null="Trend"``: at a matched bandwidth the statistic is
+    reproduced exactly, and the p-value uses the same linear
+    interpolation of the Kwiatkowski et al. (1992) table, clamped to
+    tseries's reporting range [0.01, 0.10].
     """
     arr = check_array(x, "x")
     arr = arr.ravel()
@@ -454,9 +359,16 @@ def kpss_test(
         raise ValidationError(
             f"regression: must be one of {valid_regression}, got '{regression}'"
         )
+    if not isinstance(lshort, (bool, np.bool_)):
+        raise ValidationError(
+            f"lshort: must be a bool, got {type(lshort).__name__}"
+        )
 
     if n_lags is None:
-        n_lags = int(np.floor(3.0 * np.sqrt(n) / 13.0))
+        # tseries::kpss.test bandwidth (RIGOR R18 — previously
+        # floor(3*sqrt(n)/13), which disagreed with tseries at every n).
+        factor = 4.0 if lshort else 12.0
+        n_lags = int(np.trunc(factor * (n / 100.0) ** 0.25))
     else:
         if not isinstance(n_lags, (int, np.integer)) or n_lags < 0:
             raise ValidationError(
@@ -473,6 +385,18 @@ def kpss_test(
 
     coeffs, _, _, _ = np.linalg.lstsq(Z, arr, rcond=None)
     residuals = arr - Z @ coeffs
+
+    # Fail loud on a degenerate regression: if the deterministic terms
+    # fit x exactly (constant series under 'c', exactly linear series
+    # under 'ct'), the statistic is 0/0 and any returned value would be
+    # rounding noise dressed up as a test result.
+    scale = float(np.max(np.abs(arr)))
+    if np.max(np.abs(residuals)) <= 1e-12 * max(scale, 1.0):
+        raise ValidationError(
+            "x: the deterministic terms fit the series exactly "
+            "(constant, or exactly linear with regression='ct'); "
+            "the KPSS statistic is undefined."
+        )
 
     # Step 2: Partial sums of residuals
     S = np.cumsum(residuals)
@@ -498,11 +422,6 @@ def kpss_test(
 
     # Critical values and p-value
     table = _KPSS_CRITICAL_VALUES[regression]
-    critical_values = {
-        f"{int(alpha * 100)}%" if alpha * 100 == int(alpha * 100) else f"{alpha * 100}%": cv
-        for alpha, cv in sorted(table.items())
-    }
-    # Clean up the keys to standard format
     critical_values = {}
     for alpha_level in sorted(table.keys()):
         pct = alpha_level * 100

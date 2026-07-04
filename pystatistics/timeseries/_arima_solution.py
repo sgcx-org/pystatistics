@@ -43,7 +43,8 @@ class ARIMAParams:
         Seasonal MA coefficients (length Q). Empty if non-seasonal.
     mean : float or None
         Estimated mean of the differenced series (``None`` if
-        ``include_mean=False``).
+        ``include_mean=False`` or if the model has any differencing,
+        matching R ``stats::arima``).
     sigma2 : float
         Estimated innovation variance.
     vcov : NDArray
@@ -57,9 +58,13 @@ class ARIMAParams:
     log_likelihood : float
         Maximized log-likelihood value.
     aic : float
-        Akaike information criterion: ``-2*loglik + 2*k``.
+        Akaike information criterion: ``-2*loglik + 2*k``, where *k* is
+        the number of FREE estimated parameters
+        (``p + q + P + Q + mean-if-estimated + 1`` for sigma2 — equal to
+        ``ARIMASolution.n_params``), matching R ``stats::arima``.
     aicc : float
-        Corrected AIC: ``AIC + 2*k*(k+1)/(n-k-1)``.
+        Corrected AIC: ``AIC + 2*k*(k+1)/(n-k-1)`` with the same free
+        *k* and ``n = n_used``.
     bic : float
         Bayesian information criterion: ``-2*loglik + k*log(n)``.
     n_obs : int
