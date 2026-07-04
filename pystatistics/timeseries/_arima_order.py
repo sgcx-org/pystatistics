@@ -230,14 +230,75 @@ def _try_fit(
         )
         if not result.converged:
             return None, math.inf
+        if _has_near_unit_roots(result):
+            return None, math.inf
         return result, _get_ic(result, ic)
     except (ConvergenceError, ValidationError, np.linalg.LinAlgError,
             ValueError, RuntimeError):
         return None, math.inf
 
 
+# Root-modulus floor below which a candidate is rejected, matching
+# forecast::auto.arima's `myarima` (it sets ic = Inf when any root of
+# the fitted AR or MA polynomial lies within 1.01 of the unit circle).
+_ROOT_MODULUS_FLOOR = 1.01
+
+
+def _has_near_unit_roots(result: object) -> bool:
+    """Reject candidates whose fitted AR/MA roots sit at the unit circle.
+
+    Matches forecast::auto.arima's candidate veto: models whose expanded
+    AR or MA polynomial has a root with modulus < 1.01 are excluded from
+    selection. Such fits are the classic over-differencing /
+    root-cancellation pile-up: they win raw AICc (the boundary
+    parameters chase the differencing operator) but are numerically
+    degenerate and forecast poorly, which is why forecast deliberately
+    refuses them. Without this veto the search returns boundary models
+    R would never select — e.g. AirPassengers picked
+    (3,1,3)(1,1,2)[12] over R's (2,1,1)(0,1,0)[12].
+
+    Note ``arima()`` itself still fits whatever it is asked to fit
+    (only warning on non-invertibility) — the veto applies to
+    AUTOMATIC selection only, exactly like R.
+    """
+    from pystatistics.timeseries._arima_factored import (  # lazy import
+        _multiply_ma_polynomials,
+        _multiply_polynomials,
+    )
+
+    period = (
+        result.seasonal_order[3]  # type: ignore[attr-defined]
+        if result.seasonal_order is not None  # type: ignore[attr-defined]
+        else 1
+    )
+    ar_eff = _multiply_polynomials(
+        result.ar, result.seasonal_ar, period,  # type: ignore[attr-defined]
+    )
+    ma_eff = _multiply_ma_polynomials(
+        result.ma, result.seasonal_ma, period,  # type: ignore[attr-defined]
+    )
+    for coefs, sign in ((ar_eff, -1.0), (ma_eff, 1.0)):
+        if len(coefs) == 0:
+            continue
+        # Polynomial 1 -/+ c_1 z - ... in ascending order for np.roots
+        # (which wants descending): [c_q, ..., c_1, 1].
+        poly = np.concatenate((sign * coefs[::-1], [1.0]))
+        roots = np.roots(poly)
+        if len(roots) and np.abs(roots).min() < _ROOT_MODULUS_FLOOR:
+            return True
+    return False
+
+
 def _determine_d(y: NDArray, max_d: int) -> int:
-    """Determine the non-seasonal differencing order using ADF test.
+    """Determine the non-seasonal differencing order using the KPSS test.
+
+    Uses ``ndiffs``'s KPSS default — the same test
+    ``forecast::auto.arima`` uses to pick d. This previously forced
+    ``test='adf'``, which diverges from KPSS on some series and made
+    auto_arima pick a different d than R (wineind: adf says d=0, KPSS
+    and R say d=1; with the wrong d the search cannot reach R's model
+    and ended 41 AICc worse by R's own accounting — RIGOR R18
+    follow-up).
 
     Parameters
     ----------
@@ -251,7 +312,7 @@ def _determine_d(y: NDArray, max_d: int) -> int:
     int
         Recommended d.
     """
-    return ndiffs(y, test="adf", max_d=max_d)
+    return ndiffs(y, max_d=max_d)
 
 
 def _determine_D(y: NDArray, period: int, max_D: int) -> int:
@@ -414,35 +475,41 @@ def _stepwise_search(
             reason="all_failed",
         )
 
-    # Neighbourhood moves: p/q +/- 1 alone and jointly; for seasonal
-    # models also P/Q +/- 1 alone and jointly (Hyndman-Khandakar).
-    pq_moves = [
-        (-1, 0), (1, 0), (0, -1), (0, 1),
-        (-1, -1), (-1, 1), (1, -1), (1, 1),
+    # Neighbourhood walk replicating forecast::auto.arima's stepwise
+    # loop exactly: moves are tried in a fixed priority order (seasonal
+    # P/Q moves first, then p/q, singles before joint moves); the FIRST
+    # improving candidate becomes the incumbent and the scan restarts
+    # from the top of the order. The walk's path — not just its move
+    # set — determines which local optimum a greedy search reaches, so
+    # matching R's selections requires matching its order and
+    # first-improvement policy (AirPassengers: an all-neighbours sweep
+    # stops at (0,1,1)(2,1,0)[12] AICc 1019.5; R's walk reaches
+    # (2,1,1)(0,1,0)[12] at 1018.2).
+    move_order = [
+        (0, 0, -1, 0), (0, 0, 0, -1), (0, 0, 1, 0), (0, 0, 0, 1),
+        (0, 0, -1, -1), (0, 0, -1, 1), (0, 0, 1, -1), (0, 0, 1, 1),
+        (-1, 0, 0, 0), (0, -1, 0, 0), (1, 0, 0, 0), (0, 1, 0, 0),
+        (-1, -1, 0, 0), (-1, 1, 0, 0), (1, -1, 0, 0), (1, 1, 0, 0),
     ]
-    PQ_moves = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)]
 
     improved = True
     while improved:
         improved = False
-        p, q, P, Q = best_key
-
-        neighbours: list[tuple[int, int, int, int]] = []
-        for dp, dq in pq_moves:
-            cand = (p + dp, q + dq, P, Q)
-            if (0 <= cand[0] <= max_p and 0 <= cand[1] <= max_q
-                    and cand not in visited):
-                neighbours.append(cand)
-        if seasonal:
-            for dP, dQ in PQ_moves:
-                cand = (p, q, P + dP, Q + dQ)
-                if (0 <= cand[2] <= max_P and 0 <= cand[3] <= max_Q
-                        and cand not in visited):
-                    neighbours.append(cand)
-
-        for cand in neighbours:
+        p_cur, q_cur, P_cur, Q_cur = best_key
+        for dp, dq, dP, dQ in move_order:
+            if not seasonal and (dP != 0 or dQ != 0):
+                continue
+            cand = (p_cur + dp, q_cur + dq, P_cur + dP, Q_cur + dQ)
+            if not (0 <= cand[0] <= max_p and 0 <= cand[1] <= max_q
+                    and 0 <= cand[2] <= max_P and 0 <= cand[3] <= max_Q):
+                continue
+            if cand in visited:
+                continue
             if _evaluate(cand):
+                # First improvement: restart the scan from the new
+                # incumbent, like forecast's `next`.
                 improved = True
+                break
 
     best_order, best_seasonal = _orders(best_key)
     return best_result, best_order, best_seasonal, best_ic, search_results

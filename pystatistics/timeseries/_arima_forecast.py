@@ -15,6 +15,11 @@ from numpy.typing import ArrayLike, NDArray
 from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.timeseries._arima_factored import (
+    _multiply_ma_polynomials,
+    _multiply_polynomials,
+)
+from pystatistics.timeseries._arima_kalman import kalman_arma_forecast
 from pystatistics.timeseries._differencing import diff
 
 
@@ -128,86 +133,6 @@ def _psi_weights(ar: NDArray, ma: NDArray, h: int) -> NDArray:
 
 
 # ---------------------------------------------------------------------------
-# Point forecasts on the differenced scale
-# ---------------------------------------------------------------------------
-
-def _forecast_differenced(
-    ar: NDArray,
-    ma: NDArray,
-    mean: float,
-    residuals: NDArray,
-    y_diff: NDArray,
-    h: int,
-) -> NDArray:
-    """Compute h-step-ahead point forecasts on the differenced scale.
-
-    Uses the recursive ARMA forecast:
-
-    .. math::
-
-        \\hat y_{n+k} = \\mu + \\sum_{i=1}^{p} \\phi_i (y^*_{n+k-i} - \\mu)
-                      + \\sum_{j=1}^{q} \\theta_j e_{n+k-j}
-
-    where future residuals are set to zero and future y values are
-    replaced by their forecasts.
-
-    Parameters
-    ----------
-    ar : NDArray
-        Effective AR coefficients.
-    ma : NDArray
-        Effective MA coefficients.
-    mean : float
-        Mean of the differenced series (0 if ``include_mean=False``).
-    residuals : NDArray
-        Residuals on the differenced scale.
-    y_diff : NDArray
-        The differenced series.
-    h : int
-        Forecast horizon.
-
-    Returns
-    -------
-    NDArray
-        Point forecasts of length *h* on the differenced scale.
-    """
-    p = len(ar)
-    q = len(ma)
-    n = len(y_diff)
-
-    # Indexing convention: y_diff is 0-indexed of length n, representing
-    # observations at "times" 1..n. We forecast times n+1, n+2, ..., n+h.
-    # For the k-th forecast (k=1..h, time n+k), AR lag i refers to time
-    # n+k-i; in 0-indexing that is array position (n+k-i) - 1.
-    #
-    # Prior to this fix the code used `idx = n + k - i` (off by one) and
-    # initialized `forecasts` with `np.empty`, which normally yielded
-    # zeros from a fresh OS page but could leak garbage when the
-    # allocator pattern shifted. The k=1, i=1 case read `forecasts[0]`
-    # before writing it, producing huge garbage propagated as y_{n+1}.
-    forecasts = np.zeros(h, dtype=np.float64)
-    for k in range(1, h + 1):
-        val = mean
-        # AR part
-        for i in range(1, p + 1):
-            idx = n + k - i - 1  # 0-indexed "time n+k-i"
-            if idx < n:
-                val += ar[i - 1] * (y_diff[idx] - mean)
-            else:
-                # Use already-computed forecast (de-meaned). k - i >= 1
-                # when idx >= n, so forecasts[(idx - n)] = forecasts[k-i-1]
-                # has been written in a prior outer-loop iteration.
-                val += ar[i - 1] * (forecasts[idx - n] - mean)
-        # MA part: future residuals are zero, so only in-sample indices.
-        for j in range(1, q + 1):
-            idx = n + k - j - 1
-            if idx < n:
-                val += ma[j - 1] * residuals[idx]
-        forecasts[k - 1] = val
-    return forecasts
-
-
-# ---------------------------------------------------------------------------
 # Un-differencing
 # ---------------------------------------------------------------------------
 
@@ -241,45 +166,45 @@ def _undifference(
     h = len(forecasts_diff)
     fc = forecasts_diff.copy()
 
-    # Reverse seasonal differencing first (D times)
+    # Integration must proceed from the MOST-differenced scale outward:
+    # forecasts live on (1-B)^d (1-B^m)^D x, so the first pass
+    # integrates against the tail of the (d, D-1)-differenced series,
+    # the next against (d, D-2), ..., and the LAST pass against the
+    # un-differenced series itself. The previous implementation walked
+    # this ladder in reverse (first cumsum seeded with the tail of the
+    # raw series), which was invisible for d + D <= 1 but produced
+    # divergent point forecasts for d >= 2 or D >= 2 — ARIMA(1,2,1)
+    # means were off by four orders of magnitude at h=12 while the SEs
+    # were fine (RIGOR R18 follow-up).
+
+    # Reverse seasonal differencing first (D times). The reference for
+    # integration round j (j = D-1 .. 0) is the original series
+    # differenced d times regularly and j times seasonally.
     if seasonal_d > 0 and period > 1:
-        # We need to undo D rounds of seasonal differencing.
-        # For each round, z[t] = z_diff[t] + z[t - period].
-        # We need access to the series *before* the last round of
-        # non-seasonal differencing was undone, so we undo seasonal
-        # differencing first, then non-seasonal.
-        #
-        # The original series after non-seasonal differencing (d times)
-        # but before seasonal differencing:
         y_after_nonseasonal = y_original.copy()
         for _ in range(d):
             y_after_nonseasonal = diff(y_after_nonseasonal, differences=1, lag=1)
 
-        for _dd in range(seasonal_d):
-            # y_after_nonseasonal is the series before this round of
-            # seasonal differencing.  We need the last ``period`` values.
-            tail = y_after_nonseasonal[-(period):]  # noqa: E275
+        for j in range(seasonal_d - 1, -1, -1):
+            ref = y_after_nonseasonal.copy()
+            for _ in range(j):
+                ref = diff(ref, differences=1, lag=period)
+            # Undo one round of seasonal differencing:
+            # z[t] = z_diff[t] + z[t - period].
+            tail = ref[-period:]
             extended = np.concatenate([tail, fc])
             for i in range(h):
                 extended[period + i] = extended[period + i] + extended[i]
             fc = extended[period:]
 
-            # For additional rounds, apply one seasonal diff to the
-            # reference series.
-            y_after_nonseasonal = diff(
-                y_after_nonseasonal, differences=1, lag=period
-            )
-
-    # Reverse non-seasonal differencing (d times)
-    for _dd in range(d):
-        last_val = y_original[-(d - _dd) :][0] if d > 1 else y_original[-1]
-        # More robust: use the series differenced (_dd) times for the
-        # appropriate tail value.
-        y_temp = y_original.copy()
-        for _k in range(_dd):
-            y_temp = diff(y_temp, differences=1, lag=1)
-        last_val = y_temp[-1]
-        fc = np.cumsum(np.concatenate([[last_val], fc]))[1:]
+    # Reverse non-seasonal differencing (d times): round k (k = d-1
+    # .. 0) integrates against the tail of the k-times-differenced
+    # original series.
+    for k in range(d - 1, -1, -1):
+        ref = y_original.copy()
+        for _ in range(k):
+            ref = diff(ref, differences=1, lag=1)
+        fc = np.cumsum(np.concatenate([[ref[-1]], fc]))[1:]
 
     return fc
 
@@ -349,6 +274,15 @@ def forecast_arima(
     if fitted.seasonal_order is not None:
         _P, seasonal_d, _Q, period = fitted.seasonal_order
 
+    # Effective ARMA polynomials. For seasonal models fitted.ar/ma hold
+    # the factored NON-seasonal coefficients only; forecasting (and the
+    # psi weights below) need the multiplied-out polynomials — dropping
+    # the seasonal factors put airline-model forecasts ~5 units off R's
+    # predict() (RIGOR R18 follow-up). For non-seasonal fits the
+    # seasonal arrays are empty and these are identity operations.
+    ar_eff = _multiply_polynomials(fitted.ar, fitted.seasonal_ar, period)
+    ma_eff = _multiply_ma_polynomials(fitted.ma, fitted.seasonal_ma, period)
+
     # Differenced series
     y_diff = y_orig.copy()
     if seasonal_d > 0 and period > 1:
@@ -360,17 +294,43 @@ def forecast_arima(
     # Mean on the differenced scale
     mean_val = fitted.mean if fitted.mean is not None else 0.0
 
-    # Point forecasts on the differenced scale
-    fc_diff = _forecast_differenced(
-        fitted.ar, fitted.ma, mean_val, fitted.residuals, y_diff, h
-    )
+    # Point forecasts on the differenced scale, from the exact Kalman
+    # filtered state — the same forecast origin R's predict.Arima uses
+    # (KalmanForecast). A CSS-residual recursion (the previous
+    # implementation) still carries conditioning error at the end of the
+    # sample when an MA root is near the unit circle: on AirPassengers
+    # (2,1,1)(0,1,0)[12] (ma1 = -0.98) it was ~1.4 off R's forecasts.
+    # err_cov is the h x h forecast-error covariance under sigma2 = 1.
+    fc_z, err_cov = kalman_arma_forecast(y_diff - mean_val, ar_eff, ma_eff, h)
+    fc_diff = fc_z + mean_val
 
-    # Psi weights for forecast-error variance
-    psi = _psi_weights(fitted.ar, fitted.ma, h)
+    # Forecast standard errors on the ORIGINAL scale. Un-differencing is
+    # linear: the original-scale forecast error at horizon k is
+    #     sum_{j=1..k} c_{k-j} e_j,
+    # where e_j are the differenced-scale forecast errors and the c_i
+    # are the coefficients of the integration operator
+    # 1 / ((1-B)^d (1-B^m)^D). The variance therefore needs the full
+    # error covariance (the e_j are serially correlated), not just a
+    # psi-weight cumsum — the previous implementation ignored the
+    # differencing entirely, reporting a flat se = sigma at every
+    # horizon for a random walk instead of sigma*sqrt(h). This matches
+    # R's integrated-state-space variance (predict.Arima) exactly.
+    delta = np.array([1.0])
+    for _ in range(d):
+        delta = np.convolve(delta, np.array([1.0, -1.0]))
+    for _ in range(seasonal_d):
+        sdiff = np.zeros(period + 1)
+        sdiff[0] = 1.0
+        sdiff[-1] = -1.0
+        delta = np.convolve(delta, sdiff)
+    # c_i = psi weights of the pure integration operator (AR side only).
+    c = _psi_weights(-delta[1:], np.array([]), h)
 
-    # Forecast standard errors
-    cumvar = np.cumsum(psi ** 2) * fitted.sigma2
-    se = np.sqrt(cumvar)
+    var = np.empty(h, dtype=np.float64)
+    for k in range(h):
+        w = c[k::-1]  # w[j] = c_{k-j} for j = 0..k
+        var[k] = w @ err_cov[: k + 1, : k + 1] @ w
+    se = np.sqrt(var * fitted.sigma2)
 
     # Un-difference to original scale
     fc_orig = _undifference(fc_diff, y_orig, d, seasonal_d, period)

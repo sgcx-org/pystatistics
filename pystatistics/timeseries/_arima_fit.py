@@ -30,6 +30,8 @@ from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
 from pystatistics.timeseries._differencing import diff
 from pystatistics.timeseries._arima_factored import (
     _factored_to_effective,
+    _multiply_ma_polynomials,
+    _multiply_polynomials,
     optimize_arima_factored as _optimize_arima_factored_impl,
 )
 from pystatistics.timeseries._arima_likelihood import (
@@ -38,95 +40,6 @@ from pystatistics.timeseries._arima_likelihood import (
     check_invertible,
     check_stationary,
 )
-
-
-# ---------------------------------------------------------------------------
-# Seasonal polynomial multiplication
-# ---------------------------------------------------------------------------
-
-def _multiply_polynomials(
-    nonseasonal: NDArray,
-    seasonal: NDArray,
-    period: int,
-) -> NDArray:
-    """
-    Multiply non-seasonal and seasonal polynomials.
-
-    For AR polynomials, computes the product:
-        phi(B) * Phi(B^m) = (1 - phi_1*B - ... - phi_p*B^p)
-                          * (1 - Phi_1*B^m - ... - Phi_P*B^{Pm})
-
-    and returns the coefficients of the result (excluding the leading 1).
-
-    Parameters
-    ----------
-    nonseasonal : NDArray
-        Non-seasonal coefficients [c_1, ..., c_p] where the polynomial
-        is ``1 - c_1*B - ... - c_p*B^p``.
-    seasonal : NDArray
-        Seasonal coefficients [C_1, ..., C_P] where the polynomial
-        is ``1 - C_1*B^m - ... - C_P*B^{Pm}``.
-    period : int
-        Seasonal period *m*.
-
-    Returns
-    -------
-    NDArray
-        Combined coefficients of the product polynomial (excluding
-        the leading 1 term), negated so they follow the sign convention
-        ``1 - result_1*B - result_2*B^2 - ...``.
-    """
-    # Build polynomial representations with leading 1
-    # For poly1 = 1 - c_1*B - c_2*B^2 ..., we store [1, -c_1, -c_2, ...]
-    poly1 = np.zeros(1 + len(nonseasonal))
-    poly1[0] = 1.0
-    for i, c in enumerate(nonseasonal):
-        poly1[i + 1] = -c
-
-    max_seasonal_lag = len(seasonal) * period
-    poly2 = np.zeros(1 + max_seasonal_lag)
-    poly2[0] = 1.0
-    for i, c in enumerate(seasonal):
-        poly2[(i + 1) * period] = -c
-
-    # Convolve the two polynomials
-    product = np.convolve(poly1, poly2)
-
-    # Return coefficients after leading 1, negated back to positive convention
-    return -product[1:]
-
-
-def _multiply_ma_polynomials(
-    nonseasonal: NDArray,
-    seasonal: NDArray,
-    period: int,
-) -> NDArray:
-    """Multiply two MA polynomials under pystatistics' MA sign convention.
-
-    pystatistics stores AR and MA with OPPOSITE sign conventions:
-        AR:  e_t = y_t - Σ ar_i y_{t-i}       (AR polynomial 1 − Σ ar_i B^i)
-        MA:  e_t = y_t - Σ ma_j e_{t-j}       (MA polynomial 1 + Σ ma_j B^j)
-
-    ``_multiply_polynomials`` above handles the AR case (all signs
-    negated). For MA we need the product of
-        (1 + ma_1 B + … + ma_q B^q)(1 + sma_1 B^m + … + sma_Q B^{Qm})
-    returned as ``[ma_eff_1, ma_eff_2, …]``. A straight convolution of
-    ``[1, ma_1, …, ma_q]`` with ``[1, sma_1 at position m, …]`` yields
-    this directly — no double negation.
-    """
-    poly1 = np.zeros(1 + len(nonseasonal))
-    poly1[0] = 1.0
-    for i, c in enumerate(nonseasonal):
-        poly1[i + 1] = c
-
-    max_seasonal_lag = len(seasonal) * period
-    poly2 = np.zeros(1 + max_seasonal_lag)
-    poly2[0] = 1.0
-    for i, c in enumerate(seasonal):
-        poly2[(i + 1) * period] = c
-
-    product = np.convolve(poly1, poly2)
-    return product[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -241,30 +154,25 @@ def _validate_arima_inputs(
 # ---------------------------------------------------------------------------
 
 def _compute_hessian(
+    fun,
     params: NDArray,
-    y: NDArray,
-    order_pq: tuple[int, int],
-    include_mean: bool,
-    method_ll: str,
     step: float = 1e-4,
 ) -> NDArray:
     """
-    Compute the numerical Hessian of the negative log-likelihood.
+    Compute the numerical Hessian of ``fun`` at ``params``.
 
-    Uses second-order central finite differences.
+    Uses second-order central finite differences. ``fun`` maps a
+    parameter vector to a scalar negative log-likelihood; callers
+    supply a closure over the data and likelihood method, which lets
+    seasonal fits differentiate in the FACTORED parameterization
+    (ar, ma, sar, sma, mean) rather than the expanded polynomial.
 
     Parameters
     ----------
+    fun : callable
+        Scalar objective ``fun(params) -> float``.
     params : NDArray
-        Optimal parameter vector.
-    y : NDArray
-        Differenced series.
-    order_pq : tuple[int, int]
-        ``(p_eff, q_eff)`` effective ARMA orders.
-    include_mean : bool
-        Whether *params* includes a mean term.
-    method_ll : str
-        ``'CSS'`` or ``'ML'``.
+        Point at which to evaluate the Hessian.
     step : float
         Finite difference step size.
 
@@ -275,7 +183,6 @@ def _compute_hessian(
     """
     k = len(params)
     hessian = np.zeros((k, k))
-    f0 = arima_negloglik(params, y, order_pq, include_mean, method_ll)
 
     for i in range(k):
         for j in range(i, k):
@@ -293,10 +200,10 @@ def _compute_hessian(
             params_mm[i] -= step
             params_mm[j] -= step
 
-            fpp = arima_negloglik(params_pp, y, order_pq, include_mean, method_ll)
-            fpm = arima_negloglik(params_pm, y, order_pq, include_mean, method_ll)
-            fmp = arima_negloglik(params_mp, y, order_pq, include_mean, method_ll)
-            fmm = arima_negloglik(params_mm, y, order_pq, include_mean, method_ll)
+            fpp = fun(params_pp)
+            fpm = fun(params_pm)
+            fmp = fun(params_mp)
+            fmm = fun(params_mm)
 
             hessian[i, j] = (fpp - fpm - fmp + fmm) / (4.0 * step * step)
             hessian[j, i] = hessian[i, j]
@@ -433,6 +340,43 @@ def _optimize_arima(
             opt_params = result_ml.x
             nll = result_ml.fun
             method_used = "CSS-ML"
+            # The ML refinement succeeded (the raise above guards it):
+            # a failed CSS warm-start (e.g. a NaN objective step) must
+            # not shadow a converged ML optimum. Previously `converged`
+            # kept the CSS stage's flag and arima() raised a spurious
+            # ConvergenceError on fits that matched R's optimum (co2
+            # (2,1,1): ML at -466.830 vs R -466.830, CSS stage
+            # ABNORMAL).
+            converged = True
+
+            # Second ML start from the original (Yule-Walker + sample
+            # mean) point, kept only if strictly better. With a mean in
+            # the parameter vector the (ar, mean) surface has a flat
+            # canyon toward the AR unit root (a near-unit AR barely
+            # identifies the level); the CSS stage can hand the ML
+            # stage a basin with a drifted mean that L-BFGS-B cannot
+            # leave (AirPassengers (1,0,1): mean 115.7 / loglik 1.84
+            # below R vs the sample-mean start's 280.3 / R-matching).
+            # Same better-of-two-starts pattern as the damped-ETS fix:
+            # the fit can only improve or stay identical (RIGOR R18
+            # follow-up).
+            if include_mean:
+                try:
+                    result_ml2 = minimize(
+                        arima_negloglik,
+                        start_params,
+                        args=(y_diff, order_pq, include_mean, "ML"),
+                        method="L-BFGS-B",
+                        options={"maxiter": max_iter, "ftol": tol},
+                    )
+                except (ValueError, np.linalg.LinAlgError):
+                    result_ml2 = None
+                if result_ml2 is not None:
+                    n_iter += result_ml2.nit
+                    if (result_ml2.success and np.isfinite(result_ml2.fun)
+                            and result_ml2.fun < nll):
+                        opt_params = result_ml2.x
+                        nll = result_ml2.fun
 
     else:
         # Pure ML
@@ -484,7 +428,7 @@ def arima(
 
     Methods:
         - ``'CSS'``: Conditional sum of squares (fast, approximate).
-        - ``'ML'``: Exact maximum likelihood via innovations algorithm.
+        - ``'ML'``: Exact maximum likelihood via the Kalman filter.
         - ``'CSS-ML'``: CSS for initialization, then ML refinement (default).
 
     Starting values:
@@ -710,7 +654,31 @@ def arima(
     # Compute final residuals and fitted values
     residuals = arima_css_residuals(y_diff, ar_eff, ma_eff, mean_val)
     fitted = y_diff - residuals
-    sigma2 = np.dot(residuals, residuals) / n_used
+
+    # Innovation variance. For ML-family fits report the Kalman profile
+    # estimate ((1/n) sum innov_t^2 / F_t), matching R stats::arima's
+    # sigma2. The CSS-residual SSE/n overstates it when an MA root is
+    # near the unit circle (AirPassengers (2,1,1)(0,1,0)[12], ma1=-0.98:
+    # 133.09 vs R's 129.31), which propagated into forecast standard
+    # errors (RIGOR R18 follow-up). Pure-CSS fits keep SSE/n — R's CSS
+    # convention.
+    if method_used in ("ML", "CSS-ML"):
+        from pystatistics.timeseries._arima_kalman import kalman_arma_loglik
+        nll_check, sigma2 = kalman_arma_loglik(y_diff, ar_eff, ma_eff, mean_val)
+        # kalman_arma_loglik signals failure with a penalty nll and a
+        # PLACEHOLDER sigma2 of 1.0 — silently reporting that would
+        # mask the failure (Rule 1). It cannot happen at parameters the
+        # ML stage just evaluated successfully, so treat it as the
+        # internal error it is.
+        if nll_check >= 1e17:
+            raise ConvergenceError(
+                "exact-ML evaluation failed at the fitted parameters; "
+                "sigma2 cannot be computed",
+                iterations=n_iter,
+                reason="ml_eval_failed_at_optimum",
+            )
+    else:
+        sigma2 = np.dot(residuals, residuals) / n_used
 
     # ----- Decompose effective coefficients into seasonal and non-seasonal -----
     if seasonal_fit:
@@ -727,16 +695,48 @@ def arima(
         sma = np.array([], dtype=np.float64)
 
     # ----- Variance-covariance matrix from Hessian -----
-    # Use CSS Hessian even for CSS-ML to avoid expensive O(n^2) innovations
-    # evaluations per finite-difference step. The CSS Hessian provides a
-    # reasonable approximation to the exact information matrix.
-    method_for_hessian = "ML" if method_used == "ML" else "CSS"
-    n_coef = len(opt_params)
+    if seasonal_fit:
+        # Differentiate in the FACTORED parameterization so vcov
+        # rows/columns align with the reported coefficients
+        # (ar, ma, sar, sma, mean). It was previously computed over the
+        # expanded polynomial, so summary() read seasonal standard
+        # errors from structurally-zero expanded lags — the airline
+        # model printed sma1 s.e. 0.38 where R gives 0.08 (RIGOR R18
+        # follow-up). The final CSS-ML stage is ML and the factored
+        # dimension is small (p+q+P+Q), so the exact-ML Hessian via the
+        # O(n r^2) Kalman filter is affordable — and it is what R's
+        # optim Hessian approximates.
+        method_for_hessian = "CSS" if method_used == "CSS" else "ML"
+
+        def _nll_for_hessian(theta: NDArray) -> float:
+            eff = _factored_to_effective(
+                theta, p, q, sp, sq, m, include_mean,
+                _multiply_polynomials, _multiply_ma_polynomials,
+            )
+            return arima_negloglik(
+                eff, y_diff, (p_eff, q_eff), include_mean,
+                method_for_hessian,
+            )
+
+        hess_point = opt_factored
+    else:
+        # Non-seasonal path unchanged: CSS Hessian even for CSS-ML (a
+        # reasonable approximation to the information matrix; validated
+        # against R on the non-seasonal reference fits).
+        method_for_hessian = "ML" if method_used == "ML" else "CSS"
+
+        def _nll_for_hessian(theta: NDArray) -> float:
+            return arima_negloglik(
+                theta, y_diff, (p_eff, q_eff), include_mean,
+                method_for_hessian,
+            )
+
+        hess_point = opt_params
+
+    n_coef = len(hess_point)
 
     try:
-        hessian = _compute_hessian(
-            opt_params, y_diff, (p_eff, q_eff), include_mean, method_for_hessian,
-        )
+        hessian = _compute_hessian(_nll_for_hessian, hess_point)
         vcov = np.linalg.inv(hessian)
         # Ensure symmetry
         vcov = 0.5 * (vcov + vcov.T)

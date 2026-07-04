@@ -52,7 +52,12 @@ class ARIMAParams:
         (AR, MA, seasonal AR, seasonal MA, mean). Computed from the
         numerical Hessian of the negative log-likelihood.
     residuals : NDArray
-        Innovation residuals (length of the differenced series).
+        CSS (zero-conditioned) innovation residuals on the differenced
+        scale. NOTE: for ML-family fits ``log_likelihood`` and
+        ``sigma2`` come from the exact Kalman filter, so
+        ``mean(residuals**2)`` may differ slightly from ``sigma2``
+        (visibly so when an MA root is near the unit circle); R returns
+        the Kalman innovations instead.
     fitted_values : NDArray
         One-step-ahead fitted values (length of the differenced series).
     log_likelihood : float

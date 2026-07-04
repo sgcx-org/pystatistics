@@ -18,8 +18,8 @@ Key functions:
         space, delegating the actual CSS/ML computation to the effective
         likelihood.
 
-Sign conventions (critical — see ``_multiply_ma_polynomials`` docstring
-in ``_arima_fit.py``):
+Sign conventions (critical — see the ``_multiply_ma_polynomials``
+docstring below):
 
     AR:  e_t = y_t - Σ ar_i y_{t-i}       (AR polynomial 1 − Σ ar_i B^i)
     MA:  e_t = y_t - Σ ma_j e_{t-j}       (MA polynomial 1 + Σ ma_j B^j)
@@ -36,6 +36,96 @@ from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError
 from pystatistics.timeseries._arima_likelihood import arima_negloglik
+
+
+# ---------------------------------------------------------------------------
+# Seasonal polynomial multiplication
+# ---------------------------------------------------------------------------
+
+def _multiply_polynomials(
+    nonseasonal: NDArray,
+    seasonal: NDArray,
+    period: int,
+) -> NDArray:
+    """
+    Multiply non-seasonal and seasonal polynomials.
+
+    For AR polynomials, computes the product:
+        phi(B) * Phi(B^m) = (1 - phi_1*B - ... - phi_p*B^p)
+                          * (1 - Phi_1*B^m - ... - Phi_P*B^{Pm})
+
+    and returns the coefficients of the result (excluding the leading 1).
+
+    Parameters
+    ----------
+    nonseasonal : NDArray
+        Non-seasonal coefficients [c_1, ..., c_p] where the polynomial
+        is ``1 - c_1*B - ... - c_p*B^p``.
+    seasonal : NDArray
+        Seasonal coefficients [C_1, ..., C_P] where the polynomial
+        is ``1 - C_1*B^m - ... - C_P*B^{Pm}``.
+    period : int
+        Seasonal period *m*.
+
+    Returns
+    -------
+    NDArray
+        Combined coefficients of the product polynomial (excluding
+        the leading 1 term), negated so they follow the sign convention
+        ``1 - result_1*B - result_2*B^2 - ...``.
+    """
+    # Build polynomial representations with leading 1
+    # For poly1 = 1 - c_1*B - c_2*B^2 ..., we store [1, -c_1, -c_2, ...]
+    poly1 = np.zeros(1 + len(nonseasonal))
+    poly1[0] = 1.0
+    for i, c in enumerate(nonseasonal):
+        poly1[i + 1] = -c
+
+    max_seasonal_lag = len(seasonal) * period
+    poly2 = np.zeros(1 + max_seasonal_lag)
+    poly2[0] = 1.0
+    for i, c in enumerate(seasonal):
+        poly2[(i + 1) * period] = -c
+
+    # Convolve the two polynomials
+    product = np.convolve(poly1, poly2)
+
+    # Return coefficients after leading 1, negated back to positive convention
+    return -product[1:]
+
+
+def _multiply_ma_polynomials(
+    nonseasonal: NDArray,
+    seasonal: NDArray,
+    period: int,
+) -> NDArray:
+    """Multiply two MA polynomials under pystatistics' MA sign convention.
+
+    pystatistics stores AR and MA with OPPOSITE sign conventions:
+        AR:  e_t = y_t - Σ ar_i y_{t-i}       (AR polynomial 1 − Σ ar_i B^i)
+        MA:  e_t = y_t - Σ ma_j e_{t-j}       (MA polynomial 1 + Σ ma_j B^j)
+
+    ``_multiply_polynomials`` above handles the AR case (all signs
+    negated). For MA we need the product of
+        (1 + ma_1 B + … + ma_q B^q)(1 + sma_1 B^m + … + sma_Q B^{Qm})
+    returned as ``[ma_eff_1, ma_eff_2, …]``. A straight convolution of
+    ``[1, ma_1, …, ma_q]`` with ``[1, sma_1 at position m, …]`` yields
+    this directly — no double negation.
+    """
+    poly1 = np.zeros(1 + len(nonseasonal))
+    poly1[0] = 1.0
+    for i, c in enumerate(nonseasonal):
+        poly1[i + 1] = c
+
+    max_seasonal_lag = len(seasonal) * period
+    poly2 = np.zeros(1 + max_seasonal_lag)
+    poly2[0] = 1.0
+    for i, c in enumerate(seasonal):
+        poly2[(i + 1) * period] = c
+
+    product = np.convolve(poly1, poly2)
+    return product[1:]
+
 
 
 def _factored_to_effective(
@@ -162,10 +252,43 @@ def optimize_arima_factored(
                     iterations=result_ml.nit,
                     reason="ml_refinement_nonfinite",
                 )
-            return (
-                result_ml.x, result_ml.fun, result_ml.success,
-                result_ml.nit, "CSS-ML",
-            )
+
+            best_x = result_ml.x
+            best_nll = result_ml.fun
+            best_success = result_ml.success
+            total_nit = result_ml.nit
+
+            # Second ML start from the original starting values, kept
+            # only if strictly better — the (ar, mean) surface has a
+            # flat canyon toward the AR unit root and the CSS stage can
+            # hand ML a drifted-mean basin (see _optimize_arima). Only
+            # mean-carrying fits (d = D = 0) are exposed.
+            if include_mean:
+                try:
+                    result_ml2 = minimize(
+                        arima_negloglik_factored,
+                        start_factored,
+                        args=ll_args + ("ML", multiply_ar_polynomials,
+                                        multiply_ma_polynomials),
+                        method="L-BFGS-B",
+                        options=opts,
+                    )
+                except (ValueError, np.linalg.LinAlgError):
+                    result_ml2 = None
+                if result_ml2 is not None:
+                    total_nit += result_ml2.nit
+                    # Take the second optimum when it is strictly
+                    # better, or when it converged and the first start
+                    # did not (a converged optimum in hand must win
+                    # over a failed one regardless of its nll).
+                    if (result_ml2.success and np.isfinite(result_ml2.fun)
+                            and (result_ml2.fun < best_nll
+                                 or not best_success)):
+                        best_x = result_ml2.x
+                        best_nll = result_ml2.fun
+                        best_success = True
+
+            return best_x, best_nll, best_success, total_nit, "CSS-ML"
         return opt_factored, nll, converged, n_iter, method_used
 
     # method == "ML"

@@ -1,17 +1,17 @@
 """
 ARIMA log-likelihood computation.
 
-Provides conditional sum of squares (CSS) and exact maximum likelihood (ML)
-via the innovations algorithm for ARMA(p, q) models on differenced data.
-Also provides stationarity/invertibility checking for AR/MA polynomials.
+Provides conditional sum of squares (CSS) and exact maximum likelihood
+(ML) for ARMA(p, q) models on differenced data. Also provides
+stationarity/invertibility checking for AR/MA polynomials.
 
 The CSS approach reconstructs residuals recursively:
     e_t = y_t - mu - sum_i phi_i * (y_{t-i} - mu) - sum_j theta_j * e_{t-j}
 conditioning on e_0 = ... = e_{-q} = 0.
 
-The exact ML approach uses the innovations algorithm (Brockwell & Davis, 2002)
-to compute prediction errors and their variances from the ARMA autocovariance
-structure, yielding the exact Gaussian log-likelihood.
+Exact ML delegates to the state-space / Kalman-filter implementation in
+``_arima_kalman`` (Gardner, Harvey & Phillips 1980), the same approach
+R's ``stats::arima`` uses.
 
 Design: self-contained with no imports from regression or other pystatistics
 submodules beyond core validation/exceptions.
@@ -130,171 +130,8 @@ def css_loglik(
 
 
 # ---------------------------------------------------------------------------
-# Exact ML via innovations algorithm
+# Exact ML via the Kalman filter
 # ---------------------------------------------------------------------------
-
-def _arma_autocovariance(
-    ar: NDArray,
-    ma: NDArray,
-    sigma2: float,
-    max_lag: int,
-) -> NDArray:
-    """
-    Compute the autocovariance function of an ARMA(p, q) process.
-
-    Uses the method of Brockwell & Davis (2002, Section 3.3).
-    For an ARMA(p, q) with innovation variance sigma2:
-        gamma(h) for h = 0, 1, ..., max_lag.
-
-    The approach solves the Yule-Walker-type system for gamma(0..m-1)
-    where m = max(p, q+1), then recursively computes higher lags.
-
-    Parameters
-    ----------
-    ar : NDArray
-        AR coefficients [phi_1, ..., phi_p].
-    ma : NDArray
-        MA coefficients [theta_1, ..., theta_q].
-    sigma2 : float
-        Innovation variance.
-    max_lag : int
-        Maximum lag for which to compute the autocovariance.
-
-    Returns
-    -------
-    NDArray
-        Autocovariances gamma(0), gamma(1), ..., gamma(max_lag).
-    """
-    p = len(ar)
-    q = len(ma)
-    m = max(p, q + 1)
-
-    # Build the MA representation psi weights: psi_0 = 1, ...
-    # psi_j = ma_j + sum_{i=1}^{min(j,p)} ar_i * psi_{j-i}  for j >= 1
-    n_psi = m + 1
-    psi = np.zeros(n_psi)
-    psi[0] = 1.0
-    for j in range(1, n_psi):
-        val = 0.0
-        if j <= q:
-            val += ma[j - 1]
-        for i in range(1, min(j, p) + 1):
-            val += ar[i - 1] * psi[j - i]
-        psi[j] = val
-
-    # Compute cross-covariances sigma2 * sum_{j=0}^{q} theta_j * psi_{h+j}
-    # where theta_0 = 1
-    theta = np.concatenate(([1.0], ma))
-
-    # Build the linear system A * gamma = b for gamma(0..m-1)
-    # From the Yule-Walker equations for ARMA:
-    # gamma(h) - sum_{i=1}^{p} ar_i * gamma(h-i) = sigma2 * sum_{j=h}^{q} theta_j * psi_{j-h}
-    # for h = 0, 1, ..., m-1
-    A = np.zeros((m, m))
-    b = np.zeros(m)
-
-    for h in range(m):
-        A[h, h] = 1.0
-        for i in range(1, p + 1):
-            idx = abs(h - i)
-            if idx < m:
-                A[h, idx] -= ar[i - 1]
-
-        # Right-hand side
-        rhs = 0.0
-        for j in range(h, q + 1):
-            if j - h < n_psi:
-                rhs += theta[j] * psi[j - h]
-        b[h] = sigma2 * rhs
-
-    gamma_base = np.linalg.solve(A, b)
-
-    # Build full gamma array
-    gamma = np.zeros(max_lag + 1)
-    for h in range(min(m, max_lag + 1)):
-        gamma[h] = gamma_base[h]
-
-    # Recursion for h >= m: gamma(h) = sum_{i=1}^{p} ar_i * gamma(h-i)
-    for h in range(m, max_lag + 1):
-        val = 0.0
-        for i in range(1, p + 1):
-            val += ar[i - 1] * gamma[h - i]
-        gamma[h] = val
-
-    return gamma
-
-
-def _innovations_algorithm(
-    gamma: NDArray,
-    n: int,
-) -> tuple[NDArray, NDArray]:
-    """
-    Run the innovations algorithm given autocovariances.
-
-    Computes the one-step-ahead prediction coefficients and
-    prediction error variances for observations y_1, ..., y_n.
-
-    Parameters
-    ----------
-    gamma : NDArray
-        Autocovariances gamma(0), gamma(1), ..., gamma(n-1) at minimum.
-    n : int
-        Number of observations.
-
-    Returns
-    -------
-    tuple[NDArray, NDArray]
-        theta_mat : (n, n) array where theta_mat[t, j] is the coefficient
-            for the j-th innovation in predicting y_{t+1}.
-        v : (n,) array of prediction error variances v_0, ..., v_{n-1}.
-    """
-    theta_mat = np.zeros((n, n))
-    v = np.zeros(n)
-    v[0] = gamma[0]
-
-    # This was the #1 hotspot: O(n^3) triple-nested Python loop with a
-    # scalar np.clip and a builtin min() inside the innermost body. For
-    # n=132 that was 127k scalar-clip calls and 792k min calls per fit.
-    # We keep the outer (t) and middle (k) loops sequential — their
-    # results feed each other — and vectorize the inner (j) dot product.
-    # The numerical guards (clip theta, min contrib, max v_t) are kept
-    # as Python-level comparisons which avoid numpy-scalar overhead.
-    CLIP_THETA = 1e10
-    CLIP_CONTRIB = 1e20
-    for t in range(1, n):
-        # theta_{t, t-1-k} for k = 0, ..., t-1
-        for k in range(t):
-            s = t - 1 - k
-            val = gamma[t - k]
-            if k > 0:
-                # inner j-sum for j = 0..k-1 of
-                #   theta_mat[t, t-1-j] * theta_mat[k, k-1-j] * v[j]
-                # Indices t-1..t-k and k-1..0 — reversed slices of length k.
-                t_slice = theta_mat[t, t - k:t][::-1]
-                k_slice = theta_mat[k, :k][::-1]
-                val -= np.dot(t_slice * k_slice, v[:k])
-            if v[k] <= 0.0:
-                theta_mat[t, s] = 0.0
-            else:
-                th = val / v[k]
-                if th > CLIP_THETA:
-                    th = CLIP_THETA
-                elif th < -CLIP_THETA:
-                    th = -CLIP_THETA
-                theta_mat[t, s] = th
-
-        # v_t = gamma(0) - sum_{j=0..t-1} theta_{t,j}^2 * v_j
-        row = theta_mat[t, :t]
-        contribs = row * row * v[:t]
-        # Clip any contribution that overflowed to CLIP_CONTRIB.
-        # (Scalar np.clip on individual contribs was the prior hotspot;
-        #  array-level np.minimum is a single numpy call.)
-        np.minimum(contribs, CLIP_CONTRIB, out=contribs)
-        v_t = gamma[0] - contribs.sum()
-        v[t] = v_t if v_t > 1e-15 else 1e-15
-
-    return theta_mat, v
-
 
 def exact_loglik(
     params: NDArray,
@@ -308,8 +145,7 @@ def exact_loglik(
     Uses the state-space / Kalman-filter implementation in
     ``_arima_kalman.kalman_arma_loglik``, which is O(n * r^2) per fit
     (r = max(p, q+1)) and matches R's ``stats::arima`` approach (Gardner,
-    Harvey & Phillips 1980). An earlier O(n^3) innovations-algorithm
-    implementation is retained below for reference and as a fallback.
+    Harvey & Phillips 1980).
 
     Parameters
     ----------
@@ -332,59 +168,6 @@ def exact_loglik(
     p, q = order
     ar, ma, mean = _unpack_params(params, p, q, include_mean)
     nll, _ = kalman_arma_loglik(y, ar, ma, mean)
-    return nll
-
-
-def _exact_loglik_innovations(
-    params: NDArray,
-    y: NDArray,
-    order: tuple[int, int],
-    include_mean: bool,
-) -> float:
-    """Deprecated O(n^3) innovations-algorithm implementation.
-
-    Retained as a second-source reference for the Kalman-filter exact-ML
-    path and for regression testing (the Kalman log-likelihood must agree
-    with this to ~1e-6 at any stationary parameter point).
-    """
-    p, q = order
-    ar, ma, mean = _unpack_params(params, p, q, include_mean)
-
-    z = y - mean
-    n = len(z)
-
-    css_resid = arima_css_residuals(y, ar, ma, mean)
-    sigma2_est = np.dot(css_resid, css_resid) / n
-    if sigma2_est <= 0.0:
-        return 1e18
-
-    gamma = _arma_autocovariance(ar, ma, sigma2_est, n - 1)
-    theta_mat, v = _innovations_algorithm(gamma, n)
-
-    if np.any(np.isnan(v)):
-        return 1e15
-
-    yhat = np.zeros(n)
-    errors = np.zeros(n)
-    errors[0] = z[0]
-
-    with np.errstate(over='ignore', invalid='ignore'):
-        for t in range(1, n):
-            yhat[t] = np.dot(theta_mat[t, :t], errors[:t][::-1])
-            errors[t] = z[t] - yhat[t]
-
-        if np.any(v <= 0.0):
-            return 1e18
-        nll = (
-            0.5 * n * np.log(2.0 * np.pi)
-            + 0.5 * np.sum(np.log(v))
-            + 0.5 * np.sum(errors * errors / v)
-        )
-
-    # NUMERICAL GUARD: if log-likelihood is NaN or Inf, return penalty
-    if not np.isfinite(nll):
-        return 1e15
-
     return nll
 
 

@@ -112,6 +112,162 @@
   fallback in `_kpss_pvalue` now raises instead of silently reporting
   p=0.05.
 
+- **timeseries: seasonal-AR exact-ML log-likelihood was ~80 units below R
+  (silent diffuse-init fallback).** `_stationary_init` in `_arima_kalman.py`
+  solved the Lyapunov equation `P = TPT' + RR'` by linear fixed-point
+  iteration with max_iter=200 and ABSOLUTE tol 1e-12; a moderately
+  persistent seasonal AR (sar1=-0.47 at lag 12 → spectral radius 0.94,
+  rate 0.88/iter) converged to within 1.4e-11 of the exact solution but
+  missed the tolerance, so the near-perfect P was DISCARDED for the
+  diffuse kappa=1e6 init — shifting loglik by ~80 units on
+  `(1,1,1)(1,1,0)[12]` models (log-AirPassengers: py 160.5 vs R 241.7;
+  nottem: −614.5 vs −536.9) and corrupting IC ranking of seasonal-AR
+  candidates. Replaced with a doubling iteration (S_{j+1} = S_j + A_j S_j
+  A_j', A_{j+1} = A_j²; quadratic in horizon) with RELATIVE tolerance;
+  diffuse fallback now only for genuinely non-stationary points, matching
+  R (which solves Q0 exactly and never falls back for stationary models).
+  Both models now match R: loglik 241.7298 vs 241.7332 / −536.8834 vs
+  −536.8839, coefficients to ~5 decimals. Removed the now-dead
+  `_sparse_T_times_M_times_TT` helper and scipy `solve_discrete_lyapunov`
+  import/fallback (`_initial_covariance`).
+
+- **timeseries: seasonal ARIMA forecasts dropped the seasonal
+  coefficients; SEs ignored differencing and state uncertainty.**
+  `forecast_arima` in `_arima_forecast.py` fed `fitted.ar/.ma` — the
+  factored NON-seasonal coefficients — into the point-forecast recursion
+  and psi weights (airline forecasts up to ~5.4 off R `predict()`), and
+  computed SEs as `sigma*sqrt(cumsum(psi²))` of the differenced-scale ARMA
+  only (a random walk reported flat se=sigma at every horizon instead of
+  sigma*sqrt(h)). Rewritten: point forecasts come from the exact Kalman
+  filtered state via new `kalman_arma_forecast` in `_arima_kalman.py`
+  (R's `KalmanForecast` approach; the CSS-residual recursion carries
+  conditioning error at the sample end when an MA root is near the unit
+  circle — (2,1,1)(0,1,0)[12] with ma1=-0.98 was ~1.4 off R even with
+  the right polynomials), using the multiplied-out effective polynomials;
+  SEs aggregate the full h×h Kalman forecast-error covariance through the
+  integration operator `1/((1-B)^d (1-B^m)^D)`. Verified vs R
+  `predict.Arima` on airline, (2,1,1)(0,1,0)[12], (2,1,1), (0,1,0), and
+  both (1,1,1)(1,1,0)[12] fits: max |mean diff| 0.0014, max se rel diff
+  0.002%. The dead `_forecast_differenced` recursion was removed.
+
+- **timeseries: `sigma2` now reports the Kalman profile estimate for
+  ML-family fits** in `_arima_fit.py` (was CSS-residual SSE/n for all
+  methods, 2.9% high on the near-unit-MA model: 133.09 vs R's 129.31 —
+  the residual source of forecast-SE error). Matches R `stats::arima`
+  to 4 decimals on the reference fits; pure-CSS fits keep SSE/n (R's CSS
+  convention).
+
+- **timeseries: seasonal `vcov`/`summary()` standard errors were read
+  from the wrong matrix.** The Hessian was computed over the EXPANDED
+  polynomial parameters, so `summary()` printed seasonal s.e. from
+  structurally-zero expanded lags (airline sma1: 0.38 printed vs R's
+  0.0828). `_compute_hessian` now takes a callable and seasonal fits
+  differentiate in the FACTORED parameterization (ar, ma, sar, sma,
+  mean) using the exact-ML objective; airline and (1,1,1)(1,1,0)[12]
+  s.e. now match R to 4 decimals. Non-seasonal fits keep the existing
+  CSS-Hessian convention. `vcov` docstring ordering is now actually true.
+
+- **timeseries: ML stage of CSS-ML is now better-of-two-starts for
+  mean-carrying fits.** The exact stationary init exposed a flat canyon
+  in the (ar, mean) surface toward the AR unit root: the CSS stage can
+  hand ML a drifted-mean basin L-BFGS-B cannot leave (AirPassengers
+  (1,0,1): mean 115.7, loglik 1.84 below R). `_optimize_arima` and
+  `optimize_arima_factored` now also run the ML stage from the original
+  Yule-Walker/sample-mean start and keep the better optimum — same
+  pattern as the 4.6.3 damped-ETS fix; fits improve or stay identical.
+  (1,0,1) now matches R: loglik −700.8744 vs −700.8741 at the same
+  coefficients. Only `include_mean` fits pay the extra ML run.
+
+- **timeseries: `auto_arima` now applies forecast::auto.arima's
+  near-unit-root candidate veto and replicates its stepwise walk.** With
+  the corrected seasonal-AR likelihood, boundary models (AR/MA root
+  pile-up at the unit circle chasing the differencing operator) started
+  winning raw AICc — AirPassengers briefly selected (3,1,3)(1,1,2)[12]
+  at 1004.8. forecast deliberately excludes candidates whose expanded
+  AR or MA polynomial has a root with modulus < 1.01 (`myarima` sets
+  ic=Inf); `_try_fit` now does the same (`_has_near_unit_roots`), and
+  the stepwise search now replicates forecast's exact move priority
+  (seasonal P/Q moves first, singles before joint moves) with
+  first-improvement restart — the walk's PATH determines which local
+  optimum a greedy search reaches, and an all-neighbours sweep stopped
+  at (0,1,1)(2,1,0)[12] AICc 1019.5 where R's walk reaches
+  (2,1,1)(0,1,0)[12] at 1018.2. AirPassengers seasonal selection again
+  matches R exactly. `arima()` itself still fits whatever is requested
+  (veto applies to automatic selection only, exactly like R).
+
+- **timeseries: point forecasts for d ≥ 2 (or seasonal D ≥ 2) were
+  catastrophically wrong.** `_undifference` in `_arima_forecast.py`
+  walked the integration ladder in reverse (first cumsum seeded with the
+  tail of the RAW series instead of the most-differenced one) — invisible
+  for d + D ≤ 1, but an ARIMA(1,2,1) 12-step mean was off by ~13,600
+  while its (fixed) SEs matched R to 7.7e-5. Pre-existing, caught by the
+  adversarial review of the forecast rewrite. Integration now proceeds
+  from the most-differenced scale outward; verified vs R `predict()`:
+  (1,2,1) mean diff 0.0006, (0,2,0) exact, (0,1,1)(0,2,1)[12] 0.006.
+
+- **timeseries: `auto_arima` now determines d with the KPSS test,
+  matching `forecast::auto.arima`'s default.** `_determine_d` hardcoded
+  `ndiffs(test='adf')`; on series where ADF and KPSS disagree the search
+  ran at the wrong d and could not reach R's model class (wineind: adf
+  d=0 vs R/KPSS d=1 → pick 41 AICc worse by R's own accounting;
+  WWWusage: adf d=2 → over-differenced (2,2,0) vs R's (1,1,1)). Cross-
+  verification proved forcing R's d reproduces R's exact picks on both.
+  With KPSS-based d, both now match; the other six benchmark series
+  (already KPSS-consistent) are unchanged.
+
+- **timeseries: spurious `ConvergenceError` when the CSS warm-start
+  aborts but ML refinement converges.** In `_optimize_arima` the
+  `converged` flag kept the CSS stage's failure even after a successful
+  ML stage (co2 (2,1,1): ML at −466.830 = R's −466.830, yet arima()
+  raised). Pre-existing bookkeeping, newly exposed by the mean-drop
+  change; `converged` now reflects the accepted ML result, and the
+  factored two-start prefers a converged second optimum over a failed
+  first one.
+
+- **timeseries: `sigma2` failure sentinel no longer silent.**
+  `kalman_arma_loglik` signals failure with a placeholder sigma2 of 1.0;
+  `arima()` would have reported it as a real variance. Now raises
+  `ConvergenceError` (unreachable in practice — the ML stage just
+  evaluated those parameters — but the silent default violated the
+  fail-loud rule).
+
+- **timeseries: removed the dead innovations-algorithm ML path**
+  (`_exact_loglik_innovations`, `_innovations_algorithm`,
+  `_arma_autocovariance` in `_arima_likelihood.py`; the scipy
+  `solve_discrete_lyapunov` fallback in `_arima_kalman.py`). No callers
+  since the Kalman path landed, and review found `_arma_autocovariance`
+  computes a wrong gamma(0) for mixed ARMA (2.1915 vs true 2.1353 for
+  ar=(0.6,−0.3), ma=0.4) — its docstring claimed it was a 1e-6-accurate
+  second-source reference. Dead AND wrong code removed rather than
+  fixed. `_stationary_init` also symmetrizes its result (float matmul
+  drift ~1e-12 on near-unit systems), and stale "innovations algorithm"
+  docstrings now say Kalman filter.
+
+- **timeseries: known convention differences documented, not changed:**
+  (a) `residuals`/`fitted_values` remain CSS-conditioned innovations
+  while `log_likelihood`/`sigma2` are Kalman-exact for ML fits, so
+  `mean(residuals**2)` can differ from `sigma2` near an MA unit root
+  (R returns Kalman innovations) — documented on `ARIMAParams`;
+  (b) ~10% of boundary fits converge to the non-invertible MA mirror
+  representation (theta → 1/theta, identical likelihood, sigma2 scaled
+  accordingly; R lands on the invertible one) — R's own evaluator
+  reproduces our sigma2 exactly at our params; auto_arima's root veto
+  rejects such candidates during selection; (c) `arima_batch` (Whittle)
+  still reports a documented per-series sample mean under d > 0.
+
+- **tests:** new `tests/timeseries/test_arima_kalman_r_parity.py`
+  (SAR loglik/coef/IC parity on both failing models, stationary-init
+  doubling normal/edge/failure incl. Lyapunov residual and scipy
+  agreement, forecast mean+se parity on NINE models vs R
+  `predict.Arima` incl. d=2 and seasonal D=2, analytic random-walk se,
+  loud forecast failure on non-finite params, sigma2 profile parity,
+  factored-vcov s.e. parity and dimensions, near-unit-root veto
+  normal/boundary/empty cases, converged-flag guard on the co2 (2,1,1)
+  CSS-abort case) with fixture `arima_kalman_r_reference.json` +
+  generator (R 4.5.2); `test_arima_ic.py` gains the WWWusage
+  KPSS-d-selection regression test. Full timeseries suite incl.
+  slow-marked: 521 passed, 0 failures.
+
 - **tests:** new `tests/timeseries/test_arima_ic.py` (IC self-consistency,
   R free-k parity, mean-under-differencing, degenerate AICc, auto_arima
   seasonal selection = R, validation failures) and

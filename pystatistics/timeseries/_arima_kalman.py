@@ -1,15 +1,12 @@
 """
-Kalman-filter exact log-likelihood for ARMA(p, q) models.
+Kalman-filter exact log-likelihood and forecasting for ARMA(p, q).
 
-Replaces the O(n^3) innovations-algorithm path in ``_arima_likelihood.py``
-with the state-space / Kalman-filter approach used by R's
-``stats::arima`` (Gardner, Harvey & Phillips 1980; Harvey 1989 ch. 3).
-Per-iteration work is O(r^2) where r = max(p, q+1) is the state
-dimension, so total cost is O(n * r^2). For the Box–Jenkins airline
-model on AirPassengers (n=132, r=13) that is roughly 22k scalar ops
-versus the innovations algorithm's 2.3M — two orders of magnitude fewer
-FLOPS, and each step is a handful of small dense numpy ops that
-vectorize cleanly.
+The state-space / Kalman-filter approach used by R's ``stats::arima``
+(Gardner, Harvey & Phillips 1980; Harvey 1989 ch. 3). Per-iteration
+work is O(r^2) where r = max(p, q+1) is the state dimension, so total
+cost is O(n * r^2) — for the Box–Jenkins airline model on AirPassengers
+(n=132, r=13) roughly 22k scalar ops, each step a handful of small
+dense numpy ops that vectorize cleanly.
 
 State-space representation used here (Harvey 1989, "SSF") for an
 ARMA(p, q) process on the differenced series:
@@ -28,14 +25,14 @@ with:
     Z  (1 × r):  Z[0] = 1, rest 0
 
 The initial state is stationary: α_0 = 0, P_0 solves the discrete
-Lyapunov equation T P_0 T' - P_0 = -σ² R R' (via scipy).
+Lyapunov equation T P_0 T' - P_0 = -σ² R R' (via a doubling iteration
+in numba; see ``_stationary_init``).
 
 During ML optimization the optimizer can briefly wander into parameter
 regions where the AR polynomial is not strictly stationary (roots very
-close to or inside the unit circle). If ``solve_discrete_lyapunov``
-fails or returns a non-PSD matrix, we fall back to a diffuse init
-(large κ on the diagonal), matching what R does under
-``kappa = 1e6``.
+close to or inside the unit circle). If the doubling iteration blows
+up or fails to decay, we fall back to a diffuse init (large κ on the
+diagonal), matching what R does under ``kappa = 1e6``.
 
 References
 ----------
@@ -52,112 +49,89 @@ from __future__ import annotations
 import numpy as np
 from numba import njit
 from numpy.typing import NDArray
-from scipy.linalg import solve_discrete_lyapunov
 
-__all__ = ["kalman_arma_loglik"]
+__all__ = ["kalman_arma_forecast", "kalman_arma_loglik"]
 
 # Non-stationary fallback: matches R's `kappa` in stats:::makeARIMA.
 _DIFFUSE_KAPPA = 1.0e6
 
 
 @njit(cache=True, fastmath=False)
-def _sparse_T_times_M_times_TT(
-    phi: np.ndarray,
-    M: np.ndarray,
-    out: np.ndarray,
-) -> None:
-    """Compute ``out = T M T'`` exploiting T's companion structure.
-
-    Same structure used by ``_kalman_loop``: T[i, 0] = phi[i],
-    T[i, i+1] = 1. Shared helper so the initial-covariance fixed-point
-    iteration runs in O(r^2) per step instead of O(r^3) from a generic
-    matmul. Writes result into ``out`` (must be pre-allocated).
-    """
-    r = phi.shape[0]
-    # First compute A = T M. Top row: A[0, j] = phi[0]*M[0,j] + M[1,j] (if r>1)
-    # Other rows: A[i, j] = phi[i]*M[0,j] + M[i+1,j] (if i+1<r)
-    # Then out = A T': out[i, j] = A[i, 0]*phi[j] + A[i, j+1] (if j+1<r)
-    for i in range(r):
-        # A[i, 0]
-        a_i0 = phi[i] * M[0, 0]
-        if i + 1 < r:
-            a_i0 += M[i + 1, 0]
-        for j in range(r):
-            # A[i, j+1] (if j+1 < r)
-            if j + 1 < r:
-                a_ij1 = phi[i] * M[0, j + 1]
-                if i + 1 < r:
-                    a_ij1 += M[i + 1, j + 1]
-                out[i, j] = a_i0 * phi[j] + a_ij1
-            else:
-                out[i, j] = a_i0 * phi[j]
-
-
-@njit(cache=True, fastmath=False)
 def _stationary_init(phi: np.ndarray, R_vec: np.ndarray) -> tuple:
     """Stationary initial covariance P_0 for the ARMA state-space.
 
-    Solves ``P = T P T' + R R'`` by fixed-point iteration. For stationary
-    T (AR roots outside unit circle) this converges geometrically; for
-    boundary or non-stationary T it fails to converge and the caller
-    falls back to a diffuse init. Runs entirely in numba — the prior
-    scipy-based ``solve_discrete_lyapunov`` cost ~150 µs per call on
-    r=13 and was the remaining bottleneck after the Kalman loop itself
-    was JIT'd.
+    Solves ``P = T P T' + R R'`` (i.e. P = sum_k T^k RR' T'^k) by the
+    doubling iteration
+
+        S_0 = RR',  A_0 = T,
+        S_{j+1} = S_j + A_j S_j A_j',  A_{j+1} = A_j A_j,
+
+    so that S_j = sum_{k=0}^{2^j - 1} T^k RR' T'^k. Convergence is
+    quadratic in the horizon: ~20 doublings cover a spectral radius of
+    0.9999, where a linear fixed-point iteration needs ~10^5 steps.
+
+    The previous implementation iterated linearly with max_iter=200 and
+    an ABSOLUTE tol of 1e-12: a moderately persistent seasonal AR term
+    (e.g. sar1 = -0.47 at lag 12 gives spectral radius 0.94) failed to
+    converge in the budget and silently fell back to the diffuse init,
+    which shifted the reported log-likelihood by ~80 units on airline-
+    class models (RIGOR R18 follow-up). R never falls back for
+    stationary models — it solves for Q0 exactly.
+
+    Convergence is judged RELATIVE to the accumulated covariance scale.
+    For non-stationary T the iterates blow up (non-finite, or no decay
+    within the doubling budget) and the caller falls back to the
+    diffuse init, as before.
 
     Returns
     -------
     P : shape (r, r)   stationary covariance (or partial result if
                        convergence not reached)
-    ok : bool          True if the iteration converged within tolerance
-                       and all entries are finite.
+    ok : bool          True if the doubling converged and all entries
+                       are finite.
     """
     r = phi.shape[0]
-    # RR' = outer(R_vec, R_vec)
-    RR = np.empty((r, r), dtype=np.float64)
+
+    # Materialize T (companion form: AR coefs in column 0, ones on the
+    # superdiagonal) — the doubling squares A, which destroys sparsity,
+    # so there is nothing to exploit beyond dense matmuls. r <= ~30, so
+    # each O(r^3) product is trivial.
+    T = np.zeros((r, r), dtype=np.float64)
+    for i in range(r):
+        T[i, 0] = phi[i]
+    for i in range(r - 1):
+        T[i, i + 1] = 1.0
+
+    # S = RR' = outer(R_vec, R_vec)
+    S = np.empty((r, r), dtype=np.float64)
     for i in range(r):
         for j in range(r):
-            RR[i, j] = R_vec[i] * R_vec[j]
+            S[i, j] = R_vec[i] * R_vec[j]
 
-    P = RR.copy()
-    P_new = np.empty((r, r), dtype=np.float64)
-    TMT = np.empty((r, r), dtype=np.float64)
+    A = T.copy()
+    rtol = 1e-13
+    max_doublings = 60  # horizon 2^60; far beyond any stationary need
+    for _ in range(max_doublings):
+        U = A @ S @ A.T
+        if not np.all(np.isfinite(U)):
+            return S, False
+        S = S + U
+        # Relative convergence: the tail just added is negligible
+        # against the accumulated covariance.
+        s_scale = np.abs(S).max()
+        if not np.isfinite(s_scale):
+            return S, False
+        if np.abs(U).max() <= rtol * max(1.0, s_scale):
+            # Symmetrize: doubling preserves symmetry analytically, but
+            # float matmuls drift by ~1e-12 relative on near-unit
+            # systems; the filter expects an exactly symmetric P_0.
+            return 0.5 * (S + S.T), True
+        A = A @ A
+        if not np.all(np.isfinite(A)):
+            return S, False
 
-    # Fixed-point iteration. Rate of convergence is spectral radius of
-    # T (squared), so for stationary AR this is < 1 and converges
-    # geometrically. 200 iterations is plenty for r <= ~30 and AR
-    # eigenvalues bounded away from 1.
-    max_iter = 200
-    tol = 1e-12
-    for _ in range(max_iter):
-        _sparse_T_times_M_times_TT(phi, P, TMT)
-        max_change = 0.0
-        bad = False
-        for i in range(r):
-            for j in range(r):
-                new_val = TMT[i, j] + RR[i, j]
-                if not np.isfinite(new_val):
-                    bad = True
-                    break
-                diff = new_val - P[i, j]
-                if diff < 0.0:
-                    diff = -diff
-                if diff > max_change:
-                    max_change = diff
-                P_new[i, j] = new_val
-            if bad:
-                break
-        if bad:
-            return P, False
-        # Copy P_new back into P.
-        for i in range(r):
-            for j in range(r):
-                P[i, j] = P_new[i, j]
-        if max_change < tol:
-            return P, True
-
-    # Did not converge; signal fallback.
-    return P, False
+    # No decay within the doubling budget: treat as non-stationary.
+    return S, False
 
 
 @njit(cache=True, fastmath=False)
@@ -331,46 +305,6 @@ def _build_state_space(
     return T, R_vec, r
 
 
-def _initial_covariance(T: NDArray, R_vec: NDArray, sigma2: float) -> NDArray:
-    """Stationary initial covariance P_0, falling back to diffuse init.
-
-    For a stationary ARMA we solve the discrete Lyapunov equation
-
-        T P_0 T' - P_0 = -σ² R R'
-
-    If the AR polynomial has roots near or inside the unit circle the
-    Lyapunov solve can fail or return a non-PSD matrix. In that case we
-    fall back to a diffuse initialization (large diagonal), matching R's
-    ``makeARIMA`` default kappa = 1e6. This is almost never the right
-    answer for a converged fit but lets the optimizer explore
-    non-stationary regions without crashing.
-    """
-    r = T.shape[0]
-    Q = sigma2 * np.outer(R_vec, R_vec)
-    try:
-        P0 = solve_discrete_lyapunov(T, Q)
-    except Exception:
-        return _DIFFUSE_KAPPA * np.eye(r)
-
-    # Sanity: must be finite and roughly PSD. A tiny negative eigenvalue
-    # from floating-point noise is fine (we symmetrize below); anything
-    # worse means the AR roots are not strictly outside the unit circle.
-    if not np.all(np.isfinite(P0)):
-        return _DIFFUSE_KAPPA * np.eye(r)
-
-    # Symmetrize (Lyapunov solver can leave tiny asymmetry).
-    P0 = 0.5 * (P0 + P0.T)
-
-    # Cheap PSD check — the smallest eigenvalue of a 1-D ARMA cov is the
-    # observational variance, which must be > 0. If it's significantly
-    # negative, the fit point is not stationary and we fall back.
-    min_eig = np.linalg.eigvalsh(P0).min() if r > 1 else P0[0, 0]
-    if min_eig < -1e-8 * max(1.0, float(np.abs(P0).max())):
-        return _DIFFUSE_KAPPA * np.eye(r)
-
-    return P0
-
-
 def kalman_arma_loglik(
     y: NDArray,
     ar: NDArray,
@@ -379,11 +313,8 @@ def kalman_arma_loglik(
 ) -> tuple[float, float]:
     """Exact Gaussian log-likelihood of ARMA(p, q) via the Kalman filter.
 
-    Equivalent to the O(n^3) ``_innovations_algorithm`` + prediction-error
-    computation in ``_arima_likelihood.exact_loglik``, but O(n * r^2) per
-    fit where r = max(p, q+1). For typical SARIMA fits after seasonal
-    expansion r ≤ ~25, so the savings vs. innovations (which is O(n^3))
-    are ~100× on n=100 series and grow with n.
+    O(n * r^2) per fit where r = max(p, q+1); for typical SARIMA fits
+    after seasonal expansion r ≤ ~25.
 
     Parameters
     ----------
@@ -457,3 +388,105 @@ def kalman_arma_loglik(
         return 1e18, 1.0
 
     return nll, sigma2_hat
+
+
+def kalman_arma_forecast(
+    z: NDArray,
+    ar: NDArray,
+    ma: NDArray,
+    h: int,
+) -> tuple[NDArray, NDArray]:
+    """h-step forecasts of a zero-mean ARMA from the Kalman filter state.
+
+    Runs the same filter as :func:`kalman_arma_loglik` over the sample
+    and then iterates the state recursion for *h* steps. This is how R's
+    ``predict.Arima`` (``KalmanForecast``) produces its forecasts: the
+    forecast origin is the exact filtered state, not a CSS residual
+    recursion. The distinction matters for models with a near-unit MA
+    root, where zero-initialized CSS residuals still carry conditioning
+    error at the end of the sample — on AirPassengers (2,1,1)(0,1,0)[12]
+    (ma1 = -0.98) the CSS-seeded recursion was ~1.4 off R's forecasts;
+    the Kalman state reproduces them (RIGOR R18 follow-up).
+
+    Also returns the full h x h covariance matrix of the forecast
+    ERRORS (under sigma2 = 1): with X_j the state prediction error at
+    horizon j, Cov(X_1) = P_{n+1|n} and X_{j+1} = T X_j + R eta, so
+
+        Cov(e_j, e_k) = [P_j (T')^{k-j}]_{00},   P_{j+1} = T P_j T' + RR'.
+
+    The caller needs the cross-covariances, not just the diagonal, to
+    aggregate forecast variances through un-differencing exactly the
+    way R's integrated state space does.
+
+    Parameters
+    ----------
+    z : NDArray
+        Centered (mean-subtracted) differenced series.
+    ar : NDArray
+        Effective AR coefficients (multiplied-out for seasonal models).
+    ma : NDArray
+        Effective MA coefficients.
+    h : int
+        Forecast horizon (>= 1).
+
+    Returns
+    -------
+    fc : NDArray, shape (h,)
+        Point forecasts of z at times n+1 .. n+h.
+    err_cov : NDArray, shape (h, h)
+        Forecast-error covariance matrix under sigma2 = 1; multiply by
+        the fitted innovation variance to get actual covariances.
+
+    Raises
+    ------
+    ValidationError
+        If the Kalman filter fails at the supplied parameters (only
+        possible at numerically pathological parameter values).
+    """
+    from pystatistics.core.exceptions import ValidationError
+
+    _, R_vec, r = _build_state_space(ar, ma)
+    phi = np.zeros(r, dtype=np.float64)
+    p = len(ar)
+    if p > 0:
+        phi[:p] = ar
+
+    P, init_ok = _stationary_init(phi, R_vec)
+    if not init_ok:
+        P = _DIFFUSE_KAPPA * np.eye(r, dtype=np.float64)
+    a = np.zeros(r, dtype=np.float64)
+
+    # _kalman_loop mutates a and P in place; on return they hold the
+    # one-step-ahead predictive state mean/covariance for time n+1.
+    _, _, ok = _kalman_loop(
+        np.ascontiguousarray(z, dtype=np.float64), phi, R_vec, a, P,
+    )
+    if not ok:
+        raise ValidationError(
+            "Kalman filter failed at the fitted parameters; cannot "
+            "produce forecasts (non-finite state or non-positive "
+            "innovation variance)."
+        )
+
+    # T materialized once for the h-step state iteration.
+    T = np.zeros((r, r), dtype=np.float64)
+    for i in range(r):
+        T[i, 0] = phi[i]
+    for i in range(r - 1):
+        T[i, i + 1] = 1.0
+    RR = np.outer(R_vec, R_vec)
+
+    fc = np.empty(h, dtype=np.float64)
+    err_cov = np.zeros((h, h), dtype=np.float64)
+    for k in range(h):
+        fc[k] = a[0]
+        err_cov[k, k] = P[0, 0]
+        # Cross-covariances with later horizons: M = P_k (T')^s.
+        M = P
+        for s in range(k + 1, h):
+            M = M @ T.T
+            err_cov[k, s] = M[0, 0]
+            err_cov[s, k] = M[0, 0]
+        a = T @ a
+        P = T @ P @ T.T + RR
+    return fc, err_cov

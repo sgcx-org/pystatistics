@@ -216,6 +216,27 @@ class TestAutoARIMASeasonalSelection:
         assert result.best_seasonal[3] == 12
 
 
+class TestAutoARIMADifferencingChoice:
+    def test_d_uses_kpss_like_forecast(self):
+        """auto_arima's d comes from the KPSS test, as in R.
+
+        forecast::auto.arima defaults to test='kpss'; the previous
+        hardcoded test='adf' picked d=2 on WWWusage (over-differencing,
+        R picks d=1) and d=0 on wineind (R: 1), sending the order
+        search to the wrong model class entirely.
+        """
+        fixture = (
+            Path(__file__).parent.parent
+            / "fixtures" / "stationarity_r_reference.json"
+        )
+        with open(fixture) as f:
+            www = np.asarray(
+                json.load(f)["series"]["wwwusage"], dtype=np.float64,
+            )
+        result = auto_arima(www, period=1, ic="aicc")
+        assert result.best_order[1] == 1
+
+
 class TestWhittlePathMeanHandling:
     """The Whittle fast path shares the include_mean override and the
     free-parameter IC convention."""
