@@ -50,16 +50,22 @@ Deliberate divergences from ``forecast::ets`` (documented, fail-loud):
   ``_ets_fit.py``); model *rankings* are identical to R's.
 
 Selection parity with R: the *candidate set* matches ``forecast::ets``
-exactly.  The *selected model* usually matches but can differ when
-candidates are nearly tied under the criterion, because the fitting
-engine optimises a slightly wider parameter space than R's defaults —
-independent ``(0, 1)`` bounds on beta/gamma where R's "usual" region
-enforces ``beta < alpha`` and ``gamma < 1 - alpha``; ``m`` free initial
-seasonal states where R estimates ``m - 1`` and normalises the last;
-``phi`` bounded at 0.999 vs R's 0.98 — and therefore can reach slightly
-better likelihoods for trended/seasonal candidates.  Each returned
-solution discloses its full candidate IC table in
-``info["selection"]``, so any selection can be audited.
+exactly, and the fitting engine optimises the same parameter space as
+R's defaults (the "usual" region ``beta < alpha``, ``gamma < 1 -
+alpha``, ``0.8 < phi < 0.98``; ``m - 1`` free initial seasonal states
+with the remaining one fixed by normalisation — see ``_ets_fit.py``),
+so per-candidate parameter counts and log-likelihoods are directly
+comparable to R's.  The *selected model* usually matches but can still
+differ, because the engines optimise differently: PyStatistics uses
+L-BFGS-B on logit-transformed parameters, R uses Nelder-Mead, and on
+seasonal candidates R's optimiser frequently stalls well short of the
+optimum (tens of log-likelihood units on the classic benchmark
+series).  In every observed divergence (AirPassengers, co2, lynx in
+``tests/fixtures/ets_r_reference.json``) the PyStatistics selection has
+a *better* value of R's own criterion than R's selection — the tables
+disagree about the optima, not the criterion.  Each returned solution
+discloses its full candidate IC table in ``info["selection"]``, so any
+selection can be audited.
 """
 
 from __future__ import annotations
@@ -202,7 +208,7 @@ def ets(
     gamma: float | None = None,
     phi: float | None = None,
     ic: str = "aicc",
-    tol: float = 1e-8,
+    tol: float = 1e-10,
     max_iter: int = 1000,
 ) -> ETSSolution:
     """
@@ -235,6 +241,8 @@ def ets(
         to ``'N'`` raises (R: "Forbidden model combination").
     alpha, beta, gamma, phi : float or None
         Fix specific smoothing parameters (applies to every candidate).
+        Fixed values must lie in R's "usual" region (see ``_ets_fit.py``);
+        out-of-range values raise instead of being coerced into bounds.
     ic : str
         Selection criterion for wildcard models: ``'aicc'`` (default,
         matching forecast::ets), ``'aic'``, or ``'bic'``. AICc-based

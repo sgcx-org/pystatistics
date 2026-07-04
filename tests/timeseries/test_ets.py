@@ -266,10 +266,11 @@ class TestSeasonal:
         assert len(result.init_season) == 4
         assert result.converged
 
-    def test_additive_season_sums_near_zero(self, seasonal_quarterly):
+    def test_additive_season_sums_to_zero(self, seasonal_quarterly):
         result = ets(seasonal_quarterly, model="AAA", period=4)
-        # Additive seasonal components should sum close to zero
-        assert abs(np.sum(result.init_season)) < 5.0
+        # Sum-to-zero holds exactly by construction: the first-used
+        # seasonal state is reconstructed from the other m - 1 (as in R)
+        assert abs(np.sum(result.init_season)) < 1e-8
 
     def test_mam_quarterly(self, seasonal_multiplicative):
         result = ets(seasonal_multiplicative, model="MAM", period=4)
@@ -278,10 +279,10 @@ class TestSeasonal:
         assert result.init_season is not None
         assert len(result.init_season) == 4
 
-    def test_multiplicative_season_mean_near_one(self, seasonal_multiplicative):
+    def test_multiplicative_season_mean_is_one(self, seasonal_multiplicative):
         result = ets(seasonal_multiplicative, model="MAM", period=4)
-        # Multiplicative seasonal indices should average ~1
-        assert np.mean(result.init_season) == pytest.approx(1.0, abs=0.3)
+        # Mean-one holds exactly by construction (sum(s) = m, as in R)
+        assert np.mean(result.init_season) == pytest.approx(1.0, abs=1e-8)
 
     def test_too_short_for_seasonal(self):
         y = np.arange(6, dtype=np.float64) + 1.0
@@ -394,8 +395,10 @@ class TestFitQuality:
 
     def test_n_params_correct_aaa(self, seasonal_quarterly):
         result = ets(seasonal_quarterly, model="AAA", period=4)
-        # alpha + beta + gamma + l0 + b0 + 4 seasons + sigma^2 = 10
-        assert result.n_params == 10
+        # alpha + beta + gamma + l0 + b0 + 3 free seasons + sigma^2 = 9
+        # (the 4th seasonal state is fixed by the sum-to-zero
+        # normalisation, matching R forecast::ets's parameter count)
+        assert result.n_params == 9
 
     def test_convergence_flag(self, linear_series):
         result = ets(linear_series, model="AAN")
@@ -454,6 +457,28 @@ class TestValidation:
         y = np.arange(20, dtype=np.float64) + 1.0
         with pytest.raises(ValidationError, match="trend"):
             ets(y, model="ANN", damped=True)
+
+    def test_fixed_alpha_out_of_range_raises(self):
+        """Out-of-range fixed parameters raise (R: 'Parameters out of
+        range') instead of being silently coerced into bounds."""
+        y = np.arange(20, dtype=np.float64) + 1.0
+        with pytest.raises(ValidationError, match="alpha.*usual region"):
+            ets(y, model="ANN", alpha=1.5)
+
+    def test_fixed_phi_above_r_upper_bound_raises(self):
+        y = np.arange(30, dtype=np.float64) + 1.0
+        with pytest.raises(ValidationError, match="phi.*usual region"):
+            ets(y, model="AAdN", phi=0.99)
+
+    def test_fixed_beta_above_fixed_alpha_raises(self):
+        y = np.arange(30, dtype=np.float64) + 1.0
+        with pytest.raises(ValidationError, match="beta <= alpha"):
+            ets(y, model="AAN", alpha=0.2, beta=0.5)
+
+    def test_fixed_gamma_above_one_minus_alpha_raises(self, seasonal_quarterly):
+        with pytest.raises(ValidationError, match="gamma <= 1 - alpha"):
+            ets(seasonal_quarterly, model="AAA", period=4,
+                alpha=0.9, gamma=0.5)
 
 
 # =========================================================================
@@ -653,10 +678,10 @@ class TestZZZSelection:
     def test_selection_matches_r(self, name):
         """Datasets where pystatistics and forecast::ets agree exactly.
 
-        (On near-tied candidate sets the selected model can differ from R
-        because the fitting engine optimises a slightly wider parameter
-        space — see timeseries/_ets_select.py; those datasets are
-        exercised by test_selection_is_argmin_of_disclosed_table.)
+        (The engine optimises the same parameter space as R, but the
+        selected model can still differ where R's Nelder-Mead stalls
+        short of a candidate's optimum — see timeseries/_ets_select.py;
+        those datasets are exercised by the two tests below.)
         """
         case = _r_reference()["selection"][name]
         sol = ets(np.asarray(case["x"]), model=case["model_arg"],
@@ -675,6 +700,43 @@ class TestZZZSelection:
         best = min(sel["candidates"], key=lambda c: c[sel["ic"]])
         assert sel["selected"] == best["model"]
         assert sel["selected"] == sol.spec.name
+
+    @pytest.mark.parametrize("name", ["airpassengers", "co2", "lynx",
+                                      "airpassengers_zzn",
+                                      "airpassengers_azz",
+                                      "airpassengers_mzz"])
+    def test_divergent_selection_dominates_r_choice(self, name):
+        """Where the selection differs from R, it must be because our
+        engine found a better optimum, never a worse criterion value:
+        the selected model's AICc (converted to R's log-likelihood
+        convention) must beat the AICc R reported for *its* selection."""
+        case = _r_reference()["selection"][name]
+        sol = ets(np.asarray(case["x"]), model=case["model_arg"],
+                  period=case["period"])
+        n = case["n"]
+        const = 0.5 * n * (np.log(n / (2.0 * np.pi)) - 1.0)
+        aicc_r_convention = sol.aicc + 2.0 * const
+        assert aicc_r_convention <= case["aicc"] + 0.01
+
+    @pytest.mark.parametrize("name", ["airpassengers", "usaccdeaths",
+                                      "nile", "lynx"])
+    def test_selected_params_in_usual_region(self, name):
+        """Fitted smoothing parameters respect R's usual region and the
+        seasonal normalisation (the aligned parameter space)."""
+        case = _r_reference()["selection"][name]
+        sol = ets(np.asarray(case["x"]), model=case["model_arg"],
+                  period=case["period"])
+        eps = 1e-4
+        assert eps <= sol.alpha <= 1.0 - eps
+        if sol.beta is not None:
+            assert eps <= sol.beta <= sol.alpha
+        if sol.gamma is not None:
+            assert eps <= sol.gamma <= 1.0 - sol.alpha
+        if sol.phi is not None:
+            assert 0.8 <= sol.phi <= 0.98
+        if sol.init_season is not None:
+            target = 0.0 if sol.spec.season == "A" else float(sol.spec.period)
+            assert np.sum(sol.init_season) == pytest.approx(target, abs=1e-8)
 
     def test_default_model_is_zzz(self):
         """ets(y) now auto-selects, matching forecast::ets's default."""
@@ -761,8 +823,9 @@ class TestLogLikelihoodConvention:
                                       "airpassengers_mam",
                                       "usaccdeaths_ana"])
     def test_seasonal_loglik_at_least_r_optimum(self, name):
-        """For seasonal models the engine optimises a wider parameter
-        space than R (see _ets_select.py), so after removing the
+        """The engine optimises the same parameter space as R but with
+        L-BFGS-B instead of R's Nelder-Mead (which stalls on these
+        seasonal fits — see _ets_select.py), so after removing the
         convention constant its log-likelihood should not fall
         meaningfully below R's optimum."""
         case = _r_reference()["fixed"][name]

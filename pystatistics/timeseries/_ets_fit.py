@@ -6,11 +6,25 @@ log-likelihood over smoothing parameters and initial states.  Uses
 ``scipy.optimize.minimize(method='L-BFGS-B')`` with logit-transformed
 parameters for numerical stability.
 
-Design matches R's ``forecast::ets()`` for specified model types, with
-one deliberate reporting divergence: PyStatistics reports the **full
-Gaussian log-likelihood**, while ``forecast::ets`` reports Hyndman's
-concentrated pseudo-log-likelihood ``-0.5 * n * log(SSE)`` (plus the
-same multiplicative-error Jacobian term both conventions share).  The
+Design matches R's ``forecast::ets()`` for specified model types.  The
+optimised parameter space is R's default "usual" region (forecast's
+``bounds="usual"`` box constraints plus cross-constraints): ``1e-4 <
+alpha < 1 - 1e-4``, ``1e-4 < beta < alpha``, ``1e-4 < gamma < 1 -
+alpha``, ``0.8 < phi < 0.98``; seasonal models estimate ``m - 1`` free
+initial seasonal states with the remaining one (the index used at the
+first observation) determined by the normalisation ``sum(s) = 0``
+(additive) / ``sum(s) = m`` (multiplicative), exactly as R does — which
+also makes ``n_params`` match R's parameter count.  Free-parameter
+starting values follow R's ``initparam``.  (R's ``bounds="both"``
+default additionally intersects with the admissible region; that check
+is not implemented — for the usual region it only matters on its
+boundary.)
+
+There is one deliberate reporting divergence: PyStatistics reports the
+**full Gaussian log-likelihood**, while ``forecast::ets`` reports
+Hyndman's concentrated pseudo-log-likelihood ``-0.5 * n * log(SSE)``
+(plus the same multiplicative-error Jacobian term both conventions
+share).  The
 two differ by the exact deterministic constant
 
     ``0.5 * n * [log(n / (2*pi)) - 1]``
@@ -25,15 +39,12 @@ differ from R's.  Public model selection lives in ``_ets_select.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
-from pystatistics.core.result import Result, SolutionReprMixin
+from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
 from pystatistics.timeseries._ets_models import (
     ETSSpec,
@@ -41,257 +52,74 @@ from pystatistics.timeseries._ets_models import (
     parse_ets_spec,
     unpack_params,
 )
+# Result containers live in _ets_result.py; re-exported here because the
+# public surface (timeseries/__init__.py, _ets_select.py, _ets_forecast.py,
+# existing user code) imports them from this module.
+from pystatistics.timeseries._ets_result import ETSParams, ETSSolution
+
+__all__ = ["ETSParams", "ETSSolution", "fit_ets_model"]
 
 
 # ---------------------------------------------------------------------------
-# Result dataclasses
+# Parameter space: R forecast::ets "usual" region
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class ETSParams:
-    """Immutable parameter payload for a fitted ETS model.
-
-    Attributes
-    ----------
-    spec : ETSSpec
-        The fitted model specification.
-    alpha : float
-        Level smoothing parameter.
-    beta : float or None
-        Trend smoothing parameter (``None`` if no trend).
-    gamma : float or None
-        Seasonal smoothing parameter (``None`` if no season).
-    phi : float or None
-        Damping parameter (``None`` if not damped).
-    init_level : float
-        Estimated initial level.
-    init_trend : float or None
-        Estimated initial trend (``None`` if no trend).
-    init_season : NDArray or None
-        Estimated initial seasonal indices (``None`` if no season).
-    fitted_values : NDArray
-        One-step-ahead fitted values, length *n*.
-    residuals : NDArray
-        Residuals, length *n*.
-    states : NDArray
-        Full state history, shape ``(n + 1, n_states)``.
-    log_likelihood : float
-        Maximised **full Gaussian** log-likelihood.  R's ``forecast::ets``
-        reports the concentrated pseudo-log-likelihood
-        ``-0.5*n*log(SSE)`` instead; this value equals R's plus the
-        constant ``0.5*n*[log(n/(2*pi)) - 1]`` (sample-size only, so all
-        model *comparisons* on the same data are unaffected).
-    aic : float
-        Akaike Information Criterion, ``-2*log_likelihood + 2*k`` with the
-        full-Gaussian log-likelihood above.  Differs from
-        ``forecast::ets``'s printed AIC by ``-n*[log(n/(2*pi)) - 1]``;
-        AIC *differences and rankings* between models match R exactly.
-    aicc : float
-        Corrected AIC (for small samples); same convention note as `aic`.
-    bic : float
-        Bayesian Information Criterion; same convention note as `aic`.
-    mse : float
-        Mean squared error of residuals.
-    mae : float
-        Mean absolute error of residuals.
-    n_obs : int
-        Number of observations.
-    n_params : int
-        Total number of estimated parameters (smoothing + initial states + sigma^2).
-    converged : bool
-        Whether the optimiser converged.
-    """
-
-    spec: ETSSpec
-    alpha: float
-    beta: float | None
-    gamma: float | None
-    phi: float | None
-    init_level: float
-    init_trend: float | None
-    init_season: NDArray | None
-    fitted_values: NDArray
-    residuals: NDArray
-    states: NDArray
-    log_likelihood: float
-    aic: float
-    aicc: float
-    bic: float
-    mse: float
-    mae: float
-    n_obs: int
-    n_params: int
-    converged: bool
+_EPS = 1e-4                  # R: lower = 1e-4, upper = 1 - 1e-4 (alpha/beta/gamma)
+_PHI_BOUNDS = (0.8, 0.98)    # R: lower[4] = 0.8, upper[4] = 0.98
 
 
-@dataclass
-class ETSSolution(SolutionReprMixin):
-    """
-    Result from fitting an ETS model.
+def _alpha_box(beta_fixed: float | None, gamma_fixed: float | None) -> tuple[float, float]:
+    """Alpha's box, narrowed by user-fixed beta/gamma exactly as R's
+    etsmodel does (``lower[1] <- max(beta, lower[1])``;
+    ``upper[1] <- min(1 - gamma, upper[1])``) so the usual-region
+    cross-constraints stay satisfiable."""
+    lo = max(_EPS, beta_fixed) if beta_fixed is not None else _EPS
+    hi = min(1.0 - _EPS, 1.0 - gamma_fixed) if gamma_fixed is not None else 1.0 - _EPS
+    return lo, hi
 
-    Wraps a :class:`Result` ``[ETSParams]`` envelope; every datum is
-    exposed via a read-only ``@property`` so the public attribute surface
-    is unchanged from the previous flat dataclass.
-    """
 
-    _result: Result[ETSParams]
-
-    @property
-    def spec(self) -> ETSSpec:
-        return self._result.params.spec
-
-    @property
-    def alpha(self) -> float:
-        return self._result.params.alpha
-
-    @property
-    def beta(self) -> float | None:
-        return self._result.params.beta
-
-    @property
-    def gamma(self) -> float | None:
-        return self._result.params.gamma
-
-    @property
-    def phi(self) -> float | None:
-        return self._result.params.phi
-
-    @property
-    def init_level(self) -> float:
-        return self._result.params.init_level
-
-    @property
-    def init_trend(self) -> float | None:
-        return self._result.params.init_trend
-
-    @property
-    def init_season(self) -> NDArray | None:
-        return self._result.params.init_season
-
-    @property
-    def fitted_values(self) -> NDArray:
-        return self._result.params.fitted_values
-
-    @property
-    def residuals(self) -> NDArray:
-        return self._result.params.residuals
-
-    @property
-    def states(self) -> NDArray:
-        return self._result.params.states
-
-    @property
-    def log_likelihood(self) -> float:
-        """Full Gaussian log-likelihood.
-
-        R's ``forecast::ets`` reports the concentrated pseudo-
-        log-likelihood ``-0.5*n*log(SSE)``; this value equals R's plus
-        the deterministic constant ``0.5*n*[log(n/(2*pi)) - 1]``.  Model
-        comparisons on the same data are identical either way.
-        """
-        return self._result.params.log_likelihood
-
-    @property
-    def aic(self) -> float:
-        """AIC under the full-Gaussian log-likelihood.
-
-        Differs from ``forecast::ets``'s printed AIC by the constant
-        ``-n*[log(n/(2*pi)) - 1]``; AIC differences and model rankings
-        match R exactly (same parameter count ``k``).
-        """
-        return self._result.params.aic
-
-    @property
-    def aicc(self) -> float:
-        """AICc; same convention note as :attr:`aic`."""
-        return self._result.params.aicc
-
-    @property
-    def bic(self) -> float:
-        """BIC; same convention note as :attr:`aic`."""
-        return self._result.params.bic
-
-    @property
-    def mse(self) -> float:
-        return self._result.params.mse
-
-    @property
-    def mae(self) -> float:
-        return self._result.params.mae
-
-    @property
-    def n_obs(self) -> int:
-        return self._result.params.n_obs
-
-    @property
-    def n_params(self) -> int:
-        return self._result.params.n_params
-
-    @property
-    def converged(self) -> bool:
-        return self._result.params.converged
-
-    @property
-    def info(self) -> dict:
-        return self._result.info
-
-    @property
-    def timing(self) -> dict[str, float] | None:
-        return self._result.timing
-
-    @property
-    def backend_name(self) -> str:
-        return self._result.backend_name
-
-    @property
-    def warnings(self) -> tuple[str, ...]:
-        return self._result.warnings
-
-    def summary(self) -> str:
-        """
-        Return a human-readable summary matching R's ``forecast::ets()`` style.
-
-        Returns
-        -------
-        str
-            Multi-line summary.
-        """
-        lines = [
-            self.spec.name,
-            "",
-            "  Smoothing parameters:",
-            f"    alpha = {self.alpha:.4f}",
-        ]
-        if self.beta is not None:
-            lines.append(f"    beta  = {self.beta:.4f}")
-        if self.gamma is not None:
-            lines.append(f"    gamma = {self.gamma:.4f}")
-        if self.phi is not None:
-            lines.append(f"    phi   = {self.phi:.4f}")
-        lines.append("")
-        lines.append("  Initial states:")
-        lines.append(f"    l = {self.init_level:.4f}")
-        if self.init_trend is not None:
-            lines.append(f"    b = {self.init_trend:.4f}")
-        if self.init_season is not None:
-            s_str = ", ".join(f"{v:.4f}" for v in self.init_season)
-            lines.append(f"    s = [{s_str}]")
-        lines.extend([
-            "",
-            f"  sigma^2: {self.mse:.4f}",
-            "",
-            f"  Log-likelihood: {self.log_likelihood:.2f}",
-            f"  AIC:  {self.aic:.2f}",
-            f"  AICc: {self.aicc:.2f}",
-            f"  BIC:  {self.bic:.2f}",
-            "",
-            f"  MSE: {self.mse:.4f}",
-            f"  MAE: {self.mae:.4f}",
-            f"  n = {self.n_obs}, k = {self.n_params}",
-            f"  Converged: {self.converged}",
-        ])
-        return "\n".join(lines)
-
+def _check_fixed_smoothing(
+    alpha: float | None,
+    beta: float | None,
+    gamma: float | None,
+    phi: float | None,
+) -> None:
+    """Validate user-fixed smoothing parameters against R's usual region
+    (forecast's check.param), failing loud instead of silently coercing
+    an out-of-range value into bounds.  Only parameters the model uses
+    are passed in (others arrive as ``None``)."""
+    if alpha is not None and not _EPS <= alpha <= 1.0 - _EPS:
+        raise ValidationError(
+            f"alpha: must be in [{_EPS}, {1.0 - _EPS}] (R forecast::ets "
+            f"usual region), got {alpha}"
+        )
+    if beta is not None:
+        if not _EPS <= beta <= 1.0 - _EPS:
+            raise ValidationError(
+                f"beta: must be in [{_EPS}, {1.0 - _EPS}] (R forecast::ets "
+                f"usual region), got {beta}"
+            )
+        if alpha is not None and beta > alpha:
+            raise ValidationError(
+                f"beta: usual region requires beta <= alpha, got "
+                f"beta={beta} > alpha={alpha}"
+            )
+    if gamma is not None:
+        if not _EPS <= gamma <= 1.0 - _EPS:
+            raise ValidationError(
+                f"gamma: must be in [{_EPS}, {1.0 - _EPS}] (R forecast::ets "
+                f"usual region), got {gamma}"
+            )
+        if alpha is not None and gamma > 1.0 - alpha:
+            raise ValidationError(
+                f"gamma: usual region requires gamma <= 1 - alpha, got "
+                f"gamma={gamma} > 1 - alpha={1.0 - alpha}"
+            )
+    if phi is not None and not _PHI_BOUNDS[0] <= phi <= _PHI_BOUNDS[1]:
+        raise ValidationError(
+            f"phi: must be in [{_PHI_BOUNDS[0]}, {_PHI_BOUNDS[1]}] "
+            f"(R forecast::ets usual region), got {phi}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +143,69 @@ def _inv_logit(z: float, lo: float, hi: float) -> float:
     """
     z = min(max(z, -500.0), 500.0)
     return lo + (hi - lo) / (1.0 + np.exp(-z))
+
+
+def _decode_smooth(
+    theta_smooth: NDArray,
+    spec: ETSSpec,
+    fixed_smooth: list[float | None],
+    alpha_box: tuple[float, float],
+) -> NDArray:
+    """Map the smoothing block of the unconstrained parameter vector into
+    R's usual region.
+
+    Alpha is decoded first; beta/gamma bounds then depend on the current
+    alpha value (``beta < alpha``, ``gamma < 1 - alpha``), so the
+    cross-constraints hold at every optimiser iterate.  User-fixed values
+    pass through untransformed (their theta entries are unused).
+    """
+    out = np.empty(len(fixed_smooth), dtype=np.float64)
+    a = (
+        fixed_smooth[0]
+        if fixed_smooth[0] is not None
+        else _inv_logit(theta_smooth[0], alpha_box[0], alpha_box[1])
+    )
+    out[0] = a
+    i = 1
+    if spec.trend in ("A", "Ad"):
+        out[i] = (
+            fixed_smooth[i]
+            if fixed_smooth[i] is not None
+            else _inv_logit(theta_smooth[i], _EPS, a)
+        )
+        i += 1
+    if spec.season in ("A", "M"):
+        out[i] = (
+            fixed_smooth[i]
+            if fixed_smooth[i] is not None
+            else _inv_logit(theta_smooth[i], _EPS, 1.0 - a)
+        )
+        i += 1
+    if spec.damped:
+        out[i] = (
+            fixed_smooth[i]
+            if fixed_smooth[i] is not None
+            else _inv_logit(theta_smooth[i], _PHI_BOUNDS[0], _PHI_BOUNDS[1])
+        )
+    return out
+
+
+def _assemble_init_states(free_states: NDArray, spec: ETSSpec) -> NDArray:
+    """Expand the optimiser's free initial states to the full state vector.
+
+    Seasonal models optimise ``m - 1`` initial seasonal states (as R
+    forecast::ets does); the remaining one — the index used at the first
+    observation — is determined by the normalisation ``sum(s) = 0``
+    (additive) / ``sum(s) = m`` (multiplicative).
+    """
+    if spec.season == "N":
+        return np.asarray(free_states, dtype=np.float64)
+    n_lead = 1 + (1 if spec.trend in ("A", "Ad") else 0)
+    lead = free_states[:n_lead]
+    s_free = free_states[n_lead:]
+    target = 0.0 if spec.season == "A" else float(spec.period)
+    s_first = target - float(np.sum(s_free))
+    return np.concatenate([lead, [s_first], s_free])
 
 
 # ---------------------------------------------------------------------------
@@ -432,14 +323,17 @@ def _neg_loglik(
     theta: NDArray,
     y: NDArray,
     spec: ETSSpec,
-    bounds_info: list[tuple[float, float]],
+    fixed_smooth: list[float | None],
+    alpha_box: tuple[float, float],
     n_smooth: int,
 ) -> float:
     """
     Compute negative log-likelihood for the optimiser.
 
-    Parameters are received on an unconstrained (logit) scale and mapped
-    back to their bounded ranges before evaluation.
+    Smoothing parameters are received on an unconstrained (logit) scale
+    and mapped into R's usual region before evaluation; the free initial
+    states follow unbounded and are expanded to the full state vector
+    (seasonal normalisation).
 
     Parameters
     ----------
@@ -449,8 +343,10 @@ def _neg_loglik(
         Time series.
     spec : ETSSpec
         Model specification.
-    bounds_info : list of (lo, hi)
-        Bounds for each element of the parameter vector.
+    fixed_smooth : list of float or None
+        Per-smoothing-parameter user-fixed values (``None`` = free).
+    alpha_box : (lo, hi)
+        Alpha's box bounds.
     n_smooth : int
         Number of smoothing parameters at the front of ``theta``.
 
@@ -459,15 +355,8 @@ def _neg_loglik(
     float
         Negative log-likelihood (large positive means bad fit).
     """
-    # Map from unconstrained to bounded
-    real = np.empty(len(theta))
-    for i in range(n_smooth):
-        real[i] = _inv_logit(theta[i], bounds_info[i][0], bounds_info[i][1])
-    # Initial states are unbounded
-    real[n_smooth:] = theta[n_smooth:]
-
-    params = real[:n_smooth]
-    init_states = real[n_smooth:]
+    params = _decode_smooth(theta[:n_smooth], spec, fixed_smooth, alpha_box)
+    init_states = _assemble_init_states(theta[n_smooth:], spec)
 
     try:
         fitted, residuals, _ = ets_recursion(y, spec, params, init_states)
@@ -516,7 +405,7 @@ def fit_ets_model(
     beta: float | None = None,
     gamma: float | None = None,
     phi: float | None = None,
-    tol: float = 1e-8,
+    tol: float = 1e-10,
     max_iter: int = 1000,
 ) -> ETSSolution:
     """
@@ -543,6 +432,12 @@ def fit_ets_model(
         Force damped trend.  Overrides the model string when not ``None``.
     alpha, beta, gamma, phi : float or None
         Fix specific smoothing parameters (skip optimisation for them).
+        Fixed values must lie in R's "usual" region — ``[1e-4, 1 - 1e-4]``
+        for alpha/beta/gamma with ``beta <= alpha`` and
+        ``gamma <= 1 - alpha`` when jointly fixed, ``[0.8, 0.98]`` for
+        phi; out-of-range values raise ``ValidationError`` as R errors
+        "Parameters out of range" (previous versions silently coerced
+        them into bounds).
     tol : float
         Convergence tolerance for the optimiser.
     max_iter : int
@@ -603,99 +498,93 @@ def fit_ets_model(
     init_l, init_b = _init_level_trend(y_arr, spec)
     init_s = _init_season(y_arr, spec, init_l)
 
-    # ---- build parameter vector and bounds --------------------------------
-    # Smoothing params first, then initial states (unbounded)
-    smooth_vals: list[float] = []
-    smooth_bounds: list[tuple[float, float]] = []
-    smooth_fixed: list[bool] = []
-    eps = 1e-4
+    # ---- build parameter vector -------------------------------------------
+    # Smoothing params first (logit scale over R's usual region), then the
+    # free initial states (unbounded).
+    has_trend = spec.trend in ("A", "Ad")
+    has_season = spec.season in ("A", "M")
 
-    # alpha
-    smooth_vals.append(alpha if alpha is not None else 0.1)
-    smooth_bounds.append((eps, 1.0 - eps))
-    smooth_fixed.append(alpha is not None)
+    _check_fixed_smoothing(
+        alpha,
+        beta if has_trend else None,
+        gamma if has_season else None,
+        phi if spec.damped else None,
+    )
+    alpha_box = _alpha_box(
+        beta if has_trend else None, gamma if has_season else None
+    )
 
-    # beta
-    if spec.trend in ("A", "Ad"):
-        smooth_vals.append(beta if beta is not None else 0.01)
-        smooth_bounds.append((eps, 1.0 - eps))
-        smooth_fixed.append(beta is not None)
-
-    # gamma
-    if spec.season in ("A", "M"):
-        smooth_vals.append(gamma if gamma is not None else 0.01)
-        smooth_bounds.append((eps, 1.0 - eps))
-        smooth_fixed.append(gamma is not None)
-
-    # phi
+    fixed_smooth: list[float | None] = [alpha]
+    if has_trend:
+        fixed_smooth.append(beta)
+    if has_season:
+        fixed_smooth.append(gamma)
     if spec.damped:
-        smooth_vals.append(phi if phi is not None else 0.98)
-        smooth_bounds.append((0.8, 0.999))
-        smooth_fixed.append(phi is not None)
+        fixed_smooth.append(phi)
+    n_smooth = len(fixed_smooth)
 
-    n_smooth = len(smooth_vals)
+    # Free-parameter starting values follow R forecast::ets initparam.
+    # Fixed positions keep theta = 0; _decode_smooth ignores them.
+    a0 = alpha if alpha is not None else (
+        alpha_box[0] + 0.2 * (alpha_box[1] - alpha_box[0]) / spec.period
+    )
+    theta_smooth0 = np.zeros(n_smooth, dtype=np.float64)
+    if alpha is None:
+        theta_smooth0[0] = _logit(a0, alpha_box[0], alpha_box[1])
+    i = 1
+    if has_trend:
+        if beta is None:
+            b0 = _EPS + 0.1 * (min(1.0 - _EPS, a0) - _EPS)
+            theta_smooth0[i] = _logit(b0, _EPS, a0)
+        i += 1
+    if has_season:
+        if gamma is None:
+            g0 = _EPS + 0.05 * (min(1.0 - _EPS, 1.0 - a0) - _EPS)
+            theta_smooth0[i] = _logit(g0, _EPS, 1.0 - a0)
+        i += 1
+    if spec.damped and phi is None:
+        p0 = _PHI_BOUNDS[0] + 0.99 * (_PHI_BOUNDS[1] - _PHI_BOUNDS[0])
+        theta_smooth0[i] = _logit(p0, _PHI_BOUNDS[0], _PHI_BOUNDS[1])
 
-    # Initial states (unbounded)
+    # Free initial states (unbounded).  Seasonal models optimise m - 1
+    # seasonal states; the first-used one is reconstructed from the
+    # normalisation by _assemble_init_states (init_s from _init_season is
+    # already normalised, so dropping element 0 loses no information).
     init_state_vals: list[float] = [init_l]
     if init_b is not None:
         init_state_vals.append(init_b)
     if init_s is not None:
-        init_state_vals.extend(init_s.tolist())
+        init_state_vals.extend(init_s[1:].tolist())
 
-    all_vals = np.array(smooth_vals + init_state_vals, dtype=np.float64)
-    all_bounds = smooth_bounds + [(-np.inf, np.inf)] * len(init_state_vals)
+    theta0 = np.concatenate([theta_smooth0, init_state_vals])
+    fixed_mask = [v is not None for v in fixed_smooth] + [False] * len(init_state_vals)
 
-    # Transform smoothing params to unconstrained scale
-    theta0 = np.empty_like(all_vals)
-    for i in range(n_smooth):
-        if smooth_fixed[i]:
-            theta0[i] = _logit(all_vals[i], all_bounds[i][0], all_bounds[i][1])
-        else:
-            theta0[i] = _logit(all_vals[i], all_bounds[i][0], all_bounds[i][1])
-    theta0[n_smooth:] = all_vals[n_smooth:]
+    # Optimise only free parameters (initial states are always free, so
+    # there is always something to optimise)
+    free_idx = [i for i, f in enumerate(fixed_mask) if not f]
 
-    # Build mask for fixed parameters
-    fixed_mask = smooth_fixed + [False] * len(init_state_vals)
-
-    # If all fixed, skip optimisation
-    all_fixed = all(fixed_mask)
-
-    if all_fixed:
-        params_opt = all_vals[:n_smooth]
-        init_states_opt = all_vals[n_smooth:]
-        converged = True
-    else:
-        # Optimise only free parameters
-        free_idx = [i for i, f in enumerate(fixed_mask) if not f]
-        fixed_idx = [i for i, f in enumerate(fixed_mask) if f]
-
-        def _objective(theta_free: NDArray) -> float:
-            theta_full = theta0.copy()
-            theta_full[free_idx] = theta_free
-            return _neg_loglik(theta_full, y_arr, spec, all_bounds, n_smooth)
-
-        theta_free0 = theta0[free_idx]
-
-        result = minimize(
-            _objective,
-            theta_free0,
-            method="L-BFGS-B",
-            options={"maxiter": max_iter, "ftol": tol, "gtol": tol},
+    def _objective(theta_free: NDArray) -> float:
+        theta_full = theta0.copy()
+        theta_full[free_idx] = theta_free
+        return _neg_loglik(
+            theta_full, y_arr, spec, fixed_smooth, alpha_box, n_smooth
         )
-        converged = result.success
 
-        # Reconstruct full theta
-        theta_opt = theta0.copy()
-        theta_opt[free_idx] = result.x
+    result = minimize(
+        _objective,
+        theta0[free_idx],
+        method="L-BFGS-B",
+        options={"maxiter": max_iter, "ftol": tol, "gtol": tol},
+    )
+    converged = result.success
 
-        # Map back to bounded
-        real_opt = np.empty(len(theta_opt))
-        for i in range(n_smooth):
-            real_opt[i] = _inv_logit(theta_opt[i], all_bounds[i][0], all_bounds[i][1])
-        real_opt[n_smooth:] = theta_opt[n_smooth:]
-
-        params_opt = real_opt[:n_smooth]
-        init_states_opt = real_opt[n_smooth:]
+    # Reconstruct full theta and map back to bounded values
+    theta_opt = theta0.copy()
+    theta_opt[free_idx] = result.x
+    params_opt = _decode_smooth(
+        theta_opt[:n_smooth], spec, fixed_smooth, alpha_box
+    )
+    init_states_opt = _assemble_init_states(theta_opt[n_smooth:], spec)
 
     # ---- final recursion --------------------------------------------------
     fitted_vals, resid, states = ets_recursion(
@@ -724,7 +613,8 @@ def fit_ets_model(
             - float(np.sum(log_abs_fitted))
         )
 
-    # Total parameters: smoothing + init states + sigma^2
+    # Total parameters: smoothing + free init states + sigma^2 (seasonal
+    # models estimate m - 1 initial seasonal states, matching R's count)
     k = n_smooth + len(init_state_vals) + 1
     aic = -2.0 * ll + 2.0 * k
     if n - k - 1 > 0:
