@@ -57,15 +57,29 @@ with the remaining one fixed by normalisation — see ``_ets_fit.py``),
 so per-candidate parameter counts and log-likelihoods are directly
 comparable to R's.  The *selected model* usually matches but can still
 differ, because the engines optimise differently: PyStatistics uses
-L-BFGS-B on logit-transformed parameters, R uses Nelder-Mead, and on
-seasonal candidates R's optimiser frequently stalls well short of the
-optimum (tens of log-likelihood units on the classic benchmark
-series).  In every observed divergence (AirPassengers, co2, lynx in
-``tests/fixtures/ets_r_reference.json``) the PyStatistics selection has
-a *better* value of R's own criterion than R's selection — the tables
-disagree about the optima, not the criterion.  Each returned solution
-discloses its full candidate IC table in ``info["selection"]``, so any
-selection can be audited.
+L-BFGS-B on logit-transformed parameters (damped models from two phi
+starts), R uses Nelder-Mead, and on seasonal candidates R's optimiser
+frequently stalls well short of the optimum (tens of log-likelihood
+units on the classic benchmark series).
+
+Every divergence is verified by the only fair cross-engine test:
+PyStatistics' *fitted parameters* are evaluated by **R's own likelihood
+code** (``forecast:::pegelsresid.C``, with the seasonal states reversed
+into R's ordering; the transplant harness is self-validated by first
+reproducing R's own fits' log-likelihoods to 1e-8 relative tolerance).
+Refitting the same
+model string in R would merely re-run R's Nelder-Mead — the very
+optimiser being compared — and reproduce its stall.  Under that test,
+on all six divergent reference selections (AirPassengers, co2, lynx and
+variants in ``tests/fixtures/ets_r_reference.json``) the PyStatistics
+pick has a strictly lower AICc under R's own likelihood than the model
+``forecast::ets`` selects, and its parameters are admissible
+(forecast-stable) under R's own ``admissible()`` check.  The scored
+values are stored in the fixture (``py_pick_aicc_in_r``) and pinned by
+regression tests; regenerate with ``generate_ets_py_params.py`` then
+``generate_ets_r_reference.R``.  The tables disagree about the optima,
+not the criterion.  Each returned solution discloses its full candidate
+IC table in ``info["selection"]``, so any selection can be audited.
 """
 
 from __future__ import annotations

@@ -371,6 +371,21 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.3 — damped-trend ETS fits no longer stall
+
+Damped-trend ETS models (`Ad`) could stop short of their optimum and report
+`converged=False` (the damping parameter started nearly pinned to its upper
+bound, and large seasonal fits could exhaust their evaluation budget).
+Damped models are now optimised from two starting points with the better
+result kept; damped fits improve or stay identical, non-damped fits are
+unchanged, and automatic `"ZZZ"` selection picks the same models on every
+reference dataset (elsewhere an improved damped fit can now win a selection
+it previously lost — the intended effect). Where that
+selection differs from R's `forecast::ets`, the choice is now verified by
+evaluating the fitted parameters under R's own likelihood code — our pick
+scores a strictly lower AICc there on every divergent reference dataset —
+and regression tests enforce that this stays true.
+
 ### 4.6.2 — STL matches R exactly and runs as fast; ETS automatic model selection
 
 `stl()` was rewritten after validation showed it leaking trend into the

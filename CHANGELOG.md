@@ -1,5 +1,36 @@
 # Changelog
 
+## 4.6.3
+
+Damped-trend ETS fits no longer stall; ETS-vs-R verification strengthened.
+
+- **Damped-trend ETS models (`Ad`) could stall short of their optimum and
+  report `converged=False` — fixed.** The damping parameter started so close
+  to its upper bound that the optimiser could barely move it, and larger
+  seasonal models could also exhaust their evaluation budget mid-fit (e.g.
+  `ets(co2, model="MAdM", period=12)` returned `converged=False` about 1.7
+  AICc above its true optimum). Damped models are now optimised from two
+  starting points with the better result kept — one of them reproduces the
+  previous behaviour with at least the previous evaluation budget, so
+  damped fits improve or stay identical, never worse — and the evaluation
+  budget now scales with model size (never below its old value). Converged
+  damped fits now say so. Any fit that finished within the old budget is
+  bit-identical unless damped; on every reference dataset all non-damped
+  fits are bit-identical and automatic `"ZZZ"` selection picks the same
+  model as before. On other series a damped candidate whose fit improved
+  can now win a selection it previously lost — the intended effect.
+- **The claim that `ets()` model selection beats `forecast::ets` on
+  divergent picks is now verified the fair way and enforced by tests.**
+  Where automatic selection differs from R (6 of 10 reference datasets),
+  our selected model's fitted parameters are evaluated by *R's own
+  likelihood code* and score a strictly lower AICc there than the model R
+  selects (e.g. monthly CO2: 1697.2 vs 1722.6), while remaining in R's
+  admissible (forecast-stable) parameter region. Refitting the same model
+  string in R understates our fit because it re-runs R's optimiser, which
+  is what stalls in the first place. The cross-scored values ship in the
+  test fixtures and regression tests fail if a future change makes any
+  selection worse under R's own numbers.
+
 ## 4.6.2
 
 STL decomposition rewritten to match R exactly and now as fast as R's

@@ -542,8 +542,21 @@ def fit_ets_model(
             g0 = _EPS + 0.05 * (min(1.0 - _EPS, 1.0 - a0) - _EPS)
             theta_smooth0[i] = _logit(g0, _EPS, 1.0 - a0)
         i += 1
-    if spec.damped and phi is None:
-        p0 = _PHI_BOUNDS[0] + 0.99 * (_PHI_BOUNDS[1] - _PHI_BOUNDS[0])
+    phi_free = spec.damped and phi is None
+    if phi_free:
+        # R's initparam starts phi at 0.9782 — 99% of the way to the 0.98
+        # bound.  That is fine for R's derivative-free Nelder-Mead but
+        # saturates the logit transform for L-BFGS-B: the sigmoid
+        # derivative there is ~4% of mid-range (0.0099 vs 0.25), so the
+        # numerical gradient in the phi direction all but vanishes and
+        # damped fits crawl (co2 MAdM exhausted its evaluation budget
+        # unconverged).  A
+        # mid-range start keeps the phi gradient alive but can land in the
+        # other phi basin on some series, so damped fits are run from BOTH
+        # starts and the better optimum kept (see the optimiser call) —
+        # provably never worse than the single R start.  The bounds
+        # themselves stay R's (0.8, 0.98) usual region.
+        p0 = 0.9
         theta_smooth0[i] = _logit(p0, _PHI_BOUNDS[0], _PHI_BOUNDS[1])
 
     # Free initial states (unbounded).  Seasonal models optimise m - 1
@@ -570,12 +583,45 @@ def fit_ets_model(
             theta_full, y_arr, spec, fixed_smooth, alpha_box, n_smooth
         )
 
-    result = minimize(
-        _objective,
-        theta0[free_idx],
-        method="L-BFGS-B",
-        options={"maxiter": max_iter, "ftol": tol, "gtol": tol},
-    )
+    # Damped models are optimised from two phi starts (mid-range 0.9 and
+    # R's initparam 0.9782 — see the phi_free comment above) and the
+    # better optimum kept; other models run once.
+    starts = [theta0]
+    if phi_free:
+        alt = theta0.copy()
+        alt[n_smooth - 1] = _logit(
+            _PHI_BOUNDS[0] + 0.99 * (_PHI_BOUNDS[1] - _PHI_BOUNDS[0]),
+            _PHI_BOUNDS[0],
+            _PHI_BOUNDS[1],
+        )
+        starts.append(alt)
+
+    # maxfun must scale with dimension or it, not maxiter, becomes the
+    # binding limit: scipy's default (15000) allows only ~830 iterations
+    # for a 17-parameter seasonal model (numerical gradient = n+1 evals
+    # per iteration), so requesting maxiter=1000 was unreachable and large
+    # damped fits died with "EVALUATIONS EXCEEDS LIMIT" (converged=False).
+    # (n+1) evals per gradient, x2 headroom for line searches; floored at
+    # scipy's old default so no fit ever gets a SMALLER budget than
+    # before — that floor is what makes the two-start damped strategy
+    # provably never worse (the R-start leg reproduces the old
+    # trajectory) and keeps every other fit bit-identical.
+    maxfun = max(15000, max_iter * (len(free_idx) + 1) * 2)
+    result = None
+    for start in starts:
+        res = minimize(
+            _objective,
+            start[free_idx],
+            method="L-BFGS-B",
+            options={
+                "maxiter": max_iter,
+                "maxfun": maxfun,
+                "ftol": tol,
+                "gtol": tol,
+            },
+        )
+        if result is None or res.fun < result.fun:
+            result = res
     converged = result.success
 
     # Reconstruct full theta and map back to bounded values
