@@ -1,5 +1,176 @@
 # Changelog
 
+## 4.6.4
+
+Seasonal ARIMA information criteria, likelihoods, forecasts, and standard
+errors fixed — `auto_arima` now selects the same models as R's
+`forecast::auto.arima`, and forecasts reproduce R's `predict()`; ADF
+p-values corrected across their full range; stationarity-test defaults
+aligned with R's `tseries`.
+
+- **Seasonal ARIMA models reported inflated AIC/AICc/BIC — fixed.**
+  `arima(..., seasonal=...)` counted the coefficients of the expanded
+  multiplicative AR/MA polynomials instead of the free estimated parameters:
+  the airline model `(0,1,1)(0,1,1)[12]` on AirPassengers was penalised for
+  15 parameters instead of 3, reporting AIC 1044.9 where R's `stats::arima`
+  gives 1021.0. The fitted coefficients and log-likelihood were always
+  correct — only the information criteria (and the `n_params`-vs-`aic`
+  consistency of the result object) were wrong. All criteria now use the
+  free-parameter count (`p + q + P + Q`, plus the mean if one is estimated,
+  plus one for the innovation variance), matching R exactly, and
+  `aic == -2*log_likelihood + 2*n_params` holds on every model. The AICc
+  correction of the trivial `(0,d,0)` model was also off (used `2/(n-2)`
+  instead of `4/(n-2)`) and is fixed.
+- **Differenced ARIMA models no longer estimate a mean.** R's `stats::arima`
+  ignores `include.mean` whenever the model has any differencing
+  (`d + D > 0`); pystatistics estimated one anyway, which acted as an
+  implicit drift term and shifted both the fit and the parameter count.
+  Differenced fits now reproduce R's log-likelihoods exactly (e.g.
+  `(2,1,1)` on AirPassengers: −685.169 both). Forecasts from differenced
+  models consequently no longer carry an implicit drift.
+- **`auto_arima` now searches the seasonal orders and matches R.** The
+  seasonal search previously kept `(P, Q)` pinned at `(1, 1)`, so many of R's
+  selections were unreachable; combined with the inflated criteria it could
+  silently return a materially worse model — on AirPassengers it selected
+  `(2,1,2)(1,1,1)[12]`, which is 7.5 AICc worse than R's pick by R's own
+  accounting. The stepwise search now varies P and Q (alone and jointly,
+  Hyndman–Khandakar moves) and the exhaustive search iterates the full
+  P/Q grid: `auto_arima(AirPassengers, period=12)` now selects
+  `(2,1,1)(0,1,0)[12]` with AICc 1018.17 — identical to
+  `forecast::auto.arima`. On the non-seasonal AirPassengers benchmark the
+  search finds `(2,1,3)` (AICc 1350.2, confirmed by R's own `arima()`),
+  a better model under the shared criterion than the `(4,1,2)` R's greedy
+  no-drift search stops at (1374.4). Drift terms remain unsupported.
+  `best_seasonal` on the result now reports the seasonal order the search
+  actually selected, and seasonal `search_results` entries are
+  `((p,d,q), (P,D,Q,m))` pairs.
+- **Seasonal models with a persistent seasonal AR term reported
+  log-likelihoods ~80 units below R — fixed.** The Kalman filter's
+  stationary initial covariance was solved by an iteration whose budget a
+  moderately persistent seasonal AR term exceeded; the near-converged
+  solution was silently discarded for a diffuse initialization, shifting
+  the reported log-likelihood (and all information criteria) far from R's
+  on models such as `(1,1,1)(1,1,0)[12]` even though the fitted
+  coefficients were essentially correct. The initialization now uses a
+  doubling iteration that converges for any stationary model;
+  `(1,1,1)(1,1,0)[12]` on log(AirPassengers) and nottem now reproduces
+  R's log-likelihood to three decimals.
+- **Seasonal ARIMA forecasts ignored the seasonal coefficients — fixed.**
+  Point forecasts used only the non-seasonal AR/MA coefficients (airline-
+  model forecasts were up to ~5.4 off R's `predict()`), and forecast
+  standard errors ignored both the differencing operators (a random walk
+  reported the same standard error at every horizon instead of growing
+  with sqrt(h)) and end-of-sample state uncertainty. Forecasts now come
+  from the exact Kalman filtered state with the full multiplied-out
+  polynomials, and standard errors aggregate the exact forecast-error
+  covariance through the un-differencing — matching R's `predict.Arima`
+  to 0.002% on the reference battery. `sigma2` on ML-family fits now
+  reports the profile maximum-likelihood estimate (R's convention; the
+  previous residual-based value was 2.9% high on a near-unit-MA model).
+- **Maximum-likelihood fits now always report the invertible MA
+  representation.** The exact likelihood cannot distinguish an MA
+  polynomial from its reflection across the unit circle (with a
+  matching innovation-variance rescale), and the optimizer sometimes
+  returned the non-invertible mirror — same fit, but with `sigma2` up
+  to 53% below the one-step prediction-error variance (which is what
+  R reports and what prediction intervals need) and coefficients that
+  could not be compared with R or the literature. Fits are now
+  normalized to the invertible representative — the standard,
+  identified parameterization, and exactly what R's `arima` does
+  internally — per seasonal factor; genuine unit-root boundary fits
+  (e.g. from over-differencing) are left untouched, and the
+  likelihood, information criteria, and forecasts are unchanged.
+  CSS-only fits are not normalized (the CSS criterion is not
+  reflection-invariant; R skips them too).
+- **Residuals from maximum-likelihood fits are now the standardized
+  Kalman innovations,** matching R's `residuals()` for `arima`. These
+  have constant variance `sigma2` at every time point — the
+  homoscedastic white noise that Ljung-Box/ACF/normality diagnostics
+  assume — and satisfy `mean(residuals**2) == sigma2` exactly. The
+  previous CSS-based residuals differed from the true innovations by a
+  conditioning transient that matters precisely near an MA unit root
+  (a very common fit region after differencing) and diverged on
+  non-invertible fits. CSS-only fits keep CSS residuals, as in R.
+- **Point forecasts from twice-differenced models diverged — fixed.**
+  Undoing the differencing integrated in the wrong order, which was
+  invisible for `d + D <= 1` but produced wildly wrong point forecasts
+  for `d >= 2` or seasonal `D >= 2` (an ARIMA(1,2,1) 12-step forecast
+  was off by four orders of magnitude). Verified against R for d=2 and
+  seasonal D=2 models. A related bookkeeping bug that raised a spurious
+  convergence error when the CSS warm-start aborted but the maximum-
+  likelihood refinement converged is also fixed.
+- **`auto_arima` chooses the differencing order with the KPSS test,**
+  matching `forecast::auto.arima`'s default (it previously used the ADF
+  test, which disagrees with KPSS on some series and sent the search to
+  the wrong model class — on one benchmark the selected model was 41
+  AICc worse than R's by R's own accounting; both such benchmark series
+  now reproduce R's selection exactly).
+- **Seasonal coefficient standard errors were wrong — fixed.** The
+  variance-covariance matrix was computed over the expanded product
+  polynomial, so `summary()` printed seasonal standard errors from the
+  wrong entries (airline `sma1`: 0.38 printed vs R's 0.083). The Hessian
+  is now taken in the factored parameterization; standard errors match R
+  to four decimals on the reference models. `vcov` rows/columns now
+  correspond to the reported coefficients (ar, ma, sar, sma, mean).
+- **`auto_arima` applies R's near-unit-root candidate veto and follows
+  its exact stepwise walk.** Like `forecast::auto.arima`, candidates
+  whose fitted AR or MA polynomial has a root within 1.01 of the unit
+  circle are excluded from automatic selection (they win raw AICc by
+  degenerating toward the differencing operator but are numerically
+  unstable and forecast poorly), and the stepwise search now uses
+  forecast's move priority and first-improvement policy. Fits requested
+  explicitly via `arima()` are unaffected. Mean-carrying fits also gain a
+  second maximum-likelihood start (kept only when better), fixing a stall
+  where `(1,0,1)` on AirPassengers converged 1.8 log-likelihood units
+  short of R.
+- **`arima()` gains R's `init=` parameter** for user-supplied starting
+  values (warm starts for rolling re-estimation, basin control on hard
+  likelihoods). Semantics follow R: values in `coef()` order, `nan`
+  entries filled with defaults, non-stationary AR inits rejected, and
+  non-invertible MA inits normalized to the invertible representation
+  before optimization. Not available for `method='Whittle'`.
+- **Documentation now states R-interface coverage precisely.** The
+  `arima()` docstring previously claimed to match R's interface while
+  several R parameters were absent with no stated reason. It now
+  enumerates what is supported (`order`, `seasonal`, `include_mean`,
+  `method`, `init`), what is not yet implemented (`fixed`, `xreg` —
+  including drift terms), and what is deliberately not exposed with
+  the reason (R's optimizer and state-space internals; pystatistics
+  guarantees parity of results, not of internal knobs). The
+  documentation also discloses that `method='CSS'` uses a different
+  conditioning convention than R's CSS (results typically agree to
+  ~1e-3 but are not covered by the parity guarantee; CSS-ML and ML
+  results are).
+- **`adf_test` p-values were wrong in the fail-to-reject region — fixed.**
+  The p-value interpolated between the 1%/5%/10% critical values and
+  extrapolated beyond them: a near-unit-root series with statistic −1.14
+  (constant + trend) reported p ≈ 0.44 where the correct value is ≈ 0.92 —
+  understating the evidence *for* a unit root exactly where the test is
+  used to decide differencing. P-values now come from the MacKinnon (1994)
+  response surface (the same used by statsmodels' `adfuller` and, for its
+  critical values, R's `urca`), valid across the whole range with no 0.01
+  floor; they match statsmodels to machine precision across all regression
+  types. The test statistic was already exact and is unchanged. Reported
+  critical values now use MacKinnon's 2010 finite-sample surface.
+- **`adf_test` defaults to `regression="ct"` (constant + trend), matching
+  `tseries::adf.test`,** which always includes a trend. The previous default
+  `"c"` was documented as matching R — it does not. All three regression
+  variants (`"nc"`, `"c"`, `"ct"`) remain available. `ndiffs` is unaffected:
+  it pins the constant-only variant that `forecast::ndiffs` uses.
+- **`kpss_test` default bandwidth now matches `tseries::kpss.test`.** The
+  Bartlett-kernel lag truncation was `floor(3*sqrt(n)/13)`; tseries uses
+  `trunc(4*(n/100)^(1/4))`. A new `lshort` parameter mirrors tseries
+  (`lshort=False` gives the long rule `trunc(12*(n/100)^(1/4))`; an explicit
+  `n_lags` overrides both). At matched bandwidth the statistic and
+  interpolated p-value reproduce tseries exactly for both the level and
+  trend nulls; p-values remain clamped to the published table's
+  [0.01, 0.10] range, as in tseries. `ndiffs` keeps `forecast::ndiffs`'s
+  own bandwidth (`trunc(3*sqrt(n)/13)`) and its answers are unchanged —
+  verified against `forecast::ndiffs` on an 18-series battery.
+  `kpss_test` now raises on degenerate input (an exactly constant series,
+  or an exactly linear one with `regression="ct"`) instead of returning a
+  rounding-noise statistic.
+
 ## 4.6.3
 
 Damped-trend ETS fits no longer stall; ETS-vs-R verification strengthened.

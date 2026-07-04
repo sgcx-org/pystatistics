@@ -371,6 +371,43 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.4 — seasonal ARIMA criteria, likelihoods and forecasts fixed; ADF p-values corrected
+
+Seasonal ARIMA fits reported inflated AIC/AICc/BIC: the criteria counted
+the expanded multiplicative polynomial coefficients instead of the free
+estimated parameters (the airline model was penalised for 15 parameters
+instead of 3). The criteria now use the free-parameter count and match R's
+`stats::arima` exactly, with `aic == -2*log_likelihood + 2*n_params`
+holding on every result. Differenced models no longer estimate a mean
+(R ignores `include.mean` when `d + D > 0`). Models with a persistent
+seasonal AR term also reported log-likelihoods ~80 units below R's (a
+silently-degraded Kalman initialization) — fixed; such fits now reproduce
+R to three decimals. Seasonal forecasts previously dropped the seasonal
+coefficients and their standard errors ignored differencing; forecasts now
+come from the exact Kalman state and match R's `predict()` (means and
+standard errors) to well under a percent, seasonal coefficient standard
+errors match R to four decimals, and `sigma2` reports the profile ML
+estimate. ML fits are normalized to the invertible MA representation
+(the identified parameterization whose `sigma2` is the prediction-error
+variance), and their residuals are now the standardized Kalman
+innovations — constant variance, `mean(residuals**2) == sigma2` exactly,
+matching R's `residuals()`. `arima()` gains R's `init=` parameter
+(warm starts / user starting values, with R's fill and validation
+semantics), and its documentation now states precisely which R
+parameters are supported, which are not yet implemented (`fixed`,
+`xreg`/drift), and which are deliberately not exposed and why. `auto_arima` searches the seasonal orders (P, Q), chooses the
+differencing order with the KPSS test, applies the same near-unit-root
+candidate veto as `forecast::auto.arima`, and follows its stepwise
+walk — on AirPassengers it selects `(2,1,1)(0,1,0)[12]`,
+identical to R, where it previously returned a model 7.5 AICc worse by
+R's own accounting. `adf_test` p-values now come from the MacKinnon
+response surface and match statsmodels' `adfuller` to machine precision
+across the whole range — previously a near-unit-root series could report
+p ≈ 0.44 where the correct value is ≈ 0.92 — and the default regression is
+now `"ct"` (constant + trend), matching `tseries::adf.test`. `kpss_test`'s
+default bandwidth now matches `tseries::kpss.test` (with a new `lshort`
+parameter); at matched bandwidth it reproduces tseries exactly.
+
 ### 4.6.3 — damped-trend ETS fits no longer stall
 
 Damped-trend ETS models (`Ad`) could stop short of their optimum and report
