@@ -1,5 +1,5 @@
 """
-R-faithful univariate loess smoother for STL.
+R-faithful univariate loess smoother for STL (numba-compiled).
 
 Clean-room implementation of the local-regression smoother used inside
 R's ``stats::stl`` (the netlib STL routines described in Cleveland,
@@ -36,12 +36,11 @@ algorithm; the neighbourhood is defined on the integer design points
   only with external robustness weights), the estimate falls back to the
   observed value at that position.
 
-Everything is evaluated in batched matrix form — all evaluation points of
-a series (or of a whole group of equal-length cycle-subseries, see
-:func:`loess_subseries_smooth`) go through one vectorised computation —
-but each row's arithmetic is element-wise identical to the sequential
-formulation, so results match the reference bit-for-bit up to summation
-order.
+Each window is evaluated by a scalar loop (``_eval_window``) in the same
+left-to-right summation order as the reference algorithm, compiled with
+``numba`` at ``fastmath=False`` so IEEE semantics are preserved.  This
+tracks R's Fortran to floating-point noise (see ``test_stl_r_parity.py``)
+while running at native speed.
 
 Input contract (validated by the caller, per the STL public API):
 series are finite 1-D float64 arrays, ``span`` is an odd integer >= 3,
@@ -53,155 +52,194 @@ are internal building blocks and do not re-validate.
 from __future__ import annotations
 
 import numpy as np
+from numba import njit
 from numpy.typing import NDArray
 
 
-def _estimate_windows(
-    yw: NDArray,
-    n: int,
-    span: int,
-    degree: int,
-    xs: NDArray,
-    nleft: NDArray,
-    ww: NDArray | None,
-) -> tuple[NDArray, NDArray]:
+# ---------------------------------------------------------------------------
+# Numba kernels
+# ---------------------------------------------------------------------------
+
+@njit(cache=True, fastmath=False)
+def _eval_window(y, w, use_w, n, span, degree, xs, nleft, width, ws):
+    """Local-regression estimate at 1-based position ``xs``.
+
+    ``ws`` is a caller-provided scratch buffer of length >= ``width``.
+    Returns ``(value, ok)``; ``ok`` is False when the window carried no
+    weight (the caller supplies the fallback).
     """
-    Vectorised core: evaluate the local regression for a batch of windows.
-
-    Parameters
-    ----------
-    yw : NDArray
-        Window values, shape ``(m, width)``; row *i* holds the series
-        values at positions ``nleft[i] .. nleft[i] + width - 1``.
-    n : int
-        Length of the underlying series (drives the ``span > n``
-        bandwidth widening and the degree-1 spread threshold).
-    span : int
-        Requested loess span.
-    degree : int
-        Local polynomial degree, 0 or 1.
-    xs : NDArray
-        Evaluation positions (1-based, float; may lie outside the
-        window), shape ``(m,)``.
-    nleft : NDArray
-        Left window edges (1-based), shape ``(m,)``.
-    ww : NDArray or None
-        External weights aligned with *yw* (same shape), or None.
-
-    Returns
-    -------
-    values : NDArray
-        Estimates, shape ``(m,)``; rows with all-zero weight hold 0.0.
-    ok : NDArray
-        Boolean mask; False where the window carried no weight (the
-        caller decides the fallback).
-    """
-    width = yw.shape[1]
-    xs = xs.astype(np.float64)
-    # (m, width) matrix of 1-based design positions per row
-    pos = nleft[:, None] + np.arange(width, dtype=np.int64)[None, :]
-    pos_f = pos.astype(np.float64)
-
-    h = np.maximum(xs - nleft, (nleft + width - 1) - xs)
+    nright = nleft + width - 1
+    h = float(xs - nleft)
+    other = float(nright - xs)
+    if other > h:
+        h = other
     if span > n:
-        h = h + float((span - n) // 2)
+        h += float((span - n) // 2)
 
-    r = np.abs(pos_f - xs[:, None])
-    h_col = h[:, None]
-    w = np.zeros_like(r)
-    inside = r <= 0.999 * h_col
-    unit = r <= 0.001 * h_col
-    tri = inside & ~unit
-    # Tricube only where 0.001*h < r <= 0.999*h, so h > 0 there: no 0/0.
-    np.divide(r, h_col, out=r, where=tri)
-    w[tri] = (1.0 - r[tri] ** 3) ** 3
-    w[unit] = 1.0
-    if ww is not None:
-        w *= ww
+    tot = 0.0
+    lo = 0.001 * h
+    hi = 0.999 * h
+    for jj in range(width):
+        posj = nleft + jj
+        r = posj - xs
+        if r < 0.0:
+            r = -r
+        if r <= hi:
+            if r <= lo:
+                wj = 1.0
+            else:
+                rr = r / h
+                t = 1.0 - rr * rr * rr
+                wj = t * t * t
+        else:
+            wj = 0.0
+        if use_w:
+            wj *= w[nleft - 1 + jj]
+        ws[jj] = wj
+        tot += wj
 
-    total = w.sum(axis=1)
-    ok = total > 0.0
-    if ok.all():
-        w /= total[:, None]
-    else:
-        w[ok] /= total[ok, None]
+    ok = tot > 0.0
+    if ok:
+        for jj in range(width):
+            ws[jj] /= tot
 
-    if degree > 0:
-        adjustable = ok & (h > 0.0)
-        if np.any(adjustable):
-            centre = (w * pos_f).sum(axis=1)
-            dev = pos_f - centre[:, None]
-            spread = (w * dev**2).sum(axis=1)
-            # Linear adjustment only when the weighted design spread is
-            # non-degenerate relative to the full design range n - 1.
-            adjust = adjustable & (np.sqrt(spread) > 0.001 * (n - 1))
-            if adjust.all():
-                slope = (xs - centre) / spread
-                w *= slope[:, None] * dev + 1.0
-            elif np.any(adjust):
-                slope = (xs[adjust] - centre[adjust]) / spread[adjust]
-                w[adjust] *= slope[:, None] * dev[adjust] + 1.0
+    if degree > 0 and h > 0.0 and ok:
+        centre = 0.0
+        for jj in range(width):
+            centre += ws[jj] * (nleft + jj)
+        spread = 0.0
+        for jj in range(width):
+            d = (nleft + jj) - centre
+            spread += ws[jj] * d * d
+        # Linear adjustment only when the weighted design spread is
+        # non-degenerate relative to the full design range n - 1.
+        if np.sqrt(spread) > 0.001 * (n - 1):
+            slope = (xs - centre) / spread
+            for jj in range(width):
+                ws[jj] *= slope * ((nleft + jj) - centre) + 1.0
 
-    return (w * yw).sum(axis=1), ok
+    val = 0.0
+    for jj in range(width):
+        val += ws[jj] * y[nleft - 1 + jj]
+    return val, ok
 
 
-def _grid_geometry(
-    n: int, span: int, jump: int
-) -> tuple[NDArray, NDArray, int, int]:
-    """
-    Evaluation grid for a full-series smooth.
-
-    Returns ``(xs, nleft, width, nj)``: the 1-based evaluation positions
-    ``1, 1+nj, ...`` (plus a trailing ``n`` reusing the previous window
-    when the stride does not land on it), their left window edges, the
-    common window width, and the effective stride ``nj``.
-    """
-    nj = min(jump, n - 1)
-    xs = np.arange(1, n + 1, nj, dtype=np.int64)
+@njit(cache=True, fastmath=False)
+def _grid_width_nleft(n, span, jump):
+    """Window geometry: ``(nj, width, span_ge_n)`` for a length-*n* series."""
+    nj = jump
+    if nj > n - 1:
+        nj = n - 1
     if span >= n:
-        width = n
-        nleft = np.ones(len(xs), dtype=np.int64)
-    else:
-        width = span
-        half = (span + 1) // 2
-        nleft = np.clip(xs - half + 1, 1, n - span + 1).astype(np.int64)
-    if nj != 1 and xs[-1] != n:
-        # Trailing estimate at n reuses the last grid window (reference-
-        # implementation quirk; see module docstring).
-        xs = np.append(xs, n)
-        nleft = np.append(nleft, nleft[-1])
-    return xs, nleft, width, nj
+        return nj, n, True
+    return nj, span, False
 
 
-def _interpolate_rows(out: NDArray, grid: NDArray, nj: int, n: int) -> None:
+@njit(cache=True, fastmath=False)
+def _nleft_for(xs, span, n, span_ge_n):
+    """Left window edge (1-based) for evaluation position ``xs``."""
+    if span_ge_n:
+        return 1
+    half = (span + 1) // 2
+    v = xs - half + 1
+    if v < 1:
+        v = 1
+    hi = n - span + 1
+    if v > hi:
+        v = hi
+    return v
+
+
+@njit(cache=True, fastmath=False)
+def loess_smooth_nb(y, span, degree, jump, w, use_w):
+    """Smooth a whole series, evaluating every ``jump``-th point.
+
+    Evaluates the local regression at positions ``1, 1+jump, ...`` (plus
+    the trailing-endpoint rule) and linearly interpolates between them.
+    ``w`` is aligned with ``y``; ``use_w`` toggles external weighting.
     """
-    Fill non-evaluated positions by exact linear interpolation, in place.
+    n = y.shape[0]
+    out = np.empty(n, dtype=np.float64)
+    if n < 2:
+        for i in range(n):
+            out[i] = y[i]
+        return out
+    nj, width, span_ge_n = _grid_width_nleft(n, span, jump)
+    ws = np.empty(width, dtype=np.float64)
 
-    ``out`` is ``(g, n)`` with the evaluated positions already set;
-    ``grid`` is the regular evaluation grid ``1, 1+nj, ...`` (excluding
-    any trailing endpoint estimate at *n*, whose segment is handled by
-    the ``last != n`` branch).  Each filled element is computed as
-    ``v_left + delta * offset`` with ``delta = (v_right - v_left) /
-    stride`` — the same two floating-point operations per element as the
-    sequential formulation, so results are bit-identical.
-    """
-    if nj == 1:
-        return
-    lefts = grid[:-1]
-    if len(lefts):
-        v_left = out[:, lefts - 1]
-        delta = (out[:, lefts - 1 + nj] - v_left) / nj
-        for offset in range(1, nj):
-            out[:, lefts - 1 + offset] = v_left + delta * offset
-    last = int(grid[-1])
-    if last != n:
-        # Trailing segment between the last grid point and n.
-        gap = n - last
-        v_last = out[:, last - 1]
-        delta = (out[:, n - 1] - v_last) / gap
-        for offset in range(1, gap):
-            out[:, last - 1 + offset] = v_last + delta * offset
+    xs = 1
+    last = 1
+    while xs <= n:
+        nleft = _nleft_for(xs, span, n, span_ge_n)
+        val, ok = _eval_window(y, w, use_w, n, span, degree,
+                               float(xs), nleft, width, ws)
+        out[xs - 1] = val if ok else y[xs - 1]
+        last = xs
+        xs += nj
 
+    # Trailing endpoint at n reuses the last grid window.
+    if nj != 1 and last != n:
+        nleft = _nleft_for(last, span, n, span_ge_n)
+        val, ok = _eval_window(y, w, use_w, n, span, degree,
+                               float(n), nleft, width, ws)
+        out[n - 1] = val if ok else y[n - 1]
+
+    # Linear interpolation between grid points (v_left + delta*offset, the
+    # same two float ops per element as the sequential reference form).
+    if nj != 1:
+        g = 1
+        while g + nj <= n:
+            vl = out[g - 1]
+            delta = (out[g - 1 + nj] - vl) / nj
+            for off in range(1, nj):
+                out[g - 1 + off] = vl + delta * off
+            g += nj
+        if last != n:
+            gap = n - last
+            vl = out[last - 1]
+            delta = (out[n - 1] - vl) / gap
+            for off in range(1, gap):
+                out[last - 1 + off] = vl + delta * off
+    return out
+
+
+@njit(cache=True, fastmath=False)
+def loess_subseries_nb(sub_y, span, degree, jump, sub_w, use_w):
+    """Smooth ``g`` equal-length subseries; extend each to positions 0 and
+    ``k + 1``.  Returns ``(smoothed (g,k), head (g,), tail (g,))``."""
+    g, k = sub_y.shape
+    smoothed = np.empty((g, k), dtype=np.float64)
+    head = np.empty(g, dtype=np.float64)
+    tail = np.empty(g, dtype=np.float64)
+    _, width, _ = _grid_width_nleft(k, span, jump)
+    ws = np.empty(width, dtype=np.float64)
+    yrow = np.empty(k, dtype=np.float64)
+    wrow = np.empty(k, dtype=np.float64)
+
+    for row in range(g):
+        for j in range(k):
+            yrow[j] = sub_y[row, j]
+            if use_w:
+                wrow[j] = sub_w[row, j]
+        out = loess_smooth_nb(yrow, span, degree, jump, wrow, use_w)
+        for j in range(k):
+            smoothed[row, j] = out[j]
+        # Extension windows: [1, width] at position 0, and the mirror at k+1.
+        val, ok = _eval_window(yrow, wrow, use_w, k, span, degree,
+                               0.0, 1, width, ws)
+        head[row] = val if ok else out[0]
+        nleft_t = k - span + 1
+        if nleft_t < 1:
+            nleft_t = 1
+        val, ok = _eval_window(yrow, wrow, use_w, k, span, degree,
+                               float(k + 1), nleft_t, width, ws)
+        tail[row] = val if ok else out[k - 1]
+    return smoothed, head, tail
+
+
+# ---------------------------------------------------------------------------
+# Python wrappers (stable public surface over the numba kernels)
+# ---------------------------------------------------------------------------
 
 def loess_smooth(
     y: NDArray,
@@ -213,10 +251,8 @@ def loess_smooth(
     """
     Smooth a whole series, evaluating every *jump*-th point.
 
-    Estimates the local regression at positions ``1, 1+jump, ...`` and
-    linearly interpolates between them (plus the trailing-endpoint rule
-    described in the module docstring).  With ``jump=1`` every point is
-    evaluated directly and no interpolation occurs.
+    Thin wrapper over :func:`loess_smooth_nb`.  With ``jump=1`` every
+    point is evaluated directly and no interpolation occurs.
 
     Parameters
     ----------
@@ -236,24 +272,14 @@ def loess_smooth(
     NDArray
         Smoothed series, length *n*.
     """
-    n = len(y)
-    if n < 2:
-        return y.copy()
-
-    xs, nleft, width, nj = _grid_geometry(n, span, jump)
-    pos = nleft[:, None] + np.arange(width, dtype=np.int64)[None, :]
-    ww = weights[pos - 1] if weights is not None else None
-    values, ok = _estimate_windows(
-        y[pos - 1], n, span, degree, xs.astype(np.float64), nleft, ww
-    )
-    # Zero-weight windows fall back to the observed value.
-    values = np.where(ok, values, y[xs - 1])
-
-    out = np.empty((1, n), dtype=np.float64)
-    out[0, xs - 1] = values
-    grid = np.arange(1, n + 1, nj, dtype=np.int64)
-    _interpolate_rows(out, grid, nj, n)
-    return out[0]
+    y = np.ascontiguousarray(y, dtype=np.float64)
+    if weights is None:
+        w = np.empty(0, dtype=np.float64)
+        use_w = False
+    else:
+        w = np.ascontiguousarray(weights, dtype=np.float64)
+        use_w = True
+    return loess_smooth_nb(y, span, degree, jump, w, use_w)
 
 
 def loess_subseries_smooth(
@@ -267,20 +293,12 @@ def loess_subseries_smooth(
     Smooth a group of equal-length cycle-subseries and extend each by one
     position at both ends — STL's cycle-subseries kernel.
 
-    All subseries share the same evaluation geometry, so the whole group
-    (every grid point, the trailing endpoint when the stride skips it,
-    and the two extension estimates at positions ``0`` and ``k + 1``) is
-    evaluated in a single vectorised batch.  The extension windows are
-    ``[1, min(span, k)]`` and ``[max(1, k - span + 1), k]``; both have
-    width ``min(span, k)``, the same as every grid window, which is what
-    makes the single-batch formulation possible.
+    Thin wrapper over :func:`loess_subseries_nb`.
 
     Parameters
     ----------
     sub_y : NDArray
-        Subseries values, shape ``(g, k)`` with ``k >= 2`` — one row per
-        cycle position (guaranteed by STL's ``n > 2 * period`` input
-        contract).
+        Subseries values, shape ``(g, k)`` with ``k >= 2``.
     span, degree, jump : int
         Loess parameters (see :func:`loess_smooth`).
     sub_weights : NDArray or None
@@ -295,41 +313,11 @@ def loess_subseries_smooth(
     tail : NDArray
         Extension estimates at position ``k + 1``, shape ``(g,)``.
     """
-    g, k = sub_y.shape
-    xs, nleft, width, nj = _grid_geometry(k, span, jump)
-    n_grid = len(xs)
-    # Append the two extension rows; min(span, k) == width in both the
-    # span >= k and span < k regimes, so all rows share one width.
-    xs_all = np.concatenate([xs.astype(np.float64), [0.0, float(k + 1)]])
-    nleft_all = np.concatenate([nleft, [1, max(1, k - span + 1)]]).astype(np.int64)
-
-    pos = nleft_all[:, None] + np.arange(width, dtype=np.int64)[None, :]
-    # Row-major layout: for each subseries, all evaluation rows.
-    m = len(xs_all)
-    sub_idx = np.repeat(np.arange(g), m)
-    pos_tiled = np.tile(pos, (g, 1))
-    yw = sub_y[sub_idx[:, None], pos_tiled - 1]
-    ww = (sub_weights[sub_idx[:, None], pos_tiled - 1]
-          if sub_weights is not None else None)
-
-    values, ok = _estimate_windows(
-        yw, k, span, degree,
-        np.tile(xs_all, g), np.tile(nleft_all, g), ww,
-    )
-    values = values.reshape(g, m)
-    ok = ok.reshape(g, m)
-
-    grid_vals = values[:, :n_grid]
-    grid_ok = ok[:, :n_grid]
-    if not grid_ok.all():
-        fallback = sub_y[:, xs - 1]
-        grid_vals = np.where(grid_ok, grid_vals, fallback)
-
-    smoothed = np.empty((g, k), dtype=np.float64)
-    smoothed[:, xs - 1] = grid_vals
-    grid = np.arange(1, k + 1, nj, dtype=np.int64)
-    _interpolate_rows(smoothed, grid, nj, k)
-
-    head = np.where(ok[:, n_grid], values[:, n_grid], smoothed[:, 0])
-    tail = np.where(ok[:, n_grid + 1], values[:, n_grid + 1], smoothed[:, -1])
-    return smoothed, head, tail
+    sub_y = np.ascontiguousarray(sub_y, dtype=np.float64)
+    if sub_weights is None:
+        w = np.empty((1, 1), dtype=np.float64)
+        use_w = False
+    else:
+        w = np.ascontiguousarray(sub_weights, dtype=np.float64)
+        use_w = True
+    return loess_subseries_nb(sub_y, span, degree, jump, w, use_w)

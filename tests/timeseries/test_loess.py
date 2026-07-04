@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from pystatistics.timeseries._loess import (
-    _estimate_windows,
+    _eval_window,
     loess_smooth,
     loess_subseries_smooth,
 )
@@ -146,22 +146,22 @@ class TestSubseriesSmooth:
         assert abs(smoothed[0, 5]) < abs(smoothed[1, 5])
 
 
-class TestEstimateWindowsContract:
-    """Failure/degenerate cases of the vectorised core."""
+class TestEvalWindowContract:
+    """Failure/degenerate cases of the single-window kernel."""
 
     def test_zero_total_weight_flags_not_ok(self):
-        yw = np.array([[1.0, 2.0, 3.0]])
-        ww = np.zeros((1, 3))
-        values, ok = _estimate_windows(
-            yw, 3, 3, 0, np.array([2.0]), np.array([1], dtype=np.int64), ww)
-        assert not ok[0]
+        ws = np.empty(3)
+        value, ok = _eval_window(
+            np.array([1.0, 2.0, 3.0]), np.zeros(3), True, 3, 3, 0,
+            2.0, 1, 3, ws)
+        assert not ok
 
     def test_degenerate_spread_falls_back_to_weighted_mean(self):
         """When all weight sits on one point, degree 1 skips the slope."""
-        yw = np.array([[5.0, 9.0, 13.0]])
-        ww = np.array([[0.0, 1.0, 0.0]])
-        values, ok = _estimate_windows(
-            yw, 3, 3, 1, np.array([2.0]), np.array([1], dtype=np.int64), ww)
-        assert ok[0]
+        ws = np.empty(3)
+        value, ok = _eval_window(
+            np.array([5.0, 9.0, 13.0]), np.array([0.0, 1.0, 0.0]), True,
+            3, 3, 1, 2.0, 1, 3, ws)
+        assert ok
         # Weighted mean of the single carried point, no linear adjustment.
-        np.testing.assert_allclose(values[0], 9.0, atol=1e-12)
+        np.testing.assert_allclose(value, 9.0, atol=1e-12)

@@ -44,7 +44,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.result import Result
@@ -53,8 +53,7 @@ from pystatistics.timeseries._decomposition import (
     DecompositionSolution,
     _validate_series,
 )
-from pystatistics.timeseries._loess import loess_smooth, loess_subseries_smooth
-from pystatistics.timeseries._stl_robust import _robustness_weights
+from pystatistics.timeseries._stl_core import stl_core_nb
 
 
 # ---------------------------------------------------------------------------
@@ -65,117 +64,6 @@ def _next_odd(value: float) -> int:
     """Round to the nearest integer, then bump even values up by one."""
     v = int(round(value))
     return v + 1 if v % 2 == 0 else v
-
-
-def _moving_average(x: NDArray, width: int) -> NDArray:
-    """
-    Running mean of *width* consecutive values, length ``len(x)-width+1``.
-
-    Uses the same sequential running-sum update order as the reference
-    implementation — ``(v - x[out]) + x[in]``, then divide — so the
-    floating-point result matches R exactly.  (Vectorised cumulative sums
-    round differently; the sequential loop runs on plain Python floats,
-    which are the same IEEE doubles.)
-    """
-    n = len(x)
-    values = x.tolist()
-    out = [0.0] * (n - width + 1)
-    v = 0.0
-    for i in range(width):
-        v += values[i]
-    out[0] = v / width
-    for j in range(1, n - width + 1):
-        v = v - values[j - 1] + values[j + width - 1]
-        out[j] = v / width
-    return np.asarray(out, dtype=np.float64)
-
-
-def _low_pass(ext: NDArray, period: int) -> NDArray:
-    """
-    Moving-average cascade of the STL low-pass filter.
-
-    Two running means of length *period* followed by one of length 3;
-    input length ``n + 2*period`` reduces to ``n``.  (The trailing loess of
-    span ``lowpass_window`` is applied by the caller.)
-    """
-    stage = _moving_average(ext, period)
-    stage = _moving_average(stage, period)
-    return _moving_average(stage, 3)
-
-
-def _cycle_subseries(
-    detrended: NDArray,
-    period: int,
-    span: int,
-    degree: int,
-    jump: int,
-    rob_weights: NDArray | None,
-) -> NDArray:
-    """
-    Smooth every cycle-subseries and extend one period at each end.
-
-    Each of the *period* subseries (positions ``pos, pos+period, ...``) is
-    loess-smoothed at its own time scale, then extrapolated to positions
-    0 and ``k+1``, giving an interleaved result of length
-    ``n + 2*period``.  Subseries of equal length share their evaluation
-    geometry, so each length-group is smoothed in one vectorised batch
-    (at most two groups: when *period* does not divide *n*, the first
-    ``n % period`` subseries are one element longer).
-    """
-    n = len(detrended)
-    ext = np.empty(n + 2 * period, dtype=np.float64)
-    remainder = n % period
-    groups = [range(0, remainder), range(remainder, period)] if remainder \
-        else [range(period)]
-    for group in groups:
-        positions = list(group)
-        if not positions:
-            continue
-        sub_y = np.stack([detrended[pos::period] for pos in positions])
-        sub_w = (np.stack([rob_weights[pos::period] for pos in positions])
-                 if rob_weights is not None else None)
-        smoothed, head, tail = loess_subseries_smooth(
-            sub_y, span, degree, jump, sub_weights=sub_w
-        )
-        for row, pos in enumerate(positions):
-            ext[pos::period] = np.concatenate(
-                ([head[row]], smoothed[row], [tail[row]])
-            )
-    return ext
-
-
-def _inner_loop(
-    y: NDArray,
-    period: int,
-    trend: NDArray,
-    rob_weights: NDArray | None,
-    cfg: dict,
-) -> tuple[NDArray, NDArray]:
-    """
-    Run ``cfg['n_inner']`` passes of the STL inner loop.
-
-    Returns the updated ``(seasonal, trend)``.  ``rob_weights`` (from the
-    outer loop) weight the seasonal and trend loess but never the low-pass
-    loess, exactly as in the reference algorithm.
-    """
-    n = len(y)
-    seasonal = np.zeros(n, dtype=np.float64)
-    for _ in range(cfg["n_inner"]):
-        detrended = y - trend
-        ext = _cycle_subseries(
-            detrended, period, cfg["seasonal_window"], cfg["seasonal_degree"],
-            cfg["seasonal_jump"], rob_weights,
-        )
-        low = loess_smooth(
-            _low_pass(ext, period), cfg["lowpass_window"],
-            cfg["lowpass_degree"], cfg["lowpass_jump"], weights=None,
-        )
-        seasonal = ext[period: period + n] - low
-        trend = loess_smooth(
-            y - seasonal, cfg["trend_window"], cfg["trend_degree"],
-            cfg["trend_jump"], weights=rob_weights,
-        )
-    return seasonal, trend
 
 
 # ---------------------------------------------------------------------------
@@ -414,19 +302,13 @@ def stl(
         seasonal_jump, trend_jump, lowpass_jump, robust, n_inner, n_outer,
     )
 
-    trend = np.zeros(n, dtype=np.float64)
-    rob_weights: NDArray | None = None
-    for iteration in range(cfg["n_outer"] + 1):
-        seasonal, trend = _inner_loop(arr, period, trend, rob_weights, cfg)
-        if iteration == cfg["n_outer"]:
-            break
-        rob_weights = _robustness_weights(arr, trend + seasonal)
-    weights_out = rob_weights if rob_weights is not None \
-        else np.ones(n, dtype=np.float64)
-
-    if periodic:
-        for pos in range(period):
-            seasonal[pos::period] = np.mean(seasonal[pos::period])
+    seasonal, trend, weights_out = stl_core_nb(
+        np.ascontiguousarray(arr, dtype=np.float64), int(period),
+        cfg["seasonal_window"], cfg["seasonal_degree"], cfg["seasonal_jump"],
+        cfg["trend_window"], cfg["trend_degree"], cfg["trend_jump"],
+        cfg["lowpass_window"], cfg["lowpass_degree"], cfg["lowpass_jump"],
+        cfg["n_inner"], cfg["n_outer"], periodic,
+    )
     residual = arr - seasonal - trend
 
     info = {

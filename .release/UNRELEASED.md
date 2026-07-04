@@ -9,6 +9,38 @@
 
 ## Changes
 
+- **timeseries: `stl` CPU speed now matches or beats R `stats::stl` — the
+  loess/robustness core is compiled with numba (no algorithm or result
+  change).** The 4.6.x rewrite matched R numerically but was 3-15x slower
+  because the loess kernel, moving-average cascade, cycle-subseries
+  smoothing, and the netlib partial-sort robustness step were vectorised
+  Python/numpy called many times per decomposition. The entire STL inner +
+  outer loop is now a single `@njit(cache=True, fastmath=False)` driver
+  (`timeseries/_stl_core.py`), composing numba loess kernels
+  (`timeseries/_loess.py`) and robustness kernels
+  (`timeseries/_stl_robust.py`) — mirroring R's single Fortran routine.
+  Same-machine steady-state timings vs R 4.5.2 (best-of-5, ms/call):
+  co2 periodic 1.17→**0.094** (R 0.31); monthly sunspots n=2820 5.63→**0.48**
+  (R 1.32); AirPassengers 0.54→**0.041** (R 0.069); co2 periodic robust
+  11.6→**0.85** (R 0.90); AirPassengers robust 5.2→**0.29** (R 0.24). Non-robust
+  decompositions are now 1.7-3.3x faster than R; robust decompositions match
+  R (within tens of microseconds on the smallest series, where fixed
+  per-call overhead dominates). Numerical parity is unchanged — all 15
+  `stl_r_reference.json` cases pass the 1e-9 gate (worst 2.4e-11, including
+  the robustness weights). No packaging change: numba is already a required
+  dependency (the ARIMA Kalman filter). Cost: the kernels compile on first
+  use (~4 s one-time) and are then loaded from numba's on-disk cache
+  (~0.1 s per fresh process), the same trade-off the ARIMA path already
+  carries. The clean-room implementation (from the algorithm as documented,
+  not R's GPL Fortran) is preserved.
+- **timeseries: STL internals refactored for the numba core (no public API
+  change).** `timeseries/_loess.py` and `_stl_robust.py` now hold numba
+  kernels behind unchanged Python wrappers (`loess_smooth`,
+  `loess_subseries_smooth`, `_psort_pair`, `_robustness_weights`); the new
+  `timeseries/_stl_core.py` holds the fused driver; the Python
+  `_moving_average`/`_low_pass`/`_cycle_subseries`/`_inner_loop` helpers in
+  `_stl.py` are removed (folded into the driver). `stl()`'s signature,
+  defaults, `info` payload, and results are unchanged.
 - **timeseries: ETS engine parameter space aligned with R `forecast::ets`
   defaults (behaviour change — fitted results, `n_params`, and AIC/AICc/BIC
   values change for most models).** Three alignments in
