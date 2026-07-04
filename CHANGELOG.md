@@ -2,8 +2,9 @@
 
 ## 4.6.2
 
-STL decomposition rewritten to match R exactly; ETS gains automatic model
-selection; `ndiffs` default aligned with R.
+STL decomposition rewritten to match R exactly and now as fast as R's
+compiled implementation; ETS gains automatic model selection and R-matched
+parameter estimation; `ndiffs` default aligned with R.
 
 - **`stl()` returned a materially wrong decomposition on trending series —
   fixed by a full rewrite.** On strongly trending data (e.g. the monthly CO2
@@ -29,10 +30,14 @@ selection; `ndiffs` default aligned with R.
   passes); the series must be longer than `2 * period` (R's rule); and window
   spans must be odd integers >= 3 — even spans raise a `ValidationError`
   where R silently rounds them up. The result's `info` now reports the
-  resolved windows/degrees/jumps and the final robustness weights. Note:
-  `stl()` currently runs slower than R's compiled implementation (roughly
-  3-15x depending on the call, milliseconds in absolute terms); a native
-  kernel is planned.
+  resolved windows/degrees/jumps and the final robustness weights.
+- **`stl()` now matches R's speed.** The smoother is compiled with `numba`,
+  so it is as fast as R's Fortran `stats::stl` — non-robust decompositions
+  run faster than R and robust decompositions match it (previously it was
+  3-15x slower). Results are unchanged (still within 1e-10 of R). The
+  compiled kernel builds on first use in a session (a few seconds, once) and
+  is cached on disk for subsequent runs, the same one-time cost the ARIMA
+  routines already carry.
 - **`ets()` now performs automatic model selection, matching
   `forecast::ets`.** The model string accepts a `"Z"` wildcard per component
   and defaults to `model="ZZZ"` (select everything), as in R. Candidates
@@ -45,16 +50,31 @@ selection; `ndiffs` default aligned with R.
   reasons are disclosed in `solution.info["selection"]`. Explicit requests
   that cannot be honoured (e.g. `model="MZZ"` on data with zeros or
   negatives, a seasonal letter with `period=1`) raise instead of being
-  silently adjusted. The selected model can differ from `forecast::ets` when
-  candidates are nearly tied, because the optimiser searches a slightly
-  wider parameter space than R's defaults and can find better fits for
-  trended candidates; the disclosed candidate table makes any selection
-  auditable. A fully specified model string (no `"Z"`) is always fitted
-  exactly as written. Note two consequences of the new default: automatic
-  AICc selection needs at least 5 observations (shorter series raise with a
-  suggested remedy — pick a concrete model or `ic="aic"`), and `period` must
-  now be a true integer (float periods raise a clear error instead of
-  crashing).
+  silently adjusted. A fully specified model string (no `"Z"`) is always
+  fitted exactly as written. Note two consequences of the new default:
+  automatic AICc selection needs at least 5 observations (shorter series
+  raise with a suggested remedy — pick a concrete model or `ic="aic"`), and
+  `period` must now be a true integer (float periods raise a clear error
+  instead of crashing).
+- **ETS parameter estimation aligned with `forecast::ets` (changes fitted
+  results).** The optimiser now searches R's parameter region exactly — the
+  smoothing parameters obey `beta <= alpha` and `gamma <= 1 - alpha`, the
+  damping `phi` is bounded to `[0.8, 0.98]`, and a seasonal model estimates
+  one fewer initial state (the last is fixed by the seasonal normalisation,
+  as in R). As a result the reported parameter count `k` for seasonal models
+  now matches R's, so AIC/AICc/BIC values line up with `forecast::ets`, and
+  fitted parameters/log-likelihoods for a given model can differ slightly
+  from earlier versions. Smoothing parameters fixed outside R's region now
+  raise a clear error instead of being quietly clamped. On automatic
+  selection the chosen model still occasionally differs from `forecast::ets`
+  on near-tied candidate tables, but now only because the two optimisers land
+  on different optima — in every such case the model this package selects
+  scores at least as well under R's own criterion; the disclosed candidate
+  table makes any selection auditable.
+- **`ets()` no longer emits a spurious `RuntimeWarning` about overflow.** A
+  benign internal overflow warning could surface during fitting on some
+  series; the computation was always correct, and the warning is now gone.
+  Fitted results are unchanged.
 - **`ndiffs()` now defaults to the KPSS test, matching `forecast::ndiffs`.**
   KPSS and ADF have opposite null hypotheses and can recommend a different
   number of differences on borderline series; pass `test="adf"` for the
