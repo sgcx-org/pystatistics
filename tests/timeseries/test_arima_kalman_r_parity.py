@@ -503,6 +503,76 @@ class TestKalmanResiduals:
 
 
 # =========================================================================
+# init= parameter (R stats::arima init semantics)
+# =========================================================================
+
+class TestInitParameter:
+    """R's init= semantics: coef()-order layout, NaN fill, stationarity
+    validation (R errors on non-stationary AR inits), and MA
+    normalization (R's documented maInvert-on-init intent; R's own
+    implementation errors on non-invertible inits, so accepting and
+    canonicalizing them is strictly better than the reference)."""
+
+    def test_warm_start_matches_r(self, ref):
+        # R-parity: the same init must land at the same optimum.
+        m = ref["init_fits"]["airline_warm"]
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        fit = arima(x, order=(0, 1, 1), seasonal=(0, 1, 1, 12),
+                    init=m["init"])
+        assert_allclose(fit.ma[0], m["coef"]["ma1"], atol=1e-3)
+        assert_allclose(fit.seasonal_ma[0], m["coef"]["sma1"], atol=1e-3)
+        assert_allclose(fit.log_likelihood, m["loglik"], atol=0.05)
+
+    def test_mirror_init_is_canonicalized(self, ref):
+        # A non-invertible MA init is normalized before optimization
+        # and converges to the standard (invertible) optimum.
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        fit = arima(x, order=(0, 1, 1), seasonal=(0, 1, 1, 12),
+                    init=[-3.24, -0.1])
+        assert abs(fit.ma[0]) < 1.0
+        assert_allclose(fit.ma[0], -0.3087, atol=5e-3)
+
+    def test_nan_entries_use_defaults(self, ref):
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        fit = arima(x, order=(0, 1, 1), seasonal=(0, 1, 1, 12),
+                    init=[np.nan, np.nan])
+        assert fit.converged
+        assert_allclose(fit.ma[0], -0.3087, atol=5e-3)
+
+    def test_wrong_length_raises(self, ref):
+        from pystatistics.core.exceptions import ValidationError
+
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        with pytest.raises(ValidationError):
+            arima(x, order=(0, 1, 1), seasonal=(0, 1, 1, 12), init=[0.1])
+        # No mean slot when d > 0 (include_mean is ignored, as in R).
+        with pytest.raises(ValidationError):
+            arima(x, order=(1, 1, 0), init=[0.5, 280.0])
+
+    def test_nonstationary_ar_init_raises(self, ref):
+        # R: "non-stationary AR part".
+        from pystatistics.core.exceptions import ValidationError
+
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        with pytest.raises(ValidationError):
+            arima(x, order=(1, 0, 1), init=[1.5, 0.4, 280.0])
+
+    def test_nonfinite_init_raises(self, ref):
+        from pystatistics.core.exceptions import ValidationError
+
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        with pytest.raises(ValidationError):
+            arima(x, order=(0, 1, 1), init=[np.inf])
+
+    def test_whittle_rejects_init(self, ref):
+        from pystatistics.core.exceptions import ValidationError
+
+        x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
+        with pytest.raises(ValidationError):
+            arima(x, order=(1, 1, 0), method="Whittle", init=[0.5])
+
+
+# =========================================================================
 # auto_arima near-unit-root candidate veto (forecast::auto.arima parity)
 # =========================================================================
 

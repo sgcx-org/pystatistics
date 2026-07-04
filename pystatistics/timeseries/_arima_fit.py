@@ -28,6 +28,7 @@ from pystatistics.core.result import Result
 from pystatistics.core.validation import check_array, check_1d, check_finite
 from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
 from pystatistics.timeseries._differencing import diff
+from pystatistics.timeseries._arima_init import prepare_init
 from pystatistics.timeseries._arima_factored import (
     _factored_to_effective,
     _multiply_ma_polynomials,
@@ -408,6 +409,7 @@ def arima(
     seasonal: tuple[int, int, int, int] | None = None,
     include_mean: bool = True,
     method: str = "CSS-ML",
+    init: ArrayLike | None = None,
     tol: float = 1e-8,
     max_iter: int = 1000,
     backend: str | None = None,
@@ -415,7 +417,12 @@ def arima(
     """
     Fit an ARIMA(p, d, q) or seasonal ARIMA(p, d, q)(P, D, Q)[m] model.
 
-    Matches the interface and numerical approach of R's ``stats::arima()``.
+    Matches the numerical behaviour of R's ``stats::arima()`` — exact
+    maximum likelihood via the same Kalman-filter approach, with
+    results (log-likelihood, coefficients, information criteria,
+    forecasts, standard errors) verified against R — and supports a
+    documented subset of its interface (see *R interface coverage*
+    below).
 
     For non-seasonal ARIMA(p, d, q):
         1. Difference the series *d* times.
@@ -452,6 +459,18 @@ def arima(
         (``d + D > 0``), matching R ``stats::arima``'s ``include.mean``.
     method : str
         ``'CSS'``, ``'ML'``, or ``'CSS-ML'``. Default ``'CSS-ML'``.
+    init : ArrayLike or None
+        Initial parameter values for the optimizer, in R ``coef()``
+        order: ``[ar_1..ar_p, ma_1..ma_q, sar_1..sar_P, sma_1..sma_Q,
+        mean?]`` (the mean slot exists only when a mean is estimated,
+        i.e. ``include_mean=True`` and ``d + D == 0``). ``numpy.nan``
+        entries use the defaults (zero for coefficients, the sample
+        mean of the differenced series for the mean). AR parts must be
+        stationary (as in R); non-invertible MA parts are normalized
+        to the invertible representative before optimization (R's
+        documented ``maInvert`` intent — R's own implementation errors
+        on such inits). Not supported with ``method='Whittle'``.
+        Default ``None`` (internal starting values).
     tol : float
         Convergence tolerance for the optimizer. Default ``1e-8``.
     max_iter : int
@@ -468,6 +487,32 @@ def arima(
         If inputs are invalid.
     ConvergenceError
         If the optimizer fails to converge.
+
+    Notes
+    -----
+    **R interface coverage.** Supported R parameters: ``order``,
+    ``seasonal``, ``include.mean`` (``include_mean``), ``method``
+    ('CSS-ML'/'ML'/'CSS'), and ``init``. Not yet implemented:
+    ``fixed`` (parameter masking) and ``xreg`` — including drift
+    terms, so models R reports "with drift" cannot be requested.
+    Not exposed, by design: ``transform.pars``, ``SSinit``, ``kappa``,
+    ``n.cond``, and ``optim.method``/``optim.control`` are knobs over
+    R's optimizer and state-space internals; pystatistics guarantees
+    parity of RESULTS, not of internal knobs — AR stationarity and MA
+    invertibility are handled internally (the latter with R's own
+    ``maInvert`` convention), the stationary state initialization is
+    solved exactly, and the ML stage uses a better-of-two-starts
+    strategy verified to reach equal-or-better optima than R on every
+    reference model.
+
+    **CSS convention.** ``method='CSS'`` uses a zero-initialized
+    conditional recursion over ALL observations, whereas R conditions
+    on (and excludes) the first ``n.cond``. Pure-CSS estimates can
+    therefore differ slightly from R's (coefficients typically ~1e-3,
+    sigma2 ~1% on reference fits; weakly identified fits may reach
+    different local optima) and are NOT covered by the parity
+    guarantee. ``'CSS-ML'`` and ``'ML'`` results are — CSS supplies
+    starting values only.
     """
     arr = _validate_arima_inputs(y, order, seasonal, include_mean, method)
     n_obs = len(arr)
@@ -510,6 +555,11 @@ def arima(
                 "method='Whittle' supports non-seasonal ARMA(p, d, q) "
                 "only. For seasonal models use method='CSS-ML' (default)."
             )
+        if init is not None:
+            raise ValidationError(
+                "init: not supported with method='Whittle' (the "
+                "frequency-domain path has its own starting values)"
+            )
         from pystatistics.timeseries._whittle import fit_arima_whittle
         return fit_arima_whittle(
             y_diff=y_diff, n_obs=n_obs, order=order,
@@ -538,7 +588,17 @@ def arima(
     y_demean = y_diff - np.mean(y_diff) if include_mean else y_diff.copy()
     mean_start = np.mean(y_diff) if include_mean else None
 
-    if seasonal_fit:
+    if init is not None:
+        # User-supplied start (R's init= semantics; see _arima_init).
+        # The factored layout equals the effective layout when there is
+        # no seasonal AR/MA part, so this serves both optimizer paths.
+        # Note the length check uses the EFFECTIVE include_mean: for
+        # d + D > 0 no mean is estimated, so init carries no mean slot.
+        start_params = prepare_init(
+            init, p, q, sp, sq, include_mean,
+            mean_start if mean_start is not None else 0.0,
+        )
+    elif seasonal_fit:
         # Factored starts. Zero starts are safe but for airline-type
         # models the likelihood has multiple nearby stationary points;
         # plain zero can land in an inferior local minimum 4+ log-lik

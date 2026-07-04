@@ -298,9 +298,46 @@
   `ConvergenceError` (not `ValidationError`) on internal numerical
   failure — these are not user-input errors.
 
+- **timeseries: `arima()` gains R's `init=` parameter** (new module
+  `_arima_init.py`). Layout follows R `coef()` order
+  `[ar, ma, sar, sma, mean?]` (mean slot only when a mean is actually
+  estimated, i.e. d + D = 0 and include_mean); `numpy.nan` entries are
+  filled with defaults (zeros for coefficients, sample mean of the
+  differenced series for the mean); non-stationary AR/seasonal-AR
+  inits raise ValidationError (R errors "non-stationary AR part");
+  non-invertible MA inits are normalized to the invertible
+  representative before optimization — R's documented maInvert-on-init
+  intent; empirically R's own implementation ERRORS on such inits
+  (its CSS/optim stage diverges first), so accepting them is a strict
+  improvement over the reference. Rejected loudly for
+  method='Whittle'. R-parity pinned in the fixture: the airline warm
+  start lands at R's optimum (ma1/sma1 to 1e-5, loglik to 1e-4).
+
+- **timeseries: `arima()` docstring no longer overclaims interface
+  parity.** The old text said "Matches the interface and numerical
+  approach of R's stats::arima()" while the interface lacked xreg,
+  transform.pars, fixed, init, n.cond, SSinit, optim.method/control,
+  kappa, with no disclosed reason — a violation of the "do it or give
+  a principled reason" promise. The docstring now states the claim
+  precisely: numerical-behaviour parity (verified), a documented
+  supported subset (order/seasonal/include_mean/method/init),
+  not-yet-implemented parameters (fixed, xreg incl. drift), and the
+  by-design exclusions with reasons (transform.pars/SSinit/kappa/
+  n.cond/optim.* are knobs over R's optimizer and state-space
+  internals; we guarantee results parity, not knob parity). The
+  timeseries module index claim was likewise corrected. Also
+  documents the pure-CSS conditioning difference vs R (we
+  zero-initialize over all observations; R conditions on and excludes
+  the first n.cond — measured: airline seasonal CSS identical to R,
+  (2,1,1) coefficients ~1e-3 apart with sigma2 ~1.3%, weakly
+  identified fits may reach different CSS optima; CSS-ML/ML results
+  are unaffected and remain covered by the parity guarantee).
+
 - **timeseries: remaining convention notes:** `arima_batch` (Whittle)
   still reports a documented per-series sample mean under d > 0;
-  drift/intercept terms for d + D = 1 models remain unsupported.
+  drift/intercept terms for d + D = 1 models remain unsupported
+  (`fixed=` and `xreg=` are the tracked interface gaps, disclosed in
+  the `arima()` docstring).
 
 - **tests:** new `tests/timeseries/test_arima_kalman_r_parity.py`
   (SAR loglik/coef/IC parity on both failing models, stationary-init

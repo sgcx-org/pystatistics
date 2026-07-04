@@ -86,10 +86,26 @@ fits <- list(
   co2_101m = fit_ref(co2, c(1, 0, 1), NULL, "co2_101m")
 )
 
+# init= parity. Note R's OWN init handling errors on non-invertible MA
+# inits (the CSS/optim stage diverges before maInvert applies) and on
+# non-stationary AR inits ('non-stationary AR part from CSS'); those
+# are unit-tested directly. The R-parity case pinned here is the
+# warm start near the optimum, which must land at the standard fit.
+init_fits <- list(
+  airline_warm = local({
+    f <- arima(AirPassengers, c(0, 1, 1),
+               seasonal = list(order = c(0, 1, 1), period = 12),
+               init = c(-0.3, -0.1), method = "CSS-ML")
+    list(label = "airline_warm", init = c(-0.3, -0.1),
+         coef = as.list(coef(f)), loglik = f$loglik, sigma2 = f$sigma2)
+  })
+)
+
 out <- list(
   r_version = as.character(getRversion()),
   series = series,
-  fits = fits
+  fits = fits,
+  init_fits = init_fits
 )
 
 writeLines(

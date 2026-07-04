@@ -20,7 +20,7 @@ Public API:
                       a constant in n; model rankings/selection are identical.
                       See timeseries._ets_fit and ._ets_select docstrings.)
     forecast_ets(f) - Forecast from a fitted ETS model
-    arima(y)        - Fit an ARIMA model (matches R stats::arima)
+    arima(y)        - Fit an ARIMA model (R stats::arima numerics; interface subset documented on arima())
     forecast_arima(f, y) - Forecast from a fitted ARIMA model
     auto_arima(y)   - Automatic ARIMA order selection (matches R forecast::auto.arima)
     decompose(x)    - Classical time series decomposition (matches R stats::decompose)
