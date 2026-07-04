@@ -23,6 +23,7 @@ from pystatistics.core.exceptions import ValidationError
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.optimize import minimize
 from scipy.signal import lfilter
 
 
@@ -215,6 +216,24 @@ def arima_negloglik(
     if method == "ML":
         return exact_loglik(params, y, order, include_mean)
     raise ValidationError(f"method must be 'CSS' or 'ML', got '{method}'")
+
+
+def minimize_quiet(*args, **kwargs):
+    """``scipy.optimize.minimize`` with numpy invalid/overflow FP warnings
+    silenced for the duration of the call.
+
+    L-BFGS-B estimates gradients by finite differences.  When its line
+    search probes non-stationary / non-invertible parameters, the exact-ML
+    objective returns a non-finite value (``inf``) and scipy's ``numdiff``
+    subtracts ``inf - inf``, so numpy emits a benign
+    ``RuntimeWarning: invalid value encountered in subtract``.  The
+    non-finite return is *intentional* — it steers the optimizer out of the
+    infeasible region and the convergence guards in the ARIMA fitters rely
+    on seeing it — so the objective is left untouched and only the cosmetic
+    numpy warning is suppressed here.  No numerical result changes.
+    """
+    with np.errstate(invalid="ignore", over="ignore"):
+        return minimize(*args, **kwargs)
 
 
 def arima_gradient(

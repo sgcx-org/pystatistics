@@ -21,7 +21,6 @@ import warnings
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.result import Result
@@ -41,6 +40,7 @@ from pystatistics.timeseries._arima_likelihood import (
     arima_negloglik,
     check_invertible,
     check_stationary,
+    minimize_quiet,
 )
 
 
@@ -288,7 +288,7 @@ def _optimize_arima(
         return opt_params, nll_ml, True, 0, method_used
 
     if method == "CSS" or method == "CSS-ML":
-        result_css = minimize(
+        result_css = minimize_quiet(
             arima_negloglik,
             start_params,
             args=(y_diff, order_pq, include_mean, "CSS"),
@@ -309,7 +309,7 @@ def _optimize_arima(
             # to mask missing/invalid state.
             css_params = opt_params.copy()
             try:
-                result_ml = minimize(
+                result_ml = minimize_quiet(
                     arima_negloglik,
                     css_params,
                     args=(y_diff, order_pq, include_mean, "ML"),
@@ -364,7 +364,7 @@ def _optimize_arima(
             # follow-up).
             if include_mean:
                 try:
-                    result_ml2 = minimize(
+                    result_ml2 = minimize_quiet(
                         arima_negloglik,
                         start_params,
                         args=(y_diff, order_pq, include_mean, "ML"),
@@ -382,7 +382,7 @@ def _optimize_arima(
 
     else:
         # Pure ML
-        result_ml = minimize(
+        result_ml = minimize_quiet(
             arima_negloglik,
             start_params,
             args=(y_diff, order_pq, include_mean, "ML"),

@@ -9,6 +9,22 @@
 
 ## Changes
 
+- **timeseries: silenced a benign numpy `RuntimeWarning` during ARIMA
+  optimization (no result change).** L-BFGS-B's finite-difference gradient
+  probes non-stationary/non-invertible parameters during its line search,
+  where the exact-ML objective intentionally returns a non-finite value to
+  steer the optimizer back; scipy's `numdiff` then computes `inf - inf` and
+  numpy prints `invalid value encountered in subtract`. Wrapped the ARIMA
+  optimizer's `minimize()` calls (`_optimize_arima` and
+  `optimize_arima_factored`) in `np.errstate(invalid="ignore",
+  over="ignore")` via a shared `minimize_quiet` helper in
+  `_arima_likelihood.py`. The objective and every fail-loud convergence
+  guard are untouched (they rely on the non-finite return), so no fitted
+  result changes — verified: airline `(0,1,1)(0,1,1)[12]` loglik 244.6965
+  and `(2,1,1)` −685.169 identical to before, full timeseries suite 540
+  passed, and the two seasonal `auto_arima` tests pass with `RuntimeWarning`
+  promoted to error.
+
 - **timeseries: seasonal ARIMA information criteria counted the wrong
   parameters (RIGOR R18 showstopper).** `arima(..., seasonal=...)` in
   `_arima_fit.py` computed `aic`/`aicc`/`bic` with `k = len(opt_params) + 1`,

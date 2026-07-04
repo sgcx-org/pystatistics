@@ -170,6 +170,11 @@ aligned with R's `tseries`.
   `kpss_test` now raises on degenerate input (an exactly constant series,
   or an exactly linear one with `regression="ct"`) instead of returning a
   rounding-noise statistic.
+- **A spurious `RuntimeWarning: invalid value encountered in subtract` no
+  longer prints during `arima()` / `auto_arima()` fitting.** It came from
+  the optimizer's internal finite-difference gradient probing infeasible
+  (non-stationary / non-invertible) parameters; it never affected results.
+  Fitted coefficients, likelihoods, and model selections are unchanged.
 
 ## 4.6.3
 

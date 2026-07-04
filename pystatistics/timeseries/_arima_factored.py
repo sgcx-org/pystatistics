@@ -34,10 +34,12 @@ import warnings
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError
-from pystatistics.timeseries._arima_likelihood import arima_negloglik
+from pystatistics.timeseries._arima_likelihood import (
+    arima_negloglik,
+    minimize_quiet,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +395,7 @@ def optimize_arima_factored(
     opts = {"maxiter": max_iter, "ftol": tol}
 
     if method in ("CSS", "CSS-ML"):
-        result_css = minimize(
+        result_css = minimize_quiet(
             arima_negloglik_factored,
             start_factored,
             args=ll_args + ("CSS", multiply_ar_polynomials, multiply_ma_polynomials),
@@ -409,7 +411,7 @@ def optimize_arima_factored(
         if method == "CSS-ML":
             css_factored = opt_factored.copy()
             try:
-                result_ml = minimize(
+                result_ml = minimize_quiet(
                     arima_negloglik_factored,
                     css_factored,
                     args=ll_args + ("ML", multiply_ar_polynomials, multiply_ma_polynomials),
@@ -443,7 +445,7 @@ def optimize_arima_factored(
             # mean-carrying fits (d = D = 0) are exposed.
             if include_mean:
                 try:
-                    result_ml2 = minimize(
+                    result_ml2 = minimize_quiet(
                         arima_negloglik_factored,
                         start_factored,
                         args=ll_args + ("ML", multiply_ar_polynomials,
@@ -470,7 +472,7 @@ def optimize_arima_factored(
         return opt_factored, nll, converged, n_iter, method_used
 
     # method == "ML"
-    result_ml = minimize(
+    result_ml = minimize_quiet(
         arima_negloglik_factored,
         start_factored,
         args=ll_args + ("ML", multiply_ar_polynomials, multiply_ma_polynomials),
