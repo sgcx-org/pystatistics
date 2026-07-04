@@ -9,4 +9,14 @@
 
 ## Changes
 
-*(empty — no unreleased changes yet)*
+- **timeseries: benign `RuntimeWarning: overflow encountered in exp` from the
+  ETS optimiser silenced (no numeric change).** `_inv_logit` in
+  `timeseries/_ets_fit.py` computed `np.exp(-z)` on unclipped logit-scale
+  parameters, so L-BFGS-B line-search probes at large negative `z` overflowed
+  to `inf` — mathematically the sigmoid correctly saturates to the lower
+  bound, but the warning fired on every affected fit. The logit argument is
+  now clipped to [-500, 500] before exponentiation; beyond that range the
+  sigmoid is saturated far below one ulp, so all fitted results are
+  bit-identical (verified: identical alpha/log-likelihood/fitted-value sums
+  on all 10 `ets_r_reference.json` selection cases pre/post change, and the
+  full timeseries suite fits with `RuntimeWarning` promoted to error).

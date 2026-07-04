@@ -306,7 +306,14 @@ def _logit(x: float, lo: float, hi: float) -> float:
 
 
 def _inv_logit(z: float, lo: float, hi: float) -> float:
-    """Map (-inf, inf) -> (lo, hi)."""
+    """Map (-inf, inf) -> (lo, hi).
+
+    ``z`` is clipped to [-500, 500] before exponentiation: beyond that the
+    sigmoid is saturated to lo/hi far below one ulp (exp(500) ~ 1.4e217),
+    so results are bit-identical while ``np.exp`` can no longer overflow
+    (L-BFGS-B probes such z during line searches).
+    """
+    z = min(max(z, -500.0), 500.0)
     return lo + (hi - lo) / (1.0 + np.exp(-z))
 
 
