@@ -89,3 +89,66 @@ def jackknife_influence(
     L = (n - 1) * (mean_jack - jack_stats)
 
     return L
+
+
+def regression_influence(
+    boot_out: 'BootstrapSolution',
+    stat_index: int = 0,
+) -> NDArray | None:
+    """Regression estimate of the empirical influence values (R empinf type="reg").
+
+    This is the estimate R's ``boot.ci`` uses BY DEFAULT for the BCa acceleration.
+    It regresses the bootstrap replicates on the resample relative frequencies:
+
+        L = pinv(P_c) @ (t - mean(t)),   P = freq/n,  P_c = P - colmean(P)
+
+    (then centred to sum zero), where ``freq`` is the R×n matrix of how many times
+    each observation appeared in each replicate. The frequencies are regenerated
+    deterministically from the stored seed rather than stored (matching R's own
+    regenerate-from-seed approach), so there is no memory cost unless BCa is
+    requested.
+
+    Returns ``None`` (caller falls back to the jackknife) when the estimate does
+    not apply — a non-ordinary simulation, stratified resampling, no seed, or a
+    regeneration that fails to reproduce the stored replicates (a self-check that
+    prevents a silently-wrong influence if the resampling RNG path ever drifts).
+    """
+    design = boot_out._design
+    if design.sim != "ordinary" or design.strata is not None:
+        return None
+    if design.seed is None:
+        return None
+
+    data = boot_out.data
+    statistic = design.statistic
+    stype = design.stype
+    t = boot_out.t[:, stat_index]
+    n = data.shape[0]
+    R = t.shape[0]
+
+    rng = np.random.default_rng(design.seed)
+    freq = np.empty((R, n), dtype=np.float64)
+    first_idx = None
+    for b in range(R):
+        idx = rng.choice(n, size=n, replace=True)
+        if b == 0:
+            first_idx = idx
+        freq[b] = np.bincount(idx, minlength=n)
+
+    # Self-check: the regenerated replicate 0 must reproduce the stored t[0].
+    # If it does not, the stored replicates did not come from this seed/path
+    # (e.g. an injected/GPU solution) — fail safe to the jackknife.
+    if stype == "i":
+        chk = np.atleast_1d(np.asarray(statistic(data, first_idx)))[stat_index]
+    elif stype == "f":
+        chk = np.atleast_1d(np.asarray(statistic(data, freq[0])))[stat_index]
+    else:  # "w"
+        chk = np.atleast_1d(np.asarray(
+            statistic(data, freq[0] / n)))[stat_index]
+    if not np.isfinite(chk) or abs(chk - t[0]) > 1e-9 * (abs(t[0]) + 1e-12):
+        return None
+
+    P = freq / n
+    Pc = P - P.mean(axis=0)
+    L = np.linalg.pinv(Pc) @ (t - t.mean())
+    return L - L.mean()

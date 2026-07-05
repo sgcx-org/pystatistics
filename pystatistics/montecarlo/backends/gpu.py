@@ -20,11 +20,12 @@ from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.compute.backend import NO_GPU_MSG
 
 import numpy as np
-from numpy.typing import NDArray
 
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
-from pystatistics.montecarlo._common import BootParams, PermutationParams
+from pystatistics.montecarlo._common import (
+    BootParams, PermutationParams, perm_pvalue,
+)
 from pystatistics.montecarlo.design import BootstrapDesign, PermutationDesign
 
 
@@ -264,16 +265,7 @@ class GPUPermutationBackend:
                 batch_start += batch
 
         with timer.section('p_value'):
-            if alternative == "two-sided":
-                count = int(np.sum(np.abs(perm_stats) >= np.abs(observed)))
-            elif alternative == "greater":
-                count = int(np.sum(perm_stats >= observed))
-            elif alternative == "less":
-                count = int(np.sum(perm_stats <= observed))
-            else:
-                raise ValidationError(f"Unknown alternative: {alternative!r}")
-
-            p_value = float(count + 1) / float(R + 1)
+            p_value = perm_pvalue(perm_stats, observed, alternative, R)
 
         timer.stop()
 

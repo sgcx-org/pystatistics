@@ -23,6 +23,43 @@ if TYPE_CHECKING:
     from pystatistics.montecarlo.solution import BootstrapSolution
 
 
+def _norm_inter(t: NDArray, alpha: NDArray | float) -> NDArray:
+    """Interpolated order-statistic quantiles on the normal scale.
+
+    Reproduces R's ``boot:::norm.inter`` — the quantile rule ``boot.ci`` uses for
+    the basic, percentile, studentized and BCa endpoints (NOT numpy's type-7).
+    The order-statistic index is ``(R+1)*alpha``; between order statistics the
+    interpolation is done on the normal-quantile scale rather than linearly:
+
+        out = t_(k) + (Phi^{-1}(alpha) - Phi^{-1}(k/(R+1)))
+                    / (Phi^{-1}((k+1)/(R+1)) - Phi^{-1}(k/(R+1)))
+                    * (t_(k+1) - t_(k))
+
+    with ``k = floor((R+1)*alpha)``; exact hits return the order statistic, and
+    ``k`` at the boundaries returns the min/max. Matches R to machine precision.
+    """
+    ts = np.sort(t[np.isfinite(t)])
+    R = len(ts)
+    a = np.atleast_1d(np.asarray(alpha, dtype=np.float64))
+    out = np.empty_like(a)
+    rk = (R + 1) * a
+    k = np.floor(rk).astype(int)
+    for i in range(len(a)):
+        ki, ri = k[i], rk[i]
+        if ki <= 0:
+            out[i] = ts[0]
+        elif ki >= R:
+            out[i] = ts[-1]
+        elif ki == ri:
+            out[i] = ts[ki - 1]
+        else:
+            z_a = sp_stats.norm.ppf(a[i])
+            z_k = sp_stats.norm.ppf(ki / (R + 1))
+            z_k1 = sp_stats.norm.ppf((ki + 1) / (R + 1))
+            out[i] = ts[ki - 1] + (z_a - z_k) / (z_k1 - z_k) * (ts[ki] - ts[ki - 1])
+    return out
+
+
 def compute_ci(
     boot_out: 'BootstrapSolution',
     types: list[str],
@@ -121,8 +158,7 @@ def _ci_basic(t0: NDArray, t: NDArray, alpha: float) -> NDArray:
     ci = np.empty((k, 2), dtype=np.float64)
 
     for j in range(k):
-        q_lo = np.quantile(t[:, j], alpha / 2.0)
-        q_hi = np.quantile(t[:, j], 1.0 - alpha / 2.0)
+        q_lo, q_hi = _norm_inter(t[:, j], [alpha / 2.0, 1.0 - alpha / 2.0])
         ci[j, 0] = 2.0 * t0[j] - q_hi
         ci[j, 1] = 2.0 * t0[j] - q_lo
 
@@ -139,8 +175,9 @@ def _ci_percentile(t: NDArray, alpha: float) -> NDArray:
     ci = np.empty((k, 2), dtype=np.float64)
 
     for j in range(k):
-        ci[j, 0] = np.quantile(t[:, j], alpha / 2.0)
-        ci[j, 1] = np.quantile(t[:, j], 1.0 - alpha / 2.0)
+        lo, hi = _norm_inter(t[:, j], [alpha / 2.0, 1.0 - alpha / 2.0])
+        ci[j, 0] = lo
+        ci[j, 1] = hi
 
     return ci
 
@@ -157,7 +194,9 @@ def _ci_bca(boot_out: 'BootstrapSolution', alpha: float) -> NDArray:
     3. Adjusted quantile levels
     4. CI from adjusted percentiles
     """
-    from pystatistics.montecarlo._influence import jackknife_influence
+    from pystatistics.montecarlo._influence import (
+        jackknife_influence, regression_influence,
+    )
 
     t0 = boot_out.t0
     t = boot_out.t
@@ -175,8 +214,15 @@ def _ci_bca(boot_out: 'BootstrapSolution', alpha: float) -> NDArray:
         prop_below = np.clip(prop_below, 1.0 / (2.0 * R), 1.0 - 1.0 / (2.0 * R))
         z0 = sp_stats.norm.ppf(prop_below)
 
-        # Acceleration parameter from jackknife
-        L = jackknife_influence(boot_out, j)
+        # Acceleration parameter. Match R's boot.ci default: the REGRESSION
+        # estimate of the empirical influence values (empinf type="reg"), which
+        # is available for the ordinary bootstrap (the resample frequencies are
+        # regenerated from the seed). For sims where that estimate does not
+        # apply (balanced/parametric/stratified), fall back to Efron's delete-1
+        # jackknife influence.
+        L = regression_influence(boot_out, j)
+        if L is None:
+            L = jackknife_influence(boot_out, j)
         L_sq_sum = np.sum(L ** 2)
         if L_sq_sum > 0:
             a = np.sum(L ** 3) / (6.0 * L_sq_sum ** 1.5)
@@ -202,8 +248,9 @@ def _ci_bca(boot_out: 'BootstrapSolution', alpha: float) -> NDArray:
         alpha1 = np.clip(alpha1, 0.5 / R, 1.0 - 0.5 / R)
         alpha2 = np.clip(alpha2, 0.5 / R, 1.0 - 0.5 / R)
 
-        ci[j, 0] = np.quantile(t_j, alpha1)
-        ci[j, 1] = np.quantile(t_j, alpha2)
+        lo, hi = _norm_inter(t_j, [alpha1, alpha2])
+        ci[j, 0] = lo
+        ci[j, 1] = hi
 
     return ci
 
@@ -244,8 +291,7 @@ def _ci_studentized(
         ci[:, :] = np.nan
         return ci
 
-    q_lo = np.quantile(z_star, alpha / 2.0)
-    q_hi = np.quantile(z_star, 1.0 - alpha / 2.0)
+    q_lo, q_hi = _norm_inter(z_star, [alpha / 2.0, 1.0 - alpha / 2.0])
 
     if var_t0 is not None:
         se_hat = np.sqrt(var_t0)
