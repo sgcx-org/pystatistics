@@ -29,8 +29,6 @@ against exact time-domain ML. GPU FP32 matches CPU Whittle at the
 
 from __future__ import annotations
 
-from pystatistics.core.exceptions import ValidationError
-
 import math
 from typing import Any
 
@@ -38,6 +36,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.compute.torch_interop import to_host_f64
+from pystatistics.core.exceptions import ValidationError
 
 
 class BatchedWhittleGPU:

@@ -73,3 +73,12 @@
   regression tests in `tests/timeseries/test_whittle_gpu_rfft.py`
   (warning-free construction + periodogram parity); re-verified on Forge
   CUDA since the change touches the CUDA path too.
+
+- **timeseries: lint cleanup, no behavior change**
+  (`pystatistics/timeseries/_arima_batch.py`,
+  `pystatistics/timeseries/backends/whittle_batch_gpu.py`). Cleared the
+  pre-existing ruff findings in the files touched this cycle: import
+  blocks sorted, unused `typing.Any` and in-branch `import torch`
+  removed, two if/else assignments folded to ternaries (SIM108). All
+  transformations are semantics-preserving; affected suites re-run green.
+  Not user-facing — no CHANGELOG entry.

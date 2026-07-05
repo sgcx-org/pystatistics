@@ -20,19 +20,21 @@ come back NaN with a loud warning.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from pystatistics.core.compute.backend import (
+    FP64_REQUIRES_CUDA_MSG,
+    resolve_backend,
+    unknown_backend_message,
+    valid_backends,
+)
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.result import Result, SolutionReprMixin
-from pystatistics.core.compute.backend import (
-    resolve_backend, valid_backends, unknown_backend_message,
-    FP64_REQUIRES_CUDA_MSG,
-)
 from pystatistics.timeseries._arima_batch_contract import (
-    enforce_batch_failure_contract, nonstationary_rows,
+    enforce_batch_failure_contract,
+    nonstationary_rows,
 )
 
 
@@ -334,7 +336,6 @@ def arima_batch(
         and isinstance(Y, _sys.modules["torch"].Tensor)
     )
     if is_tensor:
-        import torch
         if Y.ndim != 2:
             raise ValidationError(f"Y: expected 2-D, got {Y.ndim}-D")
         if backend in (None, "auto"):
@@ -367,10 +368,10 @@ def arima_batch(
 
     # Per-series differencing. Done on CPU numpy for clarity — it's
     # one vectorised np.diff-equivalent per d-step, negligible cost.
-    if is_tensor:
-        Y_np = Y_host.detach().cpu().numpy().astype(np.float64)
-    else:
-        Y_np = Y_host
+    Y_np = (
+        Y_host.detach().cpu().numpy().astype(np.float64)
+        if is_tensor else Y_host
+    )
     Y_diff = _difference_batch(Y_np, d)
     K, n_used = Y_diff.shape
     if K < 1 or n_used < 2 * (p + q + 1) + 4:
@@ -386,10 +387,7 @@ def arima_batch(
     run_gpu = backend != "cpu"
     device_type = gpu_device_type
 
-    if include_mean:
-        mu_batch = Y_diff.mean(axis=1)
-    else:
-        mu_batch = None
+    mu_batch = Y_diff.mean(axis=1) if include_mean else None
 
     if run_gpu:
         from pystatistics.timeseries.backends.whittle_batch_gpu import (
