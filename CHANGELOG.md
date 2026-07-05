@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.6.8
+
+Bootstrap confidence intervals now match R's `boot::boot.ci` numerically, and the
+two-sided permutation p-value is now correct for statistics that aren't a simple
+difference.
+
+- **`boot_ci` intervals match R `boot.ci`.** The basic, percentile, studentized
+  and BCa intervals now use the same order-statistic interpolation rule as R's
+  `boot.ci` (interpolation on the normal scale), so the basic and percentile
+  intervals agree with R to machine precision on the same replicates. BCa now
+  uses the same acceleration estimate R uses by default (the regression estimate
+  of the empirical influence values), bringing BCa endpoints to close agreement
+  with `boot.ci` as well. Interval coverage is unchanged — only the endpoints
+  shift slightly, toward R's values.
+- **Two-sided permutation p-value corrected for non-difference statistics.**
+  `permutation_test(..., alternative="two-sided")` previously assumed the test
+  statistic was centred at zero under the null (true for a difference in means,
+  but not for, say, a ratio of means). It now uses the standard tail-doubling
+  rule, which is correct for any statistic: it returns the same value as before
+  for a difference statistic and a correct value for statistics that are not
+  centred at zero. One-sided p-values are unchanged.
+
 ## 4.6.7
 
 Running a bootstrap or permutation test on the GPU now requires you to declare

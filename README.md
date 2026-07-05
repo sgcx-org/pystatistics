@@ -371,6 +371,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.8 — bootstrap intervals match R, two-sided permutation fix
+
+`boot_ci`'s basic, percentile, studentized and BCa intervals now use R's
+`boot::boot.ci` quantile rule and BCa acceleration estimate, so they agree with R
+numerically (basic and percentile to machine precision on the same replicates);
+interval coverage is unchanged. `permutation_test`'s two-sided p-value now uses
+the standard tail-doubling rule, correcting the result for statistics that aren't
+centred at zero under the null (such as a ratio of means) while leaving a
+difference-in-means test unchanged.
+
 ### 4.6.7 — explicit, fail-loud GPU bootstrap and permutation tests
 
 Running `boot()` or `permutation_test()` on the GPU now requires you to declare
