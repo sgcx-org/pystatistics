@@ -1,5 +1,42 @@
 # Changelog
 
+## 4.6.5
+
+`arima_batch` now handles failed series identically on every backend:
+failed fits can never be mistaken for good ones, and one bad series no
+longer discards a whole batch.
+
+- **`arima_batch` per-series failure handling unified across backends.**
+  When the Whittle optimum of a series is non-stationary (typical on
+  near-unit-root data fitted without differencing), the two backends
+  previously disagreed: `backend='cpu'` raised on the first failing series
+  — discarding every good fit in the batch (on a K=64 near-unit-root
+  benchmark, 17 perfectly good fits were thrown away) — while
+  `backend='gpu'`/`'gpu_fp64'` returned the non-stationary AR estimates as
+  plain numbers with only a per-series `converged=False` flag (e.g. AR
+  coefficients of 1.01–1.08 where the true value is ≈0.97). Both backends
+  now implement one contract: a series whose backend cannot certify a valid
+  stationary fit has its `ar`/`ma`/`sigma2`/`mean` entries set to NaN and
+  its `converged` flag forced False, a `UserWarning` naming the count is
+  emitted (and recorded in the solution's `.warnings`), and the rest of the
+  batch remains fully usable. Failed series are identified with
+  `np.isnan(result.sigma2)`. If *every* series fails, the call raises
+  `ConvergenceError`, matching the single-series `arima(method='Whittle')`
+  behavior on the same input. On the GPU backends, validity is certified by
+  a float64 AR-root check on the host, independent of the GPU's precision
+  and of the torch build. Batches with no failing series return exactly
+  what they did in 4.6.4 (verified bit-identical on CUDA for `gpu` and
+  `gpu_fp64`), with no warning. `summary()` now reports a
+  `Failed: x/K (estimates NaN)` line and computes its aggregates ignoring
+  failed series. Single-series `arima()` behavior is unchanged.
+- **No more PyTorch deprecation warning from Whittle GPU fits on Apple
+  Silicon.** On MPS with torch 2.12, `arima(..., backend='gpu')` and
+  `arima_batch(..., backend='gpu')` printed a torch-internal deprecation
+  warning ("An output with one or more elements was resized…") on every
+  fit. The rFFT call now pre-allocates its output, avoiding the deprecated
+  torch code path — which was slated to stop working in a future PyTorch
+  release — with bit-identical results.
+
 ## 4.6.4
 
 Seasonal ARIMA information criteria, likelihoods, forecasts, and standard

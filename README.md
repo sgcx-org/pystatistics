@@ -371,6 +371,21 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.5 — `arima_batch` failure handling unified across backends
+
+A series whose Whittle optimum is non-stationary now behaves the same on
+every backend: its `ar`/`ma`/`sigma2`/`mean` entries come back NaN with
+`converged=False` and a warning naming the count, while the rest of the
+batch stays fully usable (`np.isnan(result.sigma2)` identifies the failed
+series; if every series fails, the call raises `ConvergenceError`).
+Previously the CPU backend raised on the first failing series — discarding
+every good fit in the batch — while the GPU backends returned non-stationary
+AR estimates as plain numbers. GPU results are certified by a float64
+stationarity check on the host, so a failed fit can never be mistaken for a
+good one. Batches with no failing series are unchanged from 4.6.4. Whittle
+GPU fits on Apple Silicon also no longer print a PyTorch deprecation
+warning (torch 2.12).
+
 ### 4.6.4 — seasonal ARIMA criteria, likelihoods and forecasts fixed; ADF p-values corrected
 
 Seasonal ARIMA fits reported inflated AIC/AICc/BIC: the criteria counted
