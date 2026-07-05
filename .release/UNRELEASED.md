@@ -57,3 +57,19 @@
   unit tests + CPU/GPU integration + CPU-vs-GPU semantic-parity tests);
   full timeseries suite green (559 passed) on CPU+MPS; contract confirmed
   on Forge CUDA (gpu and gpu_fp64).
+
+- **timeseries: Whittle GPU backends no longer trigger torch's MPS rfft
+  deprecation warning** (`pystatistics/timeseries/backends/whittle_gpu.py`,
+  `pystatistics/timeseries/backends/whittle_batch_gpu.py`). On Apple
+  Silicon with torch 2.12, every `torch.fft.rfft` call routes through an
+  internal empty-tensor resize that emits "An output with one or more
+  elements was resized…" (deprecated behavior slated to stop working in a
+  future torch release; fires on ANY MPS rfft call, reproduced minimally —
+  not specific to our shapes). Both backends now pass a pre-sized `out=`
+  tensor (complex64/complex128 per precision), which avoids the deprecated
+  internal path entirely rather than suppressing the warning. Values are
+  bit-identical to the plain call (verified `torch.equal` on MPS);
+  periodogram matches the numpy float64 reference at the fp32 floor. New
+  regression tests in `tests/timeseries/test_whittle_gpu_rfft.py`
+  (warning-free construction + periodogram parity); re-verified on Forge
+  CUDA since the change touches the CUDA path too.

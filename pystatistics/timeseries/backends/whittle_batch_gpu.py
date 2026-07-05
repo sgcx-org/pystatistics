@@ -96,8 +96,15 @@ class BatchedWhittleGPU:
         Y_centered = Y_gpu - self._mu_batch.unsqueeze(1)
 
         # One batched rFFT → (K, n//2+1) complex. Periodogram magnitude,
-        # drop DC and Nyquist bins.
-        fft_y = torch.fft.rfft(Y_centered, dim=1)
+        # drop DC and Nyquist bins. The pre-sized ``out=`` matters:
+        # without it, torch's MPS backend routes through an internal
+        # empty-tensor resize that emits a deprecation warning as of
+        # torch 2.12 and is slated to stop working.
+        cdtype = torch.complex128 if use_fp64 else torch.complex64
+        fft_y = torch.empty(
+            (K, n // 2 + 1), device=self._device, dtype=cdtype,
+        )
+        torch.fft.rfft(Y_centered, dim=1, out=fft_y)
         spec = (fft_y.real * fft_y.real + fft_y.imag * fft_y.imag) / n
         m = (n - 1) // 2
         self._periodogram = spec[:, 1 : 1 + m]     # (K, m)
