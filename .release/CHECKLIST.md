@@ -51,7 +51,11 @@
 
 8. **Publish to PyPI via GitHub release:**
    ```
-   gh release create vX.Y.Z --title 'vX.Y.Z' --notes-file CHANGELOG.md
+   # Notes = this version's CHANGELOG section only. Do NOT pass the whole
+   # CHANGELOG.md — it exceeds GitHub's 125k release-body limit (bit on
+   # 4.6.5) and buries the release under old entries.
+   awk '/^## X\.Y\.Z$/{f=1} /^## <previous version>$/{f=0} f' CHANGELOG.md > /tmp/notes.md
+   gh release create vX.Y.Z --title 'vX.Y.Z' --notes-file /tmp/notes.md
    ```
    This triggers `publish.yml` → PyPI.
 

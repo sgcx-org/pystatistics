@@ -253,7 +253,9 @@ def cmd_bump(new_version: str) -> None:
     print("  8. python .release/release.py --reset-unreleased")
     print("     git add .release/UNRELEASED.md && git commit -m 'Reset UNRELEASED.md'")
     print("     git push")
-    print(f"  9. gh release create v{new_version} --title 'v{new_version}' --notes-file CHANGELOG.md")
+    print(f"  9. gh release create v{new_version} --title 'v{new_version}' --notes-file <notes>")
+    print(f"     (<notes> = the {new_version} section of CHANGELOG.md only — the whole")
+    print("     file exceeds GitHub's 125k release-body limit; see CHECKLIST.md step 8)")
     print(f" 10. Verify: pip install {package}=={new_version}")
 
 
