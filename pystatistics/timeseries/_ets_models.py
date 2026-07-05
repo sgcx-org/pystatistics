@@ -23,6 +23,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.timeseries._ets_kernels import ets_recursion_nb
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,53 @@ def unpack_params(
 # ---------------------------------------------------------------------------
 # Core recursion
 # ---------------------------------------------------------------------------
+#
+# ``ets_recursion`` is the public entry point.  It does the cheap Python-side
+# unpack (params, initial states, model-type flags) once, then hands the hot
+# sequential loop to the numba kernel ``ets_recursion_nb`` (see
+# ``_ets_kernels.py``).  ``_ets_recursion_reference`` below is the pure-numpy
+# implementation kept verbatim as the blessed 4.6.5 reference/fallback; the
+# kernel reproduces it BIT-FOR-BIT under ``fastmath=False`` (enforced by
+# ``tests/timeseries/test_ets_kernel_parity.py``).
+
+
+def _unpack_recursion_inputs(
+    spec: ETSSpec,
+    params: NDArray,
+    init_states: NDArray,
+) -> tuple:
+    """Unpack the (params, init_states, spec) into the flat scalars/flags the
+    numba kernel takes.  Shared decode so the JIT wrapper and reference agree
+    on exactly how the parameter/state vectors are interpreted."""
+    alpha, beta, gamma, phi = unpack_params(params, spec)
+    m = spec.period
+    has_trend = spec.trend in ("A", "Ad")
+    has_season = spec.season in ("A", "M")
+
+    idx = 0
+    l0 = float(init_states[idx])
+    idx += 1
+    b0 = 0.0
+    if has_trend:
+        b0 = float(init_states[idx])
+        idx += 1
+    s0 = np.zeros(m, dtype=np.float64)
+    if has_season:
+        s0[:] = init_states[idx : idx + m]
+
+    phi_val = phi if phi is not None else 1.0
+    season_code = 0 if spec.season == "N" else (1 if spec.season == "A" else 2)
+    mult_error = spec.error == "M"
+    # beta/gamma are unused in the branches that don't apply; pass 0.0 so the
+    # kernel signature stays fully typed.
+    beta_f = beta if beta is not None else 0.0
+    gamma_f = gamma if gamma is not None else 0.0
+
+    return (
+        alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
+        season_code, m, l0, b0, s0,
+    )
+
 
 def ets_recursion(
     y: NDArray,
@@ -234,8 +282,52 @@ def ets_recursion(
     """
     Run the ETS state space recursion forward through the data.
 
+    Thin wrapper over the numba kernel ``ets_recursion_nb``: unpacks the
+    parameter/state vectors (Python, once) and runs the compiled sequential
+    loop.  Output is bit-identical to :func:`_ets_recursion_reference` in
+    fp64.  Signature and behaviour are unchanged from 4.6.5.
+
+    Parameters
+    ----------
+    y : NDArray
+        Observed time series of length *n*.
+    spec : ETSSpec
+        Model specification.
+    params : NDArray
+        Smoothing parameters ``[alpha, beta?, gamma?, phi?]``.
+    init_states : NDArray
+        Initial state vector ``[l_0, b_0?, s_{1-m}, ..., s_0?]``.
+
+    Returns
+    -------
+    fitted, residuals, states
+        See :func:`_ets_recursion_reference` for the full contract.
+    """
+    y_arr = np.ascontiguousarray(y, dtype=np.float64)
+    (
+        alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
+        season_code, m, l0, b0, s0,
+    ) = _unpack_recursion_inputs(spec, params, init_states)
+
+    return ets_recursion_nb(
+        y_arr, alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
+        season_code, m, l0, b0, s0,
+    )
+
+
+def _ets_recursion_reference(
+    y: NDArray,
+    spec: ETSSpec,
+    params: NDArray,
+    init_states: NDArray,
+) -> tuple[NDArray, NDArray, NDArray]:
+    """
+    Pure-numpy ETS state space recursion (blessed 4.6.5 reference).
+
     Given smoothing parameters and initial states, produce fitted values,
-    residuals, and the full state history.
+    residuals, and the full state history.  Retained verbatim as the
+    reference/fallback path; :func:`ets_recursion` (the numba kernel) must
+    reproduce this bit-for-bit.
 
     Parameters
     ----------

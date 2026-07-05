@@ -1,5 +1,24 @@
 # Changelog
 
+## 4.6.6
+
+ETS model fitting is substantially faster on longer series, with identical
+results.
+
+- **Faster `ets()` fitting, unchanged estimates.** The exponential-smoothing
+  state-space recursion at the core of `ets()` — evaluated repeatedly by the
+  maximum-likelihood optimiser — is now compiled, the same approach already
+  used for the ARIMA Kalman filter and STL. Its cost per observation is now
+  flat rather than growing with series length, so fitting no longer slows
+  disproportionately on long series: end-to-end fit time for a Holt (`AAN`)
+  model falls roughly 5× at 200 observations, 18× at 1,000 and 46× at 5,000,
+  bringing `ets()` on par with or faster than R's `forecast::ets`. Fitted
+  parameters, log-likelihood, states, information criteria (AIC/AICc/BIC) and
+  automatic model selection (`model="ZZZ"`) are unchanged — the compiled
+  recursion reproduces the previous one to full floating-point precision.
+  The compiled kernel is cached to disk, so its one-time compilation cost is
+  paid only on the first fit after installation.
+
 ## 4.6.5
 
 `arima_batch` now handles failed series identically on every backend:

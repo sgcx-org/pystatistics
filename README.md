@@ -371,6 +371,18 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.6 — faster ETS fitting on longer series
+
+`ets()` now fits substantially faster, especially on long series, with
+identical results. The core exponential-smoothing recursion is compiled
+(the same approach already used for the ARIMA Kalman filter and STL), so its
+per-observation cost is flat instead of growing with series length. Fitting a
+Holt (`AAN`) model is roughly 5× faster at 200 observations, 18× at 1,000 and
+46× at 5,000 — on par with or faster than R's `forecast::ets`. Fitted
+parameters, log-likelihood, states, information criteria and automatic model
+selection (`model="ZZZ"`) are unchanged. The compiled kernel is cached, so its
+one-time compilation cost is paid only on the first fit after installation.
+
 ### 4.6.5 — `arima_batch` failure handling unified across backends
 
 A series whose Whittle optimum is non-stationary now behaves the same on
