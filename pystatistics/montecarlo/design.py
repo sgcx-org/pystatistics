@@ -33,6 +33,11 @@ class BootstrapDesign:
         ran_gen: For parametric bootstrap: fn(data, mle) -> simulated data.
         mle: Parameter estimates passed to ran_gen for parametric bootstrap.
         seed: Random seed for reproducibility.
+        gpu_statistic: Explicit declaration that ``statistic`` is a GPU-supported
+            closed form. Only ``"mean"`` is currently supported. ``None`` (the
+            default) means the statistic is an arbitrary Python callable that can
+            only run on CPU. The GPU backend never *infers* the statistic form —
+            the caller must declare it (fail-loud opt-in).
     """
     data: NDArray[np.floating[Any]]
     statistic: Callable
@@ -43,6 +48,7 @@ class BootstrapDesign:
     ran_gen: Callable | None
     mle: Any
     seed: int | None
+    gpu_statistic: str | None = None
 
     @classmethod
     def for_bootstrap(
@@ -57,6 +63,7 @@ class BootstrapDesign:
         ran_gen: Callable | None = None,
         mle=None,
         seed: int | None = None,
+        gpu_statistic: str | None = None,
     ) -> BootstrapDesign:
         """
         Create a bootstrap design with validation.
@@ -106,6 +113,11 @@ class BootstrapDesign:
                 f"stype must be 'i', 'f', or 'w', got {stype!r}"
             )
 
+        if gpu_statistic is not None and gpu_statistic != "mean":
+            raise ValidationError(
+                f"gpu_statistic must be 'mean' or None, got {gpu_statistic!r}"
+            )
+
         if sim == "parametric" and ran_gen is None:
             raise ValidationError(
                 "ran_gen is required for parametric bootstrap "
@@ -131,6 +143,7 @@ class BootstrapDesign:
             ran_gen=ran_gen,
             mle=mle,
             seed=seed,
+            gpu_statistic=gpu_statistic,
         )
 
 
@@ -146,6 +159,10 @@ class PermutationDesign:
         R: Number of permutations.
         alternative: "two-sided", "less", or "greater".
         seed: Random seed for reproducibility.
+        gpu_statistic: Explicit declaration that ``statistic`` is a GPU-supported
+            closed form. Only ``"mean_diff"`` (mean(x) - mean(y)) is currently
+            supported. ``None`` means an arbitrary CPU-only Python callable. The
+            GPU backend never infers the statistic form — it must be declared.
     """
     x: NDArray[np.floating[Any]]
     y: NDArray[np.floating[Any]]
@@ -153,6 +170,7 @@ class PermutationDesign:
     R: int
     alternative: str
     seed: int | None
+    gpu_statistic: str | None = None
 
     @classmethod
     def for_permutation_test(
@@ -164,6 +182,7 @@ class PermutationDesign:
         *,
         alternative: str = "two-sided",
         seed: int | None = None,
+        gpu_statistic: str | None = None,
     ) -> PermutationDesign:
         """
         Create a permutation test design with validation.
@@ -197,6 +216,11 @@ class PermutationDesign:
                 f"got {alternative!r}"
             )
 
+        if gpu_statistic is not None and gpu_statistic != "mean_diff":
+            raise ValidationError(
+                f"gpu_statistic must be 'mean_diff' or None, got {gpu_statistic!r}"
+            )
+
         return cls(
             x=x_arr,
             y=y_arr,
@@ -204,4 +228,5 @@ class PermutationDesign:
             R=R,
             alternative=alternative,
             seed=seed,
+            gpu_statistic=gpu_statistic,
         )

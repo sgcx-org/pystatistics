@@ -1,9 +1,15 @@
 """
 GPU backends for bootstrap and permutation test.
 
-GPU accelerates statistic computation, not sampling. For arbitrary
-user statistics, falls back to CPU. For vectorizable statistics
-(e.g., mean difference), computes all R replicates in parallel.
+The GPU vectorizes ONE closed-form statistic each: the sample mean (bootstrap)
+and the difference in means (permutation). It never *infers* whether the user's
+statistic is that closed form — the caller declares it explicitly via
+``gpu_statistic`` (see :mod:`pystatistics.montecarlo.solvers`). The dispatcher
+only routes a design here once it is declared and vectorizable, so these
+backends never fall back and never guess. As a final fail-loud guard, the
+declaration is verified against the observed statistic on the original data
+before any GPU work — a declared-but-wrong statistic raises, it is never
+silently replaced by the mean.
 
 Skipped if no GPU (CUDA or MPS) is available.
 """
@@ -22,6 +28,13 @@ from pystatistics.montecarlo._common import BootParams, PermutationParams
 from pystatistics.montecarlo.design import BootstrapDesign, PermutationDesign
 
 
+# Relative tolerance for verifying a declared GPU statistic against the observed
+# value on the original data. The observed statistic is evaluated in fp64 on the
+# CPU, so a genuine mean matches to well within this bound; a materially
+# different statistic (a trimmed mean, a different estimator) does not.
+_DECLARATION_RTOL = 1e-9
+
+
 def _select_device():
     """Select GPU device. Raises RuntimeError if none available."""
     import torch
@@ -35,12 +48,12 @@ def _select_device():
 
 class GPUBootstrapBackend:
     """
-    GPU backend for bootstrap resampling.
+    GPU backend for bootstrap resampling of a declared-mean statistic.
 
-    GPU acceleration is primarily beneficial for batched regression
-    via the batched solver. For general statistics, the CPU backend
-    with user functions is used since arbitrary Python callables
-    cannot run on GPU.
+    Generates all R ordinary bootstrap index sets on the GPU and reduces them
+    to sample means in parallel. Only reached when the caller has declared
+    ``gpu_statistic='mean'`` on a vectorizable design; arbitrary Python
+    statistics run on the CPU backend (they cannot execute on the GPU).
     """
 
     def __init__(self, device: str = 'auto'):
@@ -51,26 +64,16 @@ class GPUBootstrapBackend:
         return f'gpu_{self._device.type}_bootstrap'
 
     def solve(self, design: BootstrapDesign) -> Result[BootParams]:
-        """Run bootstrap with GPU acceleration for simple statistics.
+        """Run the vectorized GPU bootstrap for a declared-mean statistic.
 
-        For 1-D data with stype='i' and a mean-like statistic, generates
-        all R bootstrap samples on GPU and computes statistics vectorized.
-        For arbitrary or complex statistics, falls back to CPU.
+        The dispatcher only routes a design here once ``gpu_statistic='mean'``
+        is declared and the configuration is vectorizable (ordinary, stype='i',
+        no strata, 1-D data), so no probing or CPU fallback happens here. The
+        declaration is verified against the observed statistic on the original
+        data (fail-loud) before any GPU work — a statistic that is not the mean
+        raises rather than being silently computed as the mean.
         """
         torch = self._torch
-
-        # Constraints: only ordinary bootstrap, stype='i', no strata,
-        # 1-D data, and statistic must be vectorizable (mean).
-        can_gpu = (
-            design.sim == "ordinary"
-            and design.stype == "i"
-            and design.strata is None
-            and design.data.ndim == 1
-        )
-
-        if not can_gpu:
-            from pystatistics.montecarlo.backends.cpu import CPUBootstrapBackend
-            return CPUBootstrapBackend().solve(design)
 
         timer = Timer()
         timer.start()
@@ -81,7 +84,7 @@ class GPUBootstrapBackend:
         seed = design.seed
         n = data.shape[0]
 
-        # Compute t0 on CPU (user function)
+        # Compute t0 on CPU (user function) and verify the declaration.
         with timer.section('t0_computation'):
             original_indices = np.arange(n)
             t0 = np.atleast_1d(np.asarray(
@@ -89,28 +92,18 @@ class GPUBootstrapBackend:
             ))
             k = len(t0)
 
-        # Verify: is statistic(data, indices) == mean(data[indices])?
-        # Check on one bootstrap sample.
-        with timer.section('statistic_check'):
-            rng_check = np.random.default_rng(seed)
-            test_idx = rng_check.choice(n, size=n, replace=True)
-            user_val = np.atleast_1d(np.asarray(
-                statistic(data, test_idx), dtype=np.float64,
-            ))
-
-            if k == 1:
-                gpu_val = np.mean(data[test_idx])
-                is_mean = abs(user_val[0] - gpu_val) < 1e-10 * (
-                    abs(user_val[0]) + 1e-10
+        with timer.section('declaration_check'):
+            mean_all = float(np.mean(data))
+            if k != 1 or abs(t0[0] - mean_all) > _DECLARATION_RTOL * (
+                abs(mean_all) + _DECLARATION_RTOL
+            ):
+                raise ValidationError(
+                    "gpu_statistic='mean' was declared, but statistic(data, "
+                    "all-indices) does not equal mean(data) "
+                    f"(got {t0.tolist()}, expected {mean_all}). The GPU path "
+                    "computes the sample mean; refusing to silently compute a "
+                    "different quantity. Use backend='cpu' for this statistic."
                 )
-            else:
-                is_mean = False
-
-        if not is_mean:
-            # Statistic is not simple mean — fall back to CPU.
-            timer.stop()
-            from pystatistics.montecarlo.backends.cpu import CPUBootstrapBackend
-            return CPUBootstrapBackend().solve(design)
 
         # GPU path: generate all R bootstrap index sets, compute means.
         with timer.section('gpu_compute'):
@@ -168,12 +161,12 @@ class GPUBootstrapBackend:
 
 class GPUPermutationBackend:
     """
-    GPU backend for permutation testing.
+    GPU backend for permutation testing of a declared mean-difference statistic.
 
-    For 1-D data with a mean-difference-like statistic, generates all R
-    permutations on GPU and computes all statistics in a single vectorized
-    operation. For arbitrary or multi-dimensional statistics, falls back
-    to the CPU backend.
+    Generates all R permutations on the GPU (random-key argsort) and computes
+    the difference in means for each in a single vectorized operation. Only
+    reached when the caller has declared ``gpu_statistic='mean_diff'`` on 1-D
+    groups; arbitrary Python statistics run on the CPU backend.
     """
 
     def __init__(self, device: str = 'auto'):
@@ -201,11 +194,6 @@ class GPUPermutationBackend:
         alternative = design.alternative
         seed = design.seed
 
-        # Multi-dimensional data: fall back to CPU.
-        if x.ndim > 1 or y.ndim > 1:
-            from pystatistics.montecarlo.backends.cpu import CPUPermutationBackend
-            return CPUPermutationBackend().solve(design)
-
         n1 = len(x)
         n2 = len(y)
         n = n1 + n2
@@ -214,22 +202,22 @@ class GPUPermutationBackend:
         with timer.section('observed_stat'):
             observed = float(statistic(x, y))
 
-        # Verify statistic is mean-difference before going GPU path.
-        # Check on one permutation.
-        with timer.section('statistic_check'):
-            rng_check = np.random.default_rng(seed)
-            perm_check = rng_check.permutation(n)
-            user_val = float(statistic(
-                combined[perm_check[:n1]], combined[perm_check[n1:]],
-            ))
-            gpu_val = (
-                combined[perm_check[:n1]].mean()
-                - combined[perm_check[n1:]].mean()
-            )
-            if abs(user_val - gpu_val) > 1e-4 * (abs(user_val) + 1e-10):
-                timer.stop()
-                from pystatistics.montecarlo.backends.cpu import CPUPermutationBackend
-                return CPUPermutationBackend().solve(design)
+        # Verify the gpu_statistic='mean_diff' declaration against the observed
+        # statistic (fail-loud). The dispatcher already guaranteed 1-D groups
+        # and the declaration; this refuses to silently compute a different
+        # quantity than the user's statistic.
+        with timer.section('declaration_check'):
+            mean_diff_obs = float(x.mean() - y.mean())
+            if abs(observed - mean_diff_obs) > _DECLARATION_RTOL * (
+                abs(mean_diff_obs) + _DECLARATION_RTOL
+            ):
+                raise ValidationError(
+                    "gpu_statistic='mean_diff' was declared, but statistic(x, y) "
+                    f"does not equal mean(x)-mean(y) (got {observed}, expected "
+                    f"{mean_diff_obs}). The GPU path computes the difference in "
+                    "means; refusing to silently compute a different quantity. "
+                    "Use backend='cpu' for this statistic."
+                )
 
         # GPU path: generate random permutations directly on GPU using
         # random-key sorting (torch.rand + argsort). Chunked to fit VRAM.

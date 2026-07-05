@@ -35,26 +35,99 @@ def _use_gpu(backend: BackendChoice | None) -> bool:
     """Resolve whether a Monte-Carlo run uses the GPU device.
 
     Routes through the canonical resolver so 'gpu' with no GPU, 'gpu_fp64',
-    and unknown strings raise the standard library errors. The GPU Monte-Carlo
-    backends self-detect their device, so only the CPU-vs-GPU decision is
-    needed here.
+    and unknown strings raise the standard library errors.
     """
     return resolve_backend(backend, supports_fp64=False).is_gpu
 
 
-def _get_boot_backend(backend: BackendChoice | None):
-    """Select bootstrap backend from the resolved device."""
-    if _use_gpu(backend):
+def _boot_gpu_vectorizable(design: BootstrapDesign) -> bool:
+    """True if this bootstrap design can run on the GPU mean kernel.
+
+    The GPU path implements ONE closed-form statistic — the sample mean of a
+    1-D array under ordinary index resampling. Everything else is CPU-only.
+    The statistic form is taken from the caller's explicit ``gpu_statistic``
+    declaration; it is NEVER inferred from the statistic's output.
+    """
+    return (
+        design.gpu_statistic == "mean"
+        and design.sim == "ordinary"
+        and design.stype == "i"
+        and design.strata is None
+        and design.data.ndim == 1
+    )
+
+
+def _select_boot_backend(backend: BackendChoice | None,
+                         design: BootstrapDesign):
+    """Choose the bootstrap backend, honouring fail-loud fidelity (Guarantee 2).
+
+    - CPU device → CPU backend (runs the user's real statistic).
+    - GPU device + a vectorizable declared-mean design → GPU backend.
+    - Explicit ``backend='gpu'`` that cannot be honoured on the GPU → RAISE
+      (never silently fall back to a different backend, and never silently
+      compute a different statistic).
+    - ``backend='auto'`` that cannot use the GPU → CPU backend (auto expressed
+      no preference; the choice is disclosed via ``backend_name``).
+    """
+    if not _use_gpu(backend):
+        return CPUBootstrapBackend()
+
+    if _boot_gpu_vectorizable(design):
         from pystatistics.montecarlo.backends.gpu import GPUBootstrapBackend
         return GPUBootstrapBackend()
+
+    # GPU device requested but the design cannot run on the GPU kernel.
+    if backend == "gpu":
+        if design.gpu_statistic != "mean":
+            raise ValidationError(
+                "backend='gpu' requires gpu_statistic='mean'. The GPU bootstrap "
+                "path vectorizes only the sample mean; an arbitrary Python "
+                "statistic cannot execute on the GPU. Pass gpu_statistic='mean' "
+                "if your statistic is the mean, or use backend='cpu'."
+            )
+        raise ValidationError(
+            "backend='gpu' with gpu_statistic='mean' supports only "
+            "method='ordinary', statistic_type='index', strata=None, and 1-D "
+            "data. This configuration cannot run on the GPU; use backend='cpu'."
+        )
+    # backend='auto' — disclosed CPU fallback.
     return CPUBootstrapBackend()
 
 
-def _get_perm_backend(backend: BackendChoice | None):
-    """Select permutation backend from the resolved device."""
-    if _use_gpu(backend):
+def _select_perm_backend(backend: BackendChoice | None,
+                         design: PermutationDesign):
+    """Choose the permutation backend, honouring fail-loud fidelity.
+
+    Same policy as :func:`_select_boot_backend`: the GPU path vectorizes only
+    the mean-difference statistic on 1-D groups; an explicit ``backend='gpu'``
+    that cannot be honoured raises rather than silently substituting.
+    """
+    if not _use_gpu(backend):
+        return CPUPermutationBackend()
+
+    vectorizable = (
+        design.gpu_statistic == "mean_diff"
+        and design.x.ndim == 1
+        and design.y.ndim == 1
+    )
+    if vectorizable:
         from pystatistics.montecarlo.backends.gpu import GPUPermutationBackend
         return GPUPermutationBackend()
+
+    if backend == "gpu":
+        if design.gpu_statistic != "mean_diff":
+            raise ValidationError(
+                "backend='gpu' requires gpu_statistic='mean_diff'. The GPU "
+                "permutation path vectorizes only the difference in means; an "
+                "arbitrary Python statistic cannot execute on the GPU. Pass "
+                "gpu_statistic='mean_diff' if your statistic is mean(x)-mean(y), "
+                "or use backend='cpu'."
+            )
+        raise ValidationError(
+            "backend='gpu' with gpu_statistic='mean_diff' supports only 1-D "
+            "groups x and y. This configuration cannot run on the GPU; use "
+            "backend='cpu'."
+        )
     return CPUPermutationBackend()
 
 
@@ -70,6 +143,7 @@ def boot(
     mle: Any = None,
     seed: int | None = None,
     backend: BackendChoice | None = None,
+    gpu_statistic: Literal["mean"] | None = None,
 ) -> BootstrapSolution:
     """
     Bootstrap resampling. Matches R's boot::boot().
@@ -96,6 +170,12 @@ def boot(
         seed: Random seed for reproducibility.
         backend: Compute backend. Default None → 'cpu'. Explicit:
             'cpu', 'gpu', or 'auto'.
+        gpu_statistic: Explicit declaration that ``statistic`` computes the
+            sample mean, enabling the vectorized GPU kernel. Only ``"mean"`` is
+            supported. Required when ``backend='gpu'`` (the GPU path never infers
+            the statistic form); ``backend='gpu'`` without it raises. Ignored on
+            the CPU path. When declared, it is verified against the observed
+            statistic on the full sample (fail-loud) before the GPU is used.
 
     Returns:
         BootstrapSolution with t0, t, bias, SE.
@@ -130,9 +210,10 @@ def boot(
         ran_gen=ran_gen,
         mle=mle,
         seed=seed,
+        gpu_statistic=gpu_statistic,
     )
 
-    be = _get_boot_backend(backend)
+    be = _select_boot_backend(backend, design)
     result = be.solve(design)
 
     return BootstrapSolution(_result=result, _design=design)
@@ -233,6 +314,7 @@ def permutation_test(
     alternative: Literal["two-sided", "less", "greater"] = "two-sided",
     seed: int | None = None,
     backend: BackendChoice | None = None,
+    gpu_statistic: Literal["mean_diff"] | None = None,
 ) -> PermutationSolution:
     """
     Permutation test for two groups.
@@ -250,6 +332,13 @@ def permutation_test(
         seed: Random seed for reproducibility.
         backend: Compute backend. Default None → 'cpu'. Explicit:
             'cpu', 'gpu', or 'auto'.
+        gpu_statistic: Explicit declaration that ``statistic`` computes the
+            difference in means, mean(x) - mean(y), enabling the vectorized GPU
+            kernel. Only ``"mean_diff"`` is supported. Required when
+            ``backend='gpu'`` (the GPU path never infers the statistic form);
+            ``backend='gpu'`` without it raises. Ignored on the CPU path. When
+            declared, it is verified against the observed statistic (fail-loud)
+            before the GPU is used.
 
     Returns:
         PermutationSolution with observed_stat, perm_stats, p_value.
@@ -271,9 +360,10 @@ def permutation_test(
         R=n_resamples,
         alternative=alternative,
         seed=seed,
+        gpu_statistic=gpu_statistic,
     )
 
-    be = _get_perm_backend(backend)
+    be = _select_perm_backend(backend, design)
     result = be.solve(design)
 
     return PermutationSolution(_result=result, _design=design)
