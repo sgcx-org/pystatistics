@@ -1,5 +1,33 @@
 # Changelog
 
+## 4.6.7
+
+Running a bootstrap or permutation test on the GPU now requires you to declare
+that your statistic is the mean, and refuses — loudly — to run any other
+statistic on the GPU. This closes a case where a non-mean statistic could be
+computed as the mean without warning.
+
+- **`montecarlo` GPU path is now explicit and fail-loud.** Previously,
+  `boot(..., backend="gpu")` and `permutation_test(..., backend="gpu")` tried to
+  detect whether your `statistic` was the sample mean (or difference in means)
+  by evaluating it on a single resample. A statistic that happened to match the
+  mean on that one sample but differed elsewhere — for example a lightly trimmed
+  mean — was then silently computed as the mean for every replicate, producing a
+  wrong result with no warning. The GPU path no longer guesses. `boot()` and
+  `permutation_test()` take a new `gpu_statistic` argument (`"mean"` and
+  `"mean_diff"` respectively) by which you declare the statistic form. On
+  `backend="gpu"`:
+    - omitting `gpu_statistic` raises, instead of silently running on the CPU;
+    - a configuration the GPU cannot handle (balanced or parametric bootstrap,
+      strata, or 2-D data) raises;
+    - a declared statistic whose value on your data does not match the mean it
+      claims to be raises — it is never silently replaced by the mean.
+  `backend="auto"` still selects the best available device and runs on the CPU
+  when the GPU cannot be used, reporting the device used in
+  `solution.backend_name`. The default `backend="cpu"` is unchanged. Where the
+  GPU applies, the mean bootstrap and mean-difference permutation test run
+  several times faster than the CPU at large replicate counts.
+
 ## 4.6.6
 
 ETS model fitting is substantially faster on longer series, with identical

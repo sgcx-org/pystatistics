@@ -371,6 +371,18 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.7 — explicit, fail-loud GPU bootstrap and permutation tests
+
+Running `boot()` or `permutation_test()` on the GPU now requires you to declare
+that your statistic is the mean via a new `gpu_statistic` argument (`"mean"` for
+the bootstrap, `"mean_diff"` for the permutation test). Previously the GPU path
+guessed whether your statistic was the mean by checking a single resample, and a
+statistic that matched there but differed elsewhere could be silently computed
+as the mean — now it cannot. With `backend="gpu"`, omitting the declaration, a
+configuration the GPU cannot handle, or a statistic that does not actually equal
+the mean all raise rather than returning a wrong or unexpected result.
+`backend="auto"` and the default `backend="cpu"` are unchanged.
+
 ### 4.6.6 — faster ETS fitting on longer series
 
 `ets()` now fits substantially faster, especially on long series, with
