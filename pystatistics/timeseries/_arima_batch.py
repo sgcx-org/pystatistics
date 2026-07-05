@@ -10,6 +10,11 @@ default backend falls back to a Python loop over the existing
 single-series :func:`arima` with ``method='Whittle'``. The GPU path
 is the one that makes this worth shipping — expected 10-100×
 speedups for K ≳ 50.
+
+Per-series failures (a non-stationary Whittle optimum, an optimizer
+abort) follow the shared contract in :mod:`_arima_batch_contract`,
+identical across backends: all-failed raises, partially-failed rows
+come back NaN with a loud warning.
 """
 
 from __future__ import annotations
@@ -20,11 +25,14 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.core.result import Result, SolutionReprMixin
 from pystatistics.core.compute.backend import (
     resolve_backend, valid_backends, unknown_backend_message,
     FP64_REQUIRES_CUDA_MSG,
+)
+from pystatistics.timeseries._arima_batch_contract import (
+    enforce_batch_failure_contract, nonstationary_rows,
 )
 
 
@@ -48,7 +56,10 @@ class ARMABatchParams:
     n_iter : int
         Maximum iteration count across all series.
     converged : NDArray
-        Per-series boolean convergence flag, shape ``(K,)``.
+        Per-series boolean convergence flag, shape ``(K,)``. Always
+        False for a failed series (whose estimates are NaN — see
+        :func:`arima_batch`); on the float32 GPU path it can also be
+        False on a valid fit whose Adam gradient stayed above ``tol``.
     n_series : int
         Number of series K.
     n_used : int
@@ -93,7 +104,10 @@ class ARMABatchSolution(SolutionReprMixin):
     n_iter : int
         Maximum iteration count across all series.
     converged : NDArray
-        Per-series boolean convergence flag, shape ``(K,)``.
+        Per-series boolean convergence flag, shape ``(K,)``. Always
+        False for a failed series (whose estimates are NaN — see
+        :func:`arima_batch`); on the float32 GPU path it can also be
+        False on a valid fit whose Adam gradient stayed above ``tol``.
     n_series : int
         Number of series K.
     n_used : int
@@ -164,25 +178,35 @@ class ARMABatchSolution(SolutionReprMixin):
         """Compact summary of a batched ARMA fit across the K series."""
         p, d, q = self.order
         n_conv = int(np.sum(self.converged))
+        n_failed = int(np.sum(np.isnan(self.sigma2)))
         lines = [
             f"Batched ARIMA({p},{d},{q}) — {self.n_series} series",
             "=" * 56,
             f"Fitter: {self.method}",
             f"Observations per series (after differencing): {self.n_used}",
             f"Converged: {n_conv}/{self.n_series}",
+        ]
+        if n_failed > 0:
+            lines.append(
+                f"Failed: {n_failed}/{self.n_series} (estimates NaN)"
+            )
+        # nan-aware aggregation: failed rows are NaN by contract and
+        # must not blank the whole summary. A partial-failure solution
+        # always has >= 1 finite row (all-failed raises instead).
+        lines += [
             "",
-            f"sigma^2  mean={float(np.mean(self.sigma2)):.4g}  "
-            f"min={float(np.min(self.sigma2)):.4g}  "
-            f"max={float(np.max(self.sigma2)):.4g}",
+            f"sigma^2  mean={float(np.nanmean(self.sigma2)):.4g}  "
+            f"min={float(np.nanmin(self.sigma2)):.4g}  "
+            f"max={float(np.nanmax(self.sigma2)):.4g}",
         ]
         if p > 0:
             lines.append(
-                f"AR[1]    mean={float(np.mean(self.ar[:, 0])):.4f}  "
+                f"AR[1]    mean={float(np.nanmean(self.ar[:, 0])):.4f}  "
                 f"(across series)"
             )
         if q > 0:
             lines.append(
-                f"MA[1]    mean={float(np.mean(self.ma[:, 0])):.4f}  "
+                f"MA[1]    mean={float(np.nanmean(self.ma[:, 0])):.4f}  "
                 f"(across series)"
             )
         return "\n".join(lines)
@@ -279,6 +303,20 @@ def arima_batch(
     Returns
     -------
     ARMABatchSolution
+        Failed series — a non-stationary Whittle optimum or a
+        per-series optimizer failure, on any backend — have their
+        ``ar``/``ma``/``sigma2``/``mean`` rows set to NaN and
+        ``converged=False``, with a ``UserWarning`` naming the count
+        (also recorded in ``.warnings``). Identify them with
+        ``np.isnan(result.sigma2)``. The contract is identical across
+        backends; see :mod:`_arima_batch_contract`.
+
+    Raises
+    ------
+    ConvergenceError
+        If every series in the batch fails.
+    ValidationError
+        On invalid method / order / shape / backend.
     """
     if method != "Whittle":
         raise ValidationError(
@@ -370,6 +408,11 @@ def arima_batch(
         ar, ma, sigma2, n_iter, converged = fitter.fit(
             start_batch, lr=lr, max_iter=max_iter, tol=tol,
         )
+        # Validity gate on the returned estimates — float64 root check
+        # on the host, so the guarantee does not depend on the torch
+        # build or the device's fp32 behavior. The single-series path
+        # enforces the same criterion by raising.
+        failed = nonstationary_rows(ar)
         method_str = f"Whittle-batch-GPU ({device_type}, " \
                      f"{'fp64' if use_fp64 else 'fp32'})"
     else:
@@ -377,27 +420,45 @@ def arima_batch(
         # the same per-series result as the standalone call, just
         # packaged for the batch API. For K ≫ 1 users on CPU this
         # doesn't speed anything up — they should use this API on GPU.
+        # A per-series ConvergenceError (the single-series fitter's
+        # failure signal) marks that row failed; the shared contract
+        # below decides what the batch does about it.
         from pystatistics.timeseries._arima_fit import arima as _arima
-        ar_rows: list[NDArray] = []
-        ma_rows: list[NDArray] = []
-        sigma2_vals: list[float] = []
-        conv_vals: list[bool] = []
+        ar = np.zeros((K, p), dtype=np.float64)
+        ma = np.zeros((K, q), dtype=np.float64)
+        sigma2 = np.zeros(K, dtype=np.float64)
+        converged = np.zeros(K, dtype=bool)
+        failed = np.zeros(K, dtype=bool)
         n_iter = 0
         for k in range(K):
-            res = _arima(
-                Y_np[k], order=order, include_mean=include_mean,
-                method="Whittle", tol=tol, max_iter=max_iter,
-            )
-            ar_rows.append(res.ar if p > 0 else np.zeros(0))
-            ma_rows.append(res.ma if q > 0 else np.zeros(0))
-            sigma2_vals.append(res.sigma2)
-            conv_vals.append(res.converged)
+            try:
+                res = _arima(
+                    Y_np[k], order=order, include_mean=include_mean,
+                    method="Whittle", tol=tol, max_iter=max_iter,
+                )
+            except ConvergenceError:
+                failed[k] = True
+                continue
+            if p > 0:
+                ar[k] = res.ar
+            if q > 0:
+                ma[k] = res.ma
+            sigma2[k] = res.sigma2
+            converged[k] = res.converged
             n_iter = max(n_iter, res.n_iter)
-        ar = np.array(ar_rows) if p > 0 else np.zeros((K, 0))
-        ma = np.array(ma_rows) if q > 0 else np.zeros((K, 0))
-        sigma2 = np.array(sigma2_vals)
-        converged = np.array(conv_vals, dtype=bool)
         method_str = "Whittle-loop-CPU"
+
+    # Shared failure contract — identical semantics on every backend:
+    # all-failed raises; partially-failed rows are NaN'd, flagged
+    # converged=False, and loudly warned about; a clean batch passes
+    # through untouched.
+    ar, ma, sigma2, mu_batch, converged, contract_warnings = (
+        enforce_batch_failure_contract(
+            ar=ar, ma=ma, sigma2=sigma2, mean=mu_batch,
+            converged=converged, failed=failed,
+            n_iter=int(n_iter), backend_label=method_str,
+        )
+    )
 
     if run_gpu:
         backend_name = f"whittle_batch_gpu ({device_type}, " \
@@ -422,6 +483,6 @@ def arima_batch(
             info={"method": method_str},
             timing=None,
             backend_name=backend_name,
-            warnings=(),
+            warnings=contract_warnings,
         )
     )
