@@ -273,8 +273,8 @@ def _prop_diff_ci(
     """
     Confidence interval for difference in proportions (two-sample).
 
-    Uses Newcombe's method with Wilson score intervals.
-    This matches R's prop.test CI for the two-sample case.
+    Matches R's prop.test two-sample CI: a Wald interval on the difference with
+    a capped continuity correction (min(0.5, |diff|/sum(1/n)) * sum(1/n)).
     """
     p1 = x1 / n1
     p2 = x2 / n2
@@ -283,10 +283,16 @@ def _prop_diff_ci(
     alpha = 1.0 - conf_level
     z = sp_stats.norm.ppf(1.0 - alpha / 2.0)
 
-    # Yates correction for CI: R subtracts 1/(2*harmonic_mean(n1,n2))
+    # Continuity correction for the CI, matching R's prop.test exactly. R caps
+    # the correction at min(0.5, |diff|/sum(1/n)) so it can never exceed the
+    # magnitude of the difference itself (otherwise the interval is wider than R
+    # when the two proportions are close). The CI half-width then adds
+    # YATES * sum(1/n).
+    sum_inv_n = 1.0 / n1 + 1.0 / n2
     yates_ci = 0.0
     if correct:
-        yates_ci = 0.5 * (1.0 / n1 + 1.0 / n2)
+        yates_val = min(0.5, abs(diff) / sum_inv_n) if sum_inv_n > 0 else 0.0
+        yates_ci = yates_val * sum_inv_n
 
     # Standard error of the difference
     se = np.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)

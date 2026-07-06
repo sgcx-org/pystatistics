@@ -16,6 +16,7 @@ import numpy as np
 from scipy import stats as sp_stats
 
 from pystatistics.hypothesis._common import HTestParams
+from pystatistics.hypothesis.backends import _wilcox_ci as _wci
 
 if TYPE_CHECKING:
     from pystatistics.hypothesis.design import HypothesisDesign
@@ -95,23 +96,26 @@ def wilcox_signed_rank(design: HypothesisDesign) -> tuple[HTestParams, list[str]
     ci = None
     estimate = None
     if compute_ci:
-        walsh = _walsh_averages(x - mu)
+        # R drops zero differences before forming the Walsh averages for the
+        # signed-rank pseudomedian and CI (wilcox.test source).
+        d0 = (x - mu)
+        d0 = d0[d0 != 0.0]
+        walsh = _walsh_averages(d0)
         pseudomedian = float(np.median(walsh)) + mu
         estimate = {"(pseudo)median": pseudomedian}
 
-        if alternative == "two-sided":
-            alpha = 1.0 - conf_level
-            lo = float(np.percentile(walsh, 100 * alpha / 2)) + mu
-            hi = float(np.percentile(walsh, 100 * (1 - alpha / 2))) + mu
-            ci = (lo, hi)
-        elif alternative == "less":
-            alpha = 1.0 - conf_level
-            hi = float(np.percentile(walsh, 100 * (1 - alpha))) + mu
-            ci = (float('-inf'), hi)
-        else:  # greater
-            alpha = 1.0 - conf_level
-            lo = float(np.percentile(walsh, 100 * alpha)) + mu
-            ci = (lo, float('inf'))
+        # R's Hodges-Lehmann CI: exact order-statistic inversion (qsignrank) in
+        # the exact regime, tie-corrected normal-approx inversion otherwise --
+        # NOT empirical percentiles of the Walsh averages. Endpoints computed on
+        # (x - mu) then shifted back by mu (equivalently, on x).
+        if use_exact:
+            lo, hi = _wci.signed_rank_exact_ci(
+                x - mu, conf_level, alternative)
+        else:
+            lo, hi = _wci.signed_rank_approx_ci(
+                x - mu, conf_level, alternative, correct)
+        ci = (lo + mu if np.isfinite(lo) else lo,
+              hi + mu if np.isfinite(hi) else hi)
 
     return HTestParams(
         statistic=V,
@@ -188,23 +192,16 @@ def wilcox_rank_sum(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     ci = None
     estimate = None
     if compute_ci:
-        diffs = np.subtract.outer(x, y).ravel()
-        diffs.sort()
+        diffs = np.sort(np.subtract.outer(x, y).ravel())
         estimate = {"difference in location": float(np.median(diffs))}
 
-        if alternative == "two-sided":
-            alpha = 1.0 - conf_level
-            lo = float(np.percentile(diffs, 100 * alpha / 2))
-            hi = float(np.percentile(diffs, 100 * (1 - alpha / 2)))
-            ci = (lo, hi)
-        elif alternative == "less":
-            alpha = 1.0 - conf_level
-            hi = float(np.percentile(diffs, 100 * (1 - alpha)))
-            ci = (float('-inf'), hi)
-        else:  # greater
-            alpha = 1.0 - conf_level
-            lo = float(np.percentile(diffs, 100 * alpha))
-            ci = (lo, float('inf'))
+        # R's Hodges-Lehmann CI: exact order-statistic inversion (qwilcox) in the
+        # exact regime, tie-corrected normal-approx inversion otherwise -- NOT
+        # empirical percentiles of the pairwise differences.
+        if use_exact:
+            ci = _wci.rank_sum_exact_ci(diffs, nx, ny, conf_level, alternative)
+        else:
+            ci = _wci.rank_sum_approx_ci(x, y, conf_level, alternative, correct)
 
     return HTestParams(
         statistic=W,

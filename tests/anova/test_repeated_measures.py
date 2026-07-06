@@ -195,3 +195,18 @@ class TestRMCorrection:
         y, subj, cond = rm_within_3
         with pytest.raises(ValueError, match="correction"):
             anova_rm(y, subj, within={'condition': cond}, correction='invalid')
+
+
+def test_mauchly_p_includes_second_order_correction():
+    """Mauchly's-test p-value includes R's second-order (Box) correction term
+    (stats::mauchly.test): p = Pr1 + w2*(Pr2 - Pr1). For this deterministic
+    12x4 within-subject design R/afex give p = 0.7692462.
+    """
+    import numpy as np
+    from pystatistics.anova._repeated import mauchly_test
+    Y = np.array([[0.0, 3.8, 5.7, 10.7], [2.0, 3.1, 6.9, 8.4], [4.0, 5.3, 7.2, 12.2],
+                  [3.5, 7.1, 8.4, 9.9], [5.5, 6.8, 11.2, 13.7], [5.0, 8.6, 9.9, 13.9],
+                  [7.0, 8.3, 12.7, 15.2], [9.0, 10.1, 11.4, 15.4], [8.5, 12.3, 14.2, 16.7],
+                  [10.5, 11.6, 15.4, 16.9], [10.0, 13.8, 15.7, 20.7], [12.0, 13.1, 16.9, 18.4]])
+    W, p_value, gg, hf = mauchly_test(Y)
+    assert p_value == pytest.approx(0.7692462, abs=1e-6)

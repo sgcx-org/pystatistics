@@ -93,6 +93,15 @@ def _ks_one_sample(
     data_name: str, warnings_list: list[str],
 ) -> tuple[HTestParams, list[str]]:
     """One-sample KS test against a theoretical distribution."""
+    # Match R's warning: the one-sample KS test assumes a continuous
+    # distribution, so ties (duplicate values) should not be present. R emits
+    # this warning; we must too (R10 / G2 warning fidelity).
+    if np.unique(x).size < x.size:
+        warnings_list.append(
+            "ties should not be present for the one-sample "
+            "Kolmogorov-Smirnov test"
+        )
+
     # Map distribution name to scipy CDF
     cdf = _get_cdf(distribution, dist_params)
 

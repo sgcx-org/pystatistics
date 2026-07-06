@@ -270,6 +270,16 @@ def quantile(
     else:
         q_probs = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
 
+    # Fail loud on invalid probabilities, matching R's quantile()
+    # ("'probs' outside [0,1]"). Silently clamping to the min/max would return a
+    # plausible wrong number for an invalid request (Rule 1 / A6).
+    finite = q_probs[~np.isnan(q_probs)]
+    if finite.size and (finite.min() < 0.0 or finite.max() > 1.0):
+        raise ValidationError(
+            f"'probs' outside [0,1]: got range "
+            f"[{float(finite.min())}, {float(finite.max())}]"
+        )
+
     result = be.solve(
         design,
         compute={'quantiles'},

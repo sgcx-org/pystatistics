@@ -1,5 +1,34 @@
 # Changelog
 
+## 4.6.11
+
+Corrects several confidence-interval, warning, and input-validation behaviours in
+the `hypothesis`, `descriptive`, and `anova` modules so they match R exactly. Test
+statistics and p-values are unaffected.
+
+- **`wilcox_test` confidence intervals now match R's `wilcox.test`.** The
+  Hodges–Lehmann interval previously used empirical percentiles of the Walsh
+  averages, which gave the wrong endpoints for small samples. It now uses the
+  exact order-statistic inversion for the exact test and the tie-corrected
+  normal-approximation inversion for the approximate test, exactly as R does. For
+  the signed-rank test, zero differences are dropped before the interval and the
+  reported pseudomedian are computed (matching R). The test statistic and p-value
+  are unchanged. For example, the rank-sum interval for two five-observation
+  samples is now `(-0.43, 1.60)`, matching R, instead of the previous
+  `(-0.96, 1.85)`.
+- **`prop_test` two-sample confidence interval applies R's capped continuity
+  correction.** The correction is capped at `min(0.5, |p1 − p2| / (1/n1 + 1/n2))`
+  rather than always using `0.5`, so the interval no longer comes out wider than
+  R's when the two proportions are close. The statistic and p-value are unchanged.
+- **`quantile` now rejects probabilities outside `[0, 1]`** with a clear error,
+  matching R, instead of silently clamping them to the minimum or maximum.
+- **`ks_test` warns about ties in the one-sample test**, matching R's `ks.test`
+  ("ties should not be present for the one-sample Kolmogorov–Smirnov test"). Ties
+  were previously handled silently.
+- **`anova_rm` Mauchly sphericity p-value now includes the second-order
+  correction** used by R, removing a small (~1e-3) discrepancy. Mauchly's W and the
+  Greenhouse–Geisser / Huynh–Feldt epsilons are unchanged.
+
 ## 4.6.10
 
 Adds prediction methods to ordinal (`polr`) and multinomial (`multinom`)

@@ -193,3 +193,11 @@ class TestKSEdgeCases:
         """data_name set correctly for one-sample."""
         result = ks_test([1, 2, 3], distribution="norm")
         assert result.data_name == "x"
+
+
+def test_one_sample_ties_warning():
+    """One-sample KS emits R's ties warning (ks.test warns on duplicate values)."""
+    import numpy as np
+    from pystatistics.hypothesis import ks_test
+    r = ks_test(np.array([1., 1, 2, 3, 3]), distribution="norm", mean=2, sd=1)
+    assert any("ties" in w.lower() for w in r.warnings)

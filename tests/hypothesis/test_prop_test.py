@@ -214,3 +214,16 @@ class TestPropTestEdgeCases:
         )
         result = prop_test(design)
         assert result.statistic == pytest.approx(15.21, rel=1e-10)
+
+
+def test_two_sample_ci_capped_continuity_correction():
+    """The two-sample CI caps the continuity correction at
+    min(0.5, |p1-p2|/(1/n1+1/n2)), matching R's prop.test.
+
+    R: prop.test(c(83,90), c(86,93))$conf.int -> (-0.05810303, 0.05285172)
+    """
+    import numpy as np
+    from numpy.testing import assert_allclose
+    from pystatistics.hypothesis import prop_test
+    r = prop_test(np.array([83., 90]), np.array([86., 93]))
+    assert_allclose(r.conf_int, [-0.05810303, 0.05285172], atol=1e-6)

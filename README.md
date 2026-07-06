@@ -371,6 +371,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.11 — exact R-matching for hypothesis, descriptive & ANOVA edge cases
+
+`wilcox_test` confidence intervals now match R's `wilcox.test` (exact
+order-statistic inversion and tie-corrected approximation, with zero differences
+dropped for the signed-rank test); `prop_test` two-sample intervals use R's capped
+continuity correction; `quantile` rejects probabilities outside `[0, 1]` instead of
+silently clamping; `ks_test` warns about ties in the one-sample test; and
+`anova_rm` Mauchly p-values include R's second-order correction. Test statistics and
+p-values are unchanged.
+
 ### 4.6.10 — `predict()` for ordinal & multinomial regression
 
 `polr` and `multinom` results now have a `predict(X, type="class"|"probs")` method

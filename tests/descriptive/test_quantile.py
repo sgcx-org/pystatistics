@@ -327,3 +327,16 @@ class TestDescribeQuantiles:
         assert result.quantile_type == 1
         expected = np.array(R_QUANTILES_1TO5[1], dtype=np.float64)
         np.testing.assert_allclose(result.quantiles[:, 0], expected, rtol=1e-12)
+
+
+def test_probs_outside_unit_interval_raises():
+    """probs outside [0,1] fail loud (matching R's 'probs' outside [0,1]),
+    rather than being silently clamped to the min/max."""
+    import numpy as np
+    import pytest
+    from pystatistics.descriptive import quantile
+    from pystatistics.core.exceptions import ValidationError
+    with pytest.raises(ValidationError):
+        quantile(np.array([1., 2, 3, 4, 5]), probs=[1.5])
+    with pytest.raises(ValidationError):
+        quantile(np.array([1., 2, 3, 4, 5]), probs=[-0.2])

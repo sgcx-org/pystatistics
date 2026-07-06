@@ -297,14 +297,26 @@ def mauchly_test(
     W = det_S / (mean_eigenvalue ** p)
     W = max(0.0, min(1.0, W))  # numerical safety
 
-    # Chi-squared approximation for p-value
-    # df = p*(p+1)/2 - 1
-    f = 1.0 - (2.0 * p * p + p + 2.0) / (6.0 * p * (n - 1.0))
+    # Chi-squared approximation for the p-value, matching R's stats::mauchly.test
+    # EXACTLY -- including the second-order (Box) correction term R adds on top
+    # of the first-order chi-square. Omitting w2 leaves a ~1e-3 discrepancy.
+    #   n_df = residual df (n_subjects - 1 for an intercept-only within design)
+    #   rho  = -n_df * rho * log(W) is the corrected statistic
+    #   pval = Pr1 + w2 * (Pr2 - Pr1),  Pr2 at df+4
+    n_df = n - 1.0
+    rho = 1.0 - (2.0 * p * p + p + 2.0) / (6.0 * p * n_df)
     df_chi = p * (p + 1) // 2 - 1
 
     if W > 0 and df_chi > 0:
-        chi_sq = -f * (n - 1.0) * np.log(W)
-        p_value = float(sp_stats.chi2.sf(chi_sq, df_chi))
+        z = -n_df * rho * np.log(W)
+        # In R's w2 numerator the lone linear term is 3*ncol(SSD) = 3*k, i.e.
+        # 3*(p+1) here (p is the contrast dimension k-1); every other term uses
+        # the contrast dimension p. Using 3*p instead leaves a ~2.6e-5 gap.
+        w2 = ((p + 2) * (p - 1) * (p - 2) * (2 * p**3 + 6 * p**2 + 3 * (p + 1) + 2)
+              / (288.0 * (n_df * p * rho) ** 2))
+        pr1 = float(sp_stats.chi2.sf(z, df_chi))
+        pr2 = float(sp_stats.chi2.sf(z, df_chi + 4))
+        p_value = pr1 + w2 * (pr2 - pr1)
     else:
         p_value = 0.0
 
