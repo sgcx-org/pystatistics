@@ -204,6 +204,32 @@ class PolrGPULikelihood:
 
     # ---- post-fit quantities --------------------------------------------
 
+    def compute_hessian(
+        self, params_flat: NDArray[np.floating[Any]],
+    ) -> NDArray[np.floating[Any]]:
+        """Autograd observed-information Hessian (raw coords) on device → host
+        float64, WITHOUT inverting.
+
+        CF-1 fp64-vcov path: on a device with native double precision (CUDA) the
+        autograd Hessian is formed on the GPU in float64 (meant to be called on a
+        ``use_fp64=True`` instance), then inverted and positive-definiteness-gated
+        ONCE, in float64, on the host (see ``_solver.polr``). Inverting in the
+        working dtype on the GPU — the old ``compute_vcov`` path — silently lost
+        precision in fp32 and returned negative variances on ill-conditioned
+        designs.
+        """
+        torch = self._torch
+        from torch.autograd.functional import hessian as torch_hessian
+
+        params_gpu = torch.as_tensor(
+            params_flat, device=self._device, dtype=self._dtype,
+        ).detach().clone()
+        H = torch_hessian(
+            self._nll_from_params, params_gpu, create_graph=False,
+        )
+        H = 0.5 * (H + H.T)
+        return to_host_f64(H)
+
     def compute_vcov(
         self, params_flat: NDArray[np.floating[Any]],
     ) -> NDArray[np.floating[Any]]:

@@ -371,6 +371,16 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.9 — accurate GPU standard errors for ordinal & multinomial regression
+
+`polr` and `multinom` now compute standard errors in double precision on the GPU,
+fixing an accuracy loss on ill-conditioned designs where the `backend='gpu'`
+(float32) path could return a negative variance while reporting a converged fit —
+the float32 fit itself is unchanged, so large-sample fits stay fast. `multinom`
+now raises a clear error on separated or collinear data (as `polr` already did)
+instead of returning meaningless standard errors, an unsupported `polr` link now
+reports `Unknown link`, and `multinom` results gain a `.warnings` attribute.
+
 ### 4.6.8 — bootstrap intervals match R, two-sided permutation fix
 
 `boot_ci`'s basic, percentile, studentized and BCa intervals now use R's

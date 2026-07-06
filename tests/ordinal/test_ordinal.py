@@ -423,10 +423,10 @@ class TestPolrValidation:
             polr(y, X, category_names=['a', 'b', 'c'])
 
     def test_invalid_method_raises(self):
-        """Unknown method raises ValidationError."""
+        """Unknown link raises ValidationError (no silent substitution)."""
         y = np.array([0, 1, 0, 1])
         X = np.ones((4, 1))
-        with pytest.raises(ValidationError, match="Unknown method"):
+        with pytest.raises(ValidationError, match="Unknown link"):
             polr(y, X, link='invalid')
 
     def test_nan_in_X_raises(self):

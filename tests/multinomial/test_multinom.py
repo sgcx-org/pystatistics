@@ -431,6 +431,22 @@ class TestFailureCases:
         with pytest.raises(Exception):
             multinom(y, X)
 
+    def test_complete_separation_vcov_fails_loud(self):
+        """Complete separation makes the observed information non-PD: the vcov is
+        not identified, so multinom must FAIL LOUD (NotPositiveDefiniteError)
+        rather than return a pseudo-inverse with meaningless/negative variances.
+        """
+        from pystatistics.core.exceptions import NotPositiveDefiniteError
+        rng = np.random.default_rng(3)
+        n = 180
+        x = rng.standard_normal(n)
+        z = rng.standard_normal(n)
+        # class 2 is perfectly predicted by x > 0.8 (complete separation).
+        y = np.where(x > 0.8, 2, np.where(z > 0, 1, 0))
+        X = np.column_stack([np.ones(n), x, z])
+        with pytest.raises(NotPositiveDefiniteError, match="not positive definite"):
+            multinom(y, X, max_iter=2000)
+
     def test_non_integer_y(self):
         """Non-integer y values should raise ValidationError."""
         y = np.array([0.5, 1.5, 2.5] * 20)
