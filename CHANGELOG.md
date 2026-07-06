@@ -1,5 +1,23 @@
 # Changelog
 
+## 4.6.10
+
+Adds prediction methods to ordinal (`polr`) and multinomial (`multinom`)
+regression, matching R's `predict`.
+
+- **`polr` and `multinom` gain a `predict()` method.**
+  `solution.predict(X, type="class")` returns the most-probable class for each row
+  of `X`; `type="probs"` returns the `(n, K)` matrix of class probabilities. This
+  matches `predict.polr` / `predict.multinom` in R (`type = c("class", "probs")`).
+  Pass the design matrix `X` — without an intercept column for `polr` (its ordered
+  thresholds are the intercepts), including the intercept column for `multinom`
+  (whose caller supplies it) — using the training design for in-sample prediction
+  or a new design for out-of-sample prediction. Predicted probabilities agree with
+  R to about 1e-5 and predicted classes match exactly on held-out data.
+- **`OrdinalSolution` gains `fitted_probs` and `predicted_class`** — the in-sample
+  category-probability matrix and its per-row argmax — for parity with
+  `MultinomialSolution`.
+
 ## 4.6.9
 
 Fixes a standard-error accuracy bug on the GPU (float32) path of ordinal (`polr`)

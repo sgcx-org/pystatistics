@@ -81,6 +81,41 @@ def four_level_data():
 # Threshold parameterization tests
 # =========================================================================
 
+class TestPolrPredict:
+    """fitted_probs / predicted_class / predict(X, type=), matching predict.polr."""
+
+    def test_fitted_probs_shape_and_sum(self, simple_data):
+        y, X = simple_data
+        sol = polr(y, X)
+        fp = sol.fitted_probs
+        assert fp.shape == (len(y), 3)
+        assert_allclose(fp.sum(axis=1), 1.0)
+
+    def test_predict_in_sample_matches_fitted(self, simple_data):
+        y, X = simple_data
+        sol = polr(y, X)
+        assert_allclose(sol.predict(X, type="probs"), sol.fitted_probs)
+        assert np.array_equal(sol.predict(X, type="class"), sol.predicted_class)
+
+    def test_predict_class_is_argmax(self, simple_data):
+        y, X = simple_data
+        sol = polr(y, X)
+        assert np.array_equal(sol.predict(X, type="class"),
+                              np.argmax(sol.predict(X, type="probs"), axis=1))
+
+    def test_predict_bad_type_raises(self, simple_data):
+        y, X = simple_data
+        sol = polr(y, X)
+        with pytest.raises(ValidationError, match="type must be"):
+            sol.predict(X, type="nope")
+
+    def test_predict_wrong_columns_raises(self, simple_data):
+        y, X = simple_data
+        sol = polr(y, X)
+        with pytest.raises(ValidationError, match="columns"):
+            sol.predict(X[:, :1])
+
+
 class TestThresholdTransform:
     """Tests for raw <-> threshold transforms."""
 

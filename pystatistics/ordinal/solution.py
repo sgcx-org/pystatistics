@@ -16,7 +16,10 @@ from numpy.typing import NDArray
 from scipy.stats import norm
 
 from pystatistics.core.result import Result, SolutionReprMixin
+from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.validation import check_array, check_2d, check_finite
 from pystatistics.ordinal._common import OrdinalParams
+from pystatistics.ordinal._likelihood import category_probs
 
 
 @dataclass
@@ -89,6 +92,65 @@ class OrdinalSolution(SolutionReprMixin):
             Array of shape (K-1,) with ordered threshold values.
         """
         return self._result.params.thresholds
+
+    # -- Prediction -----------------------------------------------------------
+
+    @property
+    def fitted_probs(self) -> NDArray[np.floating[Any]]:
+        """In-sample fitted category probabilities, shape (n, K).
+
+        The same quantity MASS::polr's ``predict(type='probs')`` returns on the
+        training data. Row i gives P(Y=0|x_i), ..., P(Y=K-1|x_i) and sums to 1.
+        """
+        fp = self._result.params.fitted_probs
+        if fp is None:
+            raise ValueError(
+                "fitted_probs is unavailable (this solution was constructed "
+                "without them). Use predict(X, type='probs') with the design.")
+        return fp
+
+    @property
+    def predicted_class(self) -> NDArray[np.intp]:
+        """In-sample predicted (most probable) class code per observation, shape
+        (n,) — the argmax of ``fitted_probs``, matching predict(type='class')."""
+        return np.argmax(self.fitted_probs, axis=1)
+
+    def predict(self, X: NDArray[np.floating[Any]], *,
+                type: str = "class") -> NDArray[Any]:
+        """Predict for a design matrix, matching R's predict.polr.
+
+        Args:
+            X: Design matrix of shape (n, p) with NO intercept column (the
+                ordered thresholds are the intercepts) — the same layout the
+                model was fit on. p must match the fitted number of predictors.
+            type: 'class' (default) returns the most probable class code per row
+                (shape (n,)); 'probs' returns the (n, K) category-probability
+                matrix (each row sums to 1).
+
+        Returns:
+            Class codes (type='class') or a probability matrix (type='probs').
+
+        Raises:
+            ValidationError: If type is not 'class'/'probs' or X's column count
+                does not match the fitted model.
+        """
+        if type not in ("class", "probs"):
+            raise ValidationError(
+                f"type must be 'class' or 'probs', got {type!r}")
+        X_arr = check_array(X, "X")
+        check_finite(X_arr, "X")
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        check_2d(X_arr, "X")
+        p = len(self._result.params.coefficients)
+        if X_arr.shape[1] != p:
+            raise ValidationError(
+                f"X has {X_arr.shape[1]} columns but the model was fit with {p} "
+                f"predictors")
+        probs = category_probs(
+            X_arr, self._result.params.coefficients,
+            self._result.params.thresholds, self._result.params.link)
+        return probs if type == "probs" else np.argmax(probs, axis=1)
 
     # -- Variance-covariance and standard errors ------------------------------
 

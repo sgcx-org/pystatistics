@@ -65,3 +65,8 @@ class OrdinalParams:
     n_iter: int
     converged: bool
     link: str
+    # In-sample fitted category probabilities, shape (n, K). Computed at fit time
+    # from the fitted coefficients+thresholds so OrdinalSolution can expose
+    # fitted_probs / predicted_class (parity with MultinomialSolution) without
+    # retaining the training design. Optional so older construction paths still work.
+    fitted_probs: NDArray[np.floating[Any]] | None = None

@@ -39,6 +39,7 @@ from pystatistics.regression.families import LogitLink, ProbitLink, Link
 from pystatistics.ordinal._common import OrdinalParams
 from pystatistics.ordinal._likelihood import (
     CLogLogLink,
+    category_probs,
     cumulative_negloglik,
     cumulative_gradient,
     raw_to_thresholds,
@@ -723,6 +724,13 @@ def polr(
     jac = raw_to_natural_jacobian(raw_thresh, vcov_raw.shape[0])
     vcov = jac @ vcov_raw @ jac.T
 
+    # In-sample fitted category probabilities (n, K), so OrdinalSolution can expose
+    # fitted_probs / predicted_class — the same quantity MASS::polr's
+    # predict(type='probs') returns on the training data.
+    X_host_probs = (X_arr if X_arr is not None
+                    else X_for_gpu.detach().cpu().numpy().astype(np.float64))
+    fitted_probs = category_probs(X_host_probs, beta, alpha, link.lower())
+
     # Build result payload
     params = OrdinalParams(
         coefficients=beta,
@@ -737,6 +745,7 @@ def polr(
         n_iter=n_iter,
         converged=converged,
         link=link.lower(),
+        fitted_probs=fitted_probs,
     )
 
     result = Result(
