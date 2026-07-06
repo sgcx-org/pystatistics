@@ -1,5 +1,31 @@
 # Changelog
 
+## 4.6.9
+
+Fixes a standard-error accuracy bug on the GPU (float32) path of ordinal (`polr`)
+and multinomial (`multinom`) regression, and makes both models fail clearly on
+separated or collinear data.
+
+- **GPU standard errors are now computed in double precision.** `polr` and
+  `multinom` fit the coefficient covariance by inverting the model information
+  matrix. On the `backend='gpu'` (float32) path that inversion was done in single
+  precision, which lost accuracy on ill-conditioned (near-collinear) designs — in
+  the worst case returning a negative variance while still reporting a converged
+  fit. The information matrix is now inverted in double precision on every
+  backend, so GPU standard errors match the CPU result. The float32 GPU fit
+  itself is unchanged, so large-sample fits stay fast (tens of times faster than
+  the CPU on a modern GPU at n = 100,000).
+- **`multinom` now raises on separation instead of returning meaningless standard
+  errors.** When a class is perfectly predicted (complete or quasi separation) or
+  predictors are collinear, the coefficient covariance is not defined. `multinom`
+  now raises `NotPositiveDefiniteError` in this case — as `polr` already did —
+  rather than returning a covariance with negative variances and a converged flag.
+- **Clearer error for an unsupported `polr` link.** `polr(link=...)` with a link
+  it does not implement now reports `Unknown link` (previously `Unknown method`,
+  which did not match the `link=` argument) and states that it does not silently
+  fall back to another link.
+- **`multinom` results gain a `.warnings` attribute**, matching `polr`.
+
 ## 4.6.8
 
 Bootstrap confidence intervals now match R's `boot::boot.ci` numerically, and the

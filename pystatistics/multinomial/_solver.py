@@ -17,8 +17,11 @@ from typing import Any
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from scipy.optimize import minimize, approx_fprime
+from scipy.linalg import cho_factor, cho_solve
 
-from pystatistics.core.exceptions import ConvergenceError, ValidationError
+from pystatistics.core.exceptions import (
+    ConvergenceError, ValidationError, NotPositiveDefiniteError,
+)
 from pystatistics.core.compute.backend import (
     resolve_backend, valid_backends, unknown_backend_message,
     FP64_REQUIRES_CUDA_MSG,
@@ -224,12 +227,22 @@ def _fit_multinom_gpu(
             threshold=tol,
         )
 
-    # Analytical Hessian on GPU: X' · W · X per class-pair block.
-    # This replaces the CPU path's 300-iteration numerical Hessian
-    # (each iteration costing ~10 ms for n=50k), which dominated total
-    # fit time — ~3 seconds of vcov on the CPU side vs the 18 ms the
-    # GPU optimizer itself was spending.
-    vcov = like.compute_vcov(params_flat)
+    # CF-1: the GPU likelihood used to form the X'WX Hessian AND invert it in the
+    # working dtype. On the fp32 path that single-precision Gram inverse SILENTLY
+    # lost precision on ill-conditioned designs — returning wrong and even
+    # NEGATIVE variances (with converged=True) at cond(X) >= ~1e3, exactly where
+    # the fp64/CPU path is correct or correctly refuses. The fix computes the
+    # variance-covariance in float64 on the HOST: the coefficients came from the
+    # fast fp32 GPU fit, but the closed-form softmax Hessian is a single numpy
+    # pass (O(n·p²·J²)) — measured FASTER than re-uploading X to build it on the
+    # GPU in fp64 (that costs a second H2D transfer), so the host path is both
+    # correct and the quicker of the two for this surface. The inversion +
+    # positive-definiteness gate then runs in fp64 on the host. The fast fp32 fit
+    # above is unchanged. Mirrors the regression-4.3.2 CF-1 fix.
+    X_host = (X.detach().cpu().numpy().astype(np.float64)
+              if hasattr(X, "detach") else np.asarray(X, dtype=np.float64))
+    hessian = _multinom_hessian(params_flat, X_host, n_classes)
+    vcov = _invert_information_pd(hessian)
 
     return params_flat, vcov, n_iter, converged, like
 
@@ -324,11 +337,22 @@ def _compute_vcov(
     ``MultinomialGPULikelihood.compute_vcov`` formula that the GPU
     backend uses.
     """
+    hessian = _multinom_hessian(params_flat, X, n_classes)
+    return _invert_information_pd(hessian)
+
+
+def _multinom_hessian(
+    params_flat: NDArray[np.floating[Any]],
+    X: NDArray[np.floating[Any]],
+    n_classes: int,
+) -> NDArray[np.floating[Any]]:
+    """Assemble the softmax observed-information Hessian in numpy float64.
+
+    The host counterpart of ``MultinomialGPULikelihood.compute_hessian``; used by
+    the CPU path and by the GPU path on devices without native fp64 (MPS).
+    """
     n, p = X.shape
     n_nonref = n_classes - 1
-
-    # Predicted probabilities for non-reference classes. We recompute
-    # from params to avoid coupling with the optimizer's cached state.
     probs = compute_probs(params_flat, X, n_classes)[:, :n_nonref]   # (n, J-1)
 
     n_params_h = n_nonref * p
@@ -336,27 +360,45 @@ def _compute_vcov(
     for j in range(n_nonref):
         p_j = probs[:, j]
         for k in range(j, n_nonref):
-            if j == k:
-                w = p_j * (1.0 - p_j)
-            else:
-                w = -p_j * probs[:, k]
-            # (p, p) = (X * w[:, None])' · X
+            w = p_j * (1.0 - p_j) if j == k else -p_j * probs[:, k]
             block = (X * w[:, np.newaxis]).T @ X
             rs = slice(j * p, (j + 1) * p)
             cs = slice(k * p, (k + 1) * p)
             hessian[rs, cs] = block
             if k != j:
                 hessian[cs, rs] = block.T
+    return hessian
 
-    # Invert to get vcov. The Hessian of the multinomial NLL at the
-    # MLE is positive-definite for well-identified models; fall back
-    # to the pseudoinverse on numerical-singular edge cases.
+
+def _invert_information_pd(
+    hessian: NDArray[np.floating[Any]],
+) -> NDArray[np.floating[Any]]:
+    """Invert the observed information to a variance-covariance matrix, with a
+    positive-definiteness gate.
+
+    The Hessian of the multinomial NLL is positive definite for a well-identified
+    model. If it is NOT — complete/quasi separation (a class perfectly predicted)
+    or collinear predictors — the vcov is not identified: its inverse yields
+    meaningless, even NEGATIVE, variances. Fail LOUD rather than return a
+    pseudo-inverse that looks like a valid vcov (matching polr, which rejects a
+    non-PD observed information, and the library's fail-loud contract). This gate
+    is device-independent: it runs in float64 on the host for the CPU path and for
+    BOTH GPU precisions (the fp32 GPU path assembles its Hessian in fp64 — on
+    device where available, else on the host — precisely so this gate is trustworthy).
+    """
     try:
-        vcov = np.linalg.inv(hessian)
-    except np.linalg.LinAlgError:
-        vcov = np.linalg.pinv(hessian)
-
-    return vcov
+        chol = cho_factor(hessian, lower=True)
+    except np.linalg.LinAlgError as exc:
+        raise NotPositiveDefiniteError(
+            "Multinomial observed information is not positive definite — the "
+            "coefficient variance-covariance is not identified. This is the "
+            "signature of complete or quasi separation (a class perfectly "
+            "predicted by the design) or collinear predictors; the standard "
+            "errors would be meaningless. Check for a separable class or "
+            "collinear columns in X.",
+            matrix_name="multinomial observed information",
+        ) from exc
+    return cho_solve(chol, np.eye(hessian.shape[0]))
 
 
 def multinom(

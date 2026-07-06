@@ -129,6 +129,12 @@ class MultinomialSolution(SolutionReprMixin):
         return self._conf_level
 
     @property
+    def warnings(self) -> tuple[str, ...]:
+        """Non-fatal warnings emitted during the fit (parity with
+        ``OrdinalSolution.warnings``)."""
+        return self._result.warnings
+
+    @property
     def conf_int(self) -> NDArray[np.floating[Any]]:
         """Wald confidence intervals, shape (J-1, p, 2).
 

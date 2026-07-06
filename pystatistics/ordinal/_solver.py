@@ -103,7 +103,9 @@ def _resolve_method_link(method: str) -> Link:
     if cls is None:
         valid = ', '.join(sorted(_LINK_MAP.keys()))
         raise ValidationError(
-            f"Unknown method: {method!r}. Valid methods: {valid}"
+            f"Unknown link: {method!r}. Valid links: {valid}. (Note: MASS::polr's "
+            f"'loglog' and 'cauchit' links are not supported; no silent "
+            f"substitution.)"
         )
     return cls()
 
@@ -678,7 +680,46 @@ def polr(
     # threshold SEs and the MICE posterior draw over [alpha, beta] are on the
     # same scale as MASS::polr.
     if gpu_like is not None:
-        vcov_raw = gpu_like.compute_vcov(opt_params)
+        # CF-1: the GPU autograd Hessian used to be formed AND inverted in the
+        # working dtype. On the fp32 path that single-precision inverse SILENTLY
+        # lost precision on ill-conditioned designs — returning wrong and even
+        # NEGATIVE threshold/coefficient variances (with converged=True) at
+        # cond(X) >= ~1e3, exactly where the fp64/CPU path is correct or correctly
+        # refuses. The fix computes the observed information in float64: the
+        # Hessian is formed on the GPU in fp64 where the device supports it (CUDA —
+        # keeping the large-n speedup) via the autograd path, else on the host
+        # (MPS has no fp64) via the same finite-difference the CPU path uses; the
+        # small inversion + positive-definiteness gate then runs once, in fp64, on
+        # the host. The fast fp32 fit is unaffected. Mirrors regression-4.3.2.
+        if gpu_device_type == "cuda":
+            from pystatistics.ordinal.backends.gpu_likelihood import (
+                PolrGPULikelihood,
+            )
+            X_gpu_in = X_for_gpu if X_arr is None else X_arr
+            like64 = PolrGPULikelihood(
+                X_gpu_in, y_codes, n_levels, link_name=link_fn.name,
+                device=gpu_device_type, use_fp64=True,
+            )
+            hess_h = like64.compute_hessian(opt_params)
+        else:
+            X_host = (X_arr if X_arr is not None
+                      else X_for_gpu.detach().cpu().numpy().astype(np.float64))
+            grad_h = cumulative_gradient(
+                opt_params, y_codes, X_host, link_fn, n_levels,
+            )
+            hess_h = observed_information(
+                opt_params, y_codes, X_host, link_fn, n_levels, grad0=grad_h,
+            )
+        try:
+            chol_h = cho_factor(hess_h, lower=True)
+        except np.linalg.LinAlgError as exc:
+            raise ConvergenceError(
+                "polr observed information is not positive definite (likely data "
+                "separation) on the GPU path; the coefficient/threshold variance-"
+                "covariance is not identified.",
+                iterations=n_iter, reason="non-PD observed information",
+            ) from exc
+        vcov_raw = cho_solve(chol_h, np.eye(len(opt_params)))
     jac = raw_to_natural_jacobian(raw_thresh, vcov_raw.shape[0])
     vcov = jac @ vcov_raw @ jac.T
 
