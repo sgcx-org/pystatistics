@@ -31,7 +31,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.regression.families import Link
+from pystatistics.regression.families import Link, LogitLink, ProbitLink
 
 
 # -- Complementary log-log link (not in families.py) ----------------------
@@ -349,3 +349,45 @@ def cumulative_gradient(
         grad_beta = grad_beta + ridge * beta
 
     return np.concatenate([grad_raw, grad_beta])
+
+
+# -- Fitted / predicted category probabilities ----------------------------
+
+_LINK_BY_NAME: dict[str, type[Link]] = {
+    "logistic": LogitLink, "logit": LogitLink,
+    "probit": ProbitLink, "cloglog": CLogLogLink,
+}
+
+
+def category_probs(
+    X: NDArray[np.floating[Any]],
+    coefficients: NDArray[np.floating[Any]],
+    thresholds: NDArray[np.floating[Any]],
+    link_name: str,
+) -> NDArray[np.floating[Any]]:
+    """Predicted category probabilities P(Y=j|x), shape (n, K).
+
+    The proportional-odds prediction rule: with natural thresholds ``alpha`` and
+    slopes ``beta``, P(Y<=j|x) = g^{-1}(alpha_j - x'beta) and the category
+    probabilities are the successive differences (padding 0 on the left, 1 on the
+    right). This is the same computation MASS::polr's ``predict(type='probs')``
+    performs; ``predict(type='class')`` is the per-row argmax.
+
+    Args:
+        X: Design matrix (n, p) with NO intercept column (thresholds are the
+            intercepts), matching the design the model was fit on.
+        coefficients: Slope coefficients beta, length p.
+        thresholds: Natural ordered thresholds alpha, length K-1.
+        link_name: 'logistic'/'logit', 'probit', or 'cloglog'.
+
+    Returns:
+        (n, K) probability matrix; each row sums to 1.
+    """
+    key = link_name.lower()
+    if key not in _LINK_BY_NAME:
+        valid = ", ".join(sorted(set(_LINK_BY_NAME) - {"logit"}))
+        raise ValueError(f"Unknown link: {link_name!r}. Valid links: {valid}.")
+    link = _LINK_BY_NAME[key]()
+    alpha = np.asarray(thresholds, dtype=np.float64)
+    eta = np.asarray(X, dtype=np.float64) @ np.asarray(coefficients, dtype=np.float64)
+    return _cumulative_probs_vectorized(alpha, eta, link, len(alpha) + 1)

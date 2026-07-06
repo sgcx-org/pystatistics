@@ -15,7 +15,10 @@ from numpy.typing import NDArray
 from scipy import stats
 
 from pystatistics.core.result import Result, SolutionReprMixin
+from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.validation import check_array, check_2d, check_finite
 from pystatistics.multinomial._common import MultinomialParams
+from pystatistics.multinomial._likelihood import compute_probs
 
 
 class MultinomialSolution(SolutionReprMixin):
@@ -166,6 +169,44 @@ class MultinomialSolution(SolutionReprMixin):
         the highest fitted probability (argmax).
         """
         return np.argmax(self._result.params.fitted_probs, axis=1)
+
+    def predict(self, X: NDArray[np.floating[Any]], *,
+                type: str = "class") -> NDArray[Any]:
+        """Predict for a design matrix, matching R's predict.multinom.
+
+        Args:
+            X: Design matrix of shape (n, p) — INCLUDING the intercept column if
+                the model was fit with one (the caller supplies the intercept for
+                multinom, so the prediction design must match the fitted design).
+                p must equal the fitted number of predictors.
+            type: 'class' (default) returns the most probable class code per row
+                (shape (n,)); 'probs' returns the (n, J) class-probability matrix
+                (each row sums to 1, columns in code order).
+
+        Returns:
+            Class codes (type='class') or a probability matrix (type='probs').
+
+        Raises:
+            ValidationError: If type is invalid or X's column count does not match
+                the fitted model.
+        """
+        if type not in ("class", "probs"):
+            raise ValidationError(
+                f"type must be 'class' or 'probs', got {type!r}")
+        X_arr = check_array(X, "X")
+        check_finite(X_arr, "X")
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(-1, 1)
+        check_2d(X_arr, "X")
+        params = self._result.params
+        p = params.coefficient_matrix.shape[1]
+        if X_arr.shape[1] != p:
+            raise ValidationError(
+                f"X has {X_arr.shape[1]} columns but the model was fit with {p} "
+                f"predictors (include the intercept column if the model has one)")
+        probs = compute_probs(
+            params.coefficient_matrix.ravel(), X_arr, params.n_classes)
+        return probs if type == "probs" else np.argmax(probs, axis=1)
 
     # -- Model fit statistics --
 

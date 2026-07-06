@@ -371,6 +371,13 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.10 — `predict()` for ordinal & multinomial regression
+
+`polr` and `multinom` results now have a `predict(X, type="class"|"probs")` method
+matching R's `predict.polr` / `predict.multinom` — the most-probable class or the
+full class-probability matrix, for the training design or new data. `polr` results
+also gain `fitted_probs` and `predicted_class` for parity with `multinom`.
+
 ### 4.6.9 — accurate GPU standard errors for ordinal & multinomial regression
 
 `polr` and `multinom` now compute standard errors in double precision on the GPU,
