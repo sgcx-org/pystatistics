@@ -718,6 +718,16 @@ def auto_arima(
     if period < 1:
         raise ValidationError(f"period: must be >= 1, got {period}")
 
+    # Fail loud on an explicit GPU backend for a CPU-only method, up front —
+    # before the search. Deferring to the per-candidate arima() call would not
+    # work: _fit_single swallows ValidationError into (None, inf), so the clear
+    # "no GPU path" message would be lost and the search would instead raise a
+    # generic "no model converged" (A6/A7 Fidelity).
+    from pystatistics.timeseries._arima_fit import (
+        _reject_gpu_backend_without_whittle,
+    )
+    _reject_gpu_backend_without_whittle(backend, method)
+
     # --- Determine differencing order ---
     d = _determine_d(arr, max_d)
 

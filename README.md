@@ -371,6 +371,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.12 — `arima` GPU requests fail loud instead of running on the CPU
+
+`arima` and `auto_arima` fit on the CPU for their exact ML / CSS methods. Asking
+for `backend='gpu'` there now raises a clear error pointing to the paths that do
+run on the GPU — `method='Whittle'` with `backend='gpu'` for long series, or
+`arima_batch(...)` for many series at once — rather than silently computing on the
+CPU. The GPU Whittle and `arima_batch` paths and all CPU fits are unchanged.
+
 ### 4.6.11 — exact R-matching for hypothesis, descriptive & ANOVA edge cases
 
 `wilcox_test` confidence intervals now match R's `wilcox.test` (exact

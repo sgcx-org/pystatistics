@@ -1,5 +1,21 @@
 # Changelog
 
+## 4.6.12
+
+Makes `arima` and `auto_arima` reject an unsupported GPU request instead of
+silently running on the CPU. Numerical results are unchanged.
+
+- **`arima` and `auto_arima` now raise on a GPU backend they cannot honor.**
+  Their exact maximum-likelihood and conditional-sum-of-squares fits
+  (`method='CSS-ML'`, `'ML'`, `'CSS'`) run only on the CPU; passing
+  `backend='gpu'` (or `'gpu_fp64'`, `'mps'`, `'cuda'`) previously computed on the
+  CPU anyway and reported the result as a CPU fit, quietly ignoring the request.
+  Such a call now raises a clear error naming the paths that do run on the GPU:
+  `method='Whittle'` with `backend='gpu'` (the frequency-domain fit for long
+  series) or `arima_batch(...)` for many series at once. The GPU Whittle and
+  `arima_batch` paths are unchanged, and `backend='cpu'`, `backend='auto'`, and the
+  default all produce exactly the same fits as before.
+
 ## 4.6.11
 
 Corrects several confidence-interval, warning, and input-validation behaviours in

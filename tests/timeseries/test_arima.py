@@ -794,6 +794,48 @@ class TestArimaWhittleGPU:
         assert r.sigma2 > 0
 
 
+class TestArimaGpuBackendFailsLoud:
+    """A6/A7 Fidelity: an explicit GPU backend on the exact-ML/CSS path
+    (which has NO GPU kernel) must fail loud, not silently compute on the
+    CPU and report ``backend_name='cpu'``. Only ``method='Whittle'`` has a
+    GPU implementation. Regression guard for finding A7-1."""
+
+    @pytest.mark.parametrize("bad_backend", ["gpu", "gpu_fp64", "mps", "cuda"])
+    @pytest.mark.parametrize("method", ["CSS-ML", "ML", "CSS"])
+    def test_arima_gpu_backend_raises_on_non_whittle(self, bad_backend, method):
+        y = _ar2_ma1_series(200)
+        with pytest.raises(ValidationError, match="GPU backend"):
+            arima(y, order=(1, 0, 0), method=method, backend=bad_backend)
+
+    @pytest.mark.parametrize("bad_backend", ["gpu", "gpu_fp64", "mps", "cuda"])
+    def test_auto_arima_gpu_backend_raises_on_non_whittle(self, bad_backend):
+        y = _ar2_ma1_series(200)
+        with pytest.raises(ValidationError, match="GPU backend"):
+            auto_arima(y, max_p=2, max_q=2, method="CSS-ML",
+                       backend=bad_backend)
+
+    def test_cpu_backend_unchanged_bit_identical(self):
+        """backend='cpu'/None/'auto'(no GPU) must be byte-for-byte identical
+        to the pre-fix default path — the guard only rejects GPU requests."""
+        y = _ar2_ma1_series(300)
+        r_none = arima(y, order=(2, 0, 1))
+        r_cpu = arima(y, order=(2, 0, 1), backend="cpu")
+        np.testing.assert_array_equal(r_none.ar, r_cpu.ar)
+        np.testing.assert_array_equal(r_none.ma, r_cpu.ma)
+        assert r_none.log_likelihood == r_cpu.log_likelihood
+        assert r_none.sigma2 == r_cpu.sigma2
+
+    def test_auto_backend_still_runs_on_cpu(self, monkeypatch):
+        """backend='auto' is a disclosed default-selection, not an explicit
+        GPU request: with no GPU it resolves to CPU and must NOT raise."""
+        y = _ar2_ma1_series(200)
+        from pystatistics.core.compute import device as dev_mod
+        monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
+        r = arima(y, order=(1, 0, 0), method="CSS-ML", backend="auto")
+        assert r.converged
+        assert r.backend_name == "cpu"
+
+
 # =====================================================================
 # Batched ARMA fit (arima_batch) — 1.9.0
 # =====================================================================

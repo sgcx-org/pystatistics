@@ -151,6 +151,33 @@ def _validate_arima_inputs(
     return arr
 
 
+# Public ``backend=`` tokens that request GPU execution. Only ``method='Whittle'``
+# has a GPU implementation (``backends/whittle_gpu.py``); the exact-ML / CSS-ML /
+# CSS path is CPU-only. An explicit GPU request on any other method must fail loud
+# rather than compute on the CPU and report ``backend_name='cpu'`` — silently
+# honoring a different backend than asked for violates the Fidelity guarantee
+# (CONVENTIONS.md A6/A7). ``'cpu'``/``None`` pass through; ``'auto'`` is a disclosed
+# default-selection (it resolves to CPU here, reported via ``backend_name``), not an
+# explicit request, so it is not rejected.
+_GPU_BACKEND_TOKENS = frozenset({"gpu", "gpu_fp64", "mps", "cuda"})
+
+
+def _reject_gpu_backend_without_whittle(backend: str | None, method: str) -> None:
+    """Fail loud on an explicit GPU ``backend=`` for a method with no GPU path.
+
+    The exact-ML/CSS ARIMA path has no GPU kernel; only ``method='Whittle'`` does.
+    Honoring ``backend='gpu'`` by silently running on the CPU would be an A6/A7
+    Fidelity violation, so raise with the real remedies instead.
+    """
+    if backend in _GPU_BACKEND_TOKENS and method != "Whittle":
+        raise ValidationError(
+            f"arima()'s exact-ML/CSS path has no GPU backend "
+            f"(backend={backend!r}, method={method!r}). Use method='Whittle' with "
+            f"backend='gpu' for the frequency-domain GPU path, arima_batch(...) for "
+            f"batched GPU fits, or backend='cpu' (the default reference path)."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Core optimization
 # ---------------------------------------------------------------------------
@@ -515,6 +542,7 @@ def arima(
     starting values only.
     """
     arr = _validate_arima_inputs(y, order, seasonal, include_mean, method)
+    _reject_gpu_backend_without_whittle(backend, method)
     n_obs = len(arr)
     p, d, q = order
 
