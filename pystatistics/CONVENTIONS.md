@@ -435,6 +435,32 @@ These are breaking interface changes. They ship together as **4.0**, the
 consistency release. No deprecation shim — the old names/flags are removed.
 Statistical results are unchanged.
 
+### Versioning policy — what a major means, and when the next one happens
+
+A **major** version means exactly one thing: **a breaking change to the public
+API**. Size is irrelevant — semver majors are cheap, not ceremonial. Do not treat
+"major" as "big coordinated event"; that framing is what lets deprecations rot and
+breaking debt pile up until a mega-release (the pain 4.0 was paying down).
+
+**The next major is `5.0` — the pre-launch consistency sweep.** It is cut **once
+`pystatistics` is feature-complete and about to launch publicly**, not for any
+single deprecation. Rationale: breaking changes are *free* before there are real
+users and downstream consumers pinning us, and expensive forever after — so the one
+deliberate, comprehensive break happens at the last free moment. Everything in the
+ROADMAP "Deprecations & scheduled removals" table (currently
+`backend='cpu-reference'`) is removed then, along with any other v1-regret API
+smells a final consistency pass surfaces. Keep *hunting* for those and parking them
+in that table so 5.0 is one clean cut, not the first of several.
+
+**Sequencing (locked, 2026-07-08):** `pystatistics` is finished *completely* — the
+whole-library close-out plus the 5.0 pre-launch sweep — **before** any downstream
+`pystats*` vertical (PyStatsBio, etc.) is validated. Downstream packages must not be
+validated against an API that will still change under them; they pin and validate
+against the settled post-5.0 surface.
+
+**After launch:** real semver — a major whenever something breaks, however small,
+batched only for convenience, never deferred for ceremony.
+
 ---
 
 ## Amendments

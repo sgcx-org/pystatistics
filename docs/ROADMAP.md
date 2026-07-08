@@ -205,6 +205,11 @@ release, and every such shim MUST appear here with its removal version so
 "deprecated" does not silently become "eternal". The major-release checklist
 (`.release/CHECKLIST.md`) requires clearing everything scheduled for that major.
 
+**This table is the `5.0` punch-list.** Per the `CONVENTIONS.md` versioning
+policy, `5.0` is the single pre-launch consistency sweep cut once the library is
+feature-complete — so keep *adding* v1-regret API smells here as they are noticed;
+they all die together in one clean break, not in a trickle of small majors.
+
 | Deprecated | Replacement | Deprecated in | **Remove in** | Notes |
 |---|---|---|---|---|
 | `mvnmle.mlest(backend='cpu-reference')` | `mvnmle.mlest(solver='reference')` | 4.6.13 | **5.0** | `backend=` is reserved for device+precision; the reference numpy inverse-Cholesky path is a `solver` (numerical-routine) choice. The alias warns and forwards; delete the alias branch in `mvnmle/solvers.mlest` and drop `'cpu-reference'` from `BackendChoice`. |
