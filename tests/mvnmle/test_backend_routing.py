@@ -54,27 +54,36 @@ class TestDefaultPath:
 
 
 class TestReferencePath:
-    """``backend='cpu-reference'`` forces the numpy inverse-Cholesky path."""
+    """``solver='reference'`` selects the numpy inverse-Cholesky path;
+    ``backend='cpu-reference'`` is the deprecated alias."""
 
-    def test_cpu_reference_uses_numpy_inverse_cholesky(self):
-        result = mlest(datasets.apple, backend='cpu-reference')
+    def test_reference_solver_uses_numpy_inverse_cholesky(self):
+        result = mlest(datasets.apple, solver='reference')
         assert 'cpu' in result.backend_name
         assert _info(result)['parameterization'] == 'inverse_cholesky'
 
-    def test_cpu_reference_needs_no_torch(self, monkeypatch):
-        """The reference path must work with PyTorch absent and stay silent
-        (it is an explicit, intentional choice — not a fallback)."""
+    def test_reference_solver_needs_no_torch(self, monkeypatch):
+        """The canonical reference path (solver='reference') must work with
+        PyTorch absent and stay silent (it is an explicit, intentional choice —
+        not a fallback)."""
         monkeypatch.setitem(sys.modules, 'torch', None)  # `import torch` -> ImportError
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter('error')  # any warning fails the test
+            result = mlest(datasets.apple, solver='reference')
+        assert _info(result)['parameterization'] == 'inverse_cholesky'
+
+    def test_deprecated_cpu_reference_alias_warns_but_works(self):
+        """backend='cpu-reference' still selects the reference path but emits a
+        DeprecationWarning redirecting to solver='reference'."""
+        with pytest.warns(DeprecationWarning, match="solver='reference'"):
             result = mlest(datasets.apple, backend='cpu-reference')
         assert _info(result)['parameterization'] == 'inverse_cholesky'
 
     @pytest.mark.parametrize('algorithm', ['em', 'monotone'])
-    def test_cpu_reference_rejected_for_non_direct(self, algorithm):
+    def test_reference_solver_rejected_for_non_direct(self, algorithm):
         with pytest.raises(ValueError, match="only valid with method='direct'"):
-            mlest(datasets.apple, backend='cpu-reference', method=algorithm)
+            mlest(datasets.apple, solver='reference', method=algorithm)
 
 
 class TestTorchFreeFallback:

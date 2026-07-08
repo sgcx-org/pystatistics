@@ -371,6 +371,14 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.6.13 — `mvnmle` fails loud on constant columns; reference-optimizer rename
+
+`mvnmle.mlest` now raises on a constant (zero-variance) column — which has no
+maximum-likelihood estimate — instead of returning a meaningless "converged" fit;
+pass `force=True` to obtain the degenerate result anyway. The R-exact reference
+optimizer is now selected with `solver='reference'` (the old `backend='cpu-reference'`
+still works but is deprecated). Normal fits are unchanged.
+
 ### 4.6.12 — `arima` GPU requests fail loud instead of running on the CPU
 
 `arima` and `auto_arima` fit on the CPU for their exact ML / CSS methods. Asking

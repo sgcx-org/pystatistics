@@ -67,16 +67,18 @@ def mlest(
           when PyTorch is installed; otherwise falls back (with a warning) to
           the numpy inverse-Cholesky reference. Both match R; the PyTorch path
           is substantially faster.
-        - 'cpu-reference': force the numpy inverse-Cholesky reference. This is
-          the R-exact validation anchor and the only direct path that needs no
-          PyTorch. Valid only with ``method='direct'``.
         - 'gpu': require a GPU (CUDA or MPS), float32; raises if none available.
         - 'gpu_fp64': require CUDA, float64 (raises on MPS, which has no
           float64) — CPU-matching precision on the GPU.
         - 'auto': prefer CUDA (float32) when present, else the fast CPU path.
+        - 'cpu-reference': DEPRECATED alias for ``solver='reference'`` (removed
+          in a future major release). It overloaded ``backend=``, which encodes
+          only device+precision; the reference routine is a ``solver`` choice.
     solver : str or None
-        Numerical optimizer for the direct method. If None, auto-selected
-        by backend. Ignored for EM.
+        Numerical routine for the direct method. If None, auto-selected by
+        backend. ``'reference'`` selects the R-exact numpy inverse-Cholesky
+        reference (no PyTorch needed; valid only with ``method='direct'``); any
+        other value is passed as the scipy optimizer method. Ignored for EM.
     tol : float or None
         Convergence tolerance. If None, uses algorithm-appropriate default:
         direct = 1e-5 (gradient tolerance), em = 1e-4 (parameter change).
@@ -113,14 +115,33 @@ def mlest(
     if backend is None:
         backend = 'cpu'
 
-    # The numpy inverse-Cholesky reference is a direct-optimizer concept; it has
-    # no meaning for EM or the closed-form monotone solver. Fail loud (Rule 1)
+    # The R-exact numpy inverse-Cholesky reference is selected canonically by
+    # ``solver='reference'`` (a numerical-routine choice, per CONVENTIONS).
+    # ``backend='cpu-reference'`` is the DEPRECATED alias — it overloaded the
+    # ``backend=`` axis, which the constitution reserves for device+precision.
+    if backend == 'cpu-reference':
+        warnings.warn(
+            "backend='cpu-reference' is deprecated and will be removed in a "
+            "future major release. Use solver='reference' instead (with the "
+            "default 'cpu' backend): mlest(X, solver='reference').",
+            DeprecationWarning, stacklevel=2,
+        )
+        if solver is not None and solver != 'reference':
+            raise ValidationError(
+                f"backend='cpu-reference' conflicts with solver={solver!r}. "
+                f"Request the reference path with solver='reference' alone."
+            )
+        backend = 'cpu'
+        solver = 'reference'
+
+    # The numpy inverse-Cholesky reference is a direct-method routine; it has no
+    # meaning for EM or the closed-form monotone solver. Fail loud (Rule 1)
     # rather than silently ignoring the request.
-    if backend == 'cpu-reference' and method != 'direct':
+    if solver == 'reference' and method != 'direct':
         raise ValidationError(
-            "backend='cpu-reference' selects the numpy inverse-Cholesky "
-            "reference optimizer and is only valid with method='direct'. "
-            f"Got method={method!r}. Use backend='cpu' instead."
+            "solver='reference' selects the numpy inverse-Cholesky reference "
+            "and is only valid with method='direct'. "
+            f"Got method={method!r}."
         )
 
     # Get or build Design
@@ -132,6 +153,14 @@ def mlest(
     if verbose:
         print(f"MVN MLE: {design.n} observations, {design.p} variables, "
               f"{design.missing_rate:.1%} missing")
+
+    # Input-boundary guard (Rule 2): a (near-)constant column has zero variance,
+    # so no interior MLE exists. This degeneracy is invisible to the
+    # scale-invariant fitted-covariance guard below (which divides each variable
+    # by its own standard deviation), so it must be caught here on the raw input.
+    # Raises unless force=True, in which case the warning is applied to the fit.
+    from pystatistics.mvnmle._degeneracy import check_observed_variances
+    constant_col_warning = check_observed_variances(design.data, force=force)
 
     if method == 'em':
         result = _solve_em(design, backend, tol, max_iter, regularize, verbose)
@@ -151,6 +180,16 @@ def mlest(
     # covariance is singular and the optimizer's convergence flag is not
     # trustworthy, so the fitted covariance is inspected directly.
     result = _guard_degeneracy(result, force=force, tol=collinearity_tol)
+
+    # Apply the constant-column warning gathered at the input boundary (only
+    # reachable under force=True; otherwise check_observed_variances raised).
+    if constant_col_warning is not None:
+        from dataclasses import replace
+        result = replace(
+            result,
+            params=replace(result.params, converged=False),
+            warnings=result.warnings + (constant_col_warning,),
+        )
 
     if verbose:
         print(f"Converged: {result.params.converged} "
@@ -246,19 +285,29 @@ def _solve_monotone(design, verbose):
     )
 
 
-def _solve_direct(design, backend, method, tol, max_iter, verbose):
-    """Dispatch direct (BFGS) optimization."""
+def _solve_direct(design, backend, solver, tol, max_iter, verbose):
+    """Dispatch direct (BFGS) optimization.
+
+    ``solver='reference'`` selects the R-exact numpy inverse-Cholesky backend
+    (no PyTorch); any other ``solver`` value is the scipy optimizer method for
+    the resolved (device, precision) backend.
+    """
     effective_tol = tol if tol is not None else 1e-5
     effective_max_iter = max_iter if max_iter is not None else 100
 
-    backend_impl = _get_backend(backend, verbose=verbose)
+    if solver == 'reference':
+        backend_impl = CPUMLEBackend()
+        scipy_method = None
+    else:
+        backend_impl = _get_backend(backend, verbose=verbose)
+        scipy_method = solver
 
     if verbose:
         print(f"Backend: {backend_impl.name}")
 
     solve_kwargs = {'max_iter': effective_max_iter, 'tol': effective_tol}
-    if method is not None:
-        solve_kwargs['method'] = method
+    if scipy_method is not None:
+        solve_kwargs['method'] = scipy_method
 
     return backend_impl.solve(design, **solve_kwargs)
 

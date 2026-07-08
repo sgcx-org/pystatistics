@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.6.13
+
+Makes `mvnmle.mlest` fail loud on a constant (zero-variance) column instead of
+returning a meaningless fit, and renames the reference-optimizer selector for API
+consistency. Normal fits are unchanged.
+
+- **`mlest` now raises on a constant (zero-variance) column.** A column whose
+  observed values are all identical has zero variance, so the maximum-likelihood
+  estimate does not exist — the observed-data log-likelihood grows without bound as
+  the fitted variance approaches zero. Previously such input returned a "converged"
+  fit with an arbitrarily large, meaningless log-likelihood and no warning. `mlest`
+  now raises `SingularMatrixError` naming the offending column(s); passing
+  `force=True` returns the fit with `converged=False` and a warning instead — the
+  same contract already used for collinear columns. Columns with genuinely small
+  but non-zero variance are unaffected.
+- **The R-exact reference optimizer is now selected with `solver='reference'`.**
+  `mlest(X, solver='reference')` selects the numpy inverse-Cholesky reference path
+  (no PyTorch required). The previous spelling `backend='cpu-reference'` still works
+  but is deprecated and will be removed in a future major release: `backend=` is
+  reserved for the compute device and precision, so the choice of numerical routine
+  belongs on `solver=`. The reference fit itself is unchanged.
+
 ## 4.6.12
 
 Makes `arima` and `auto_arima` reject an unsupported GPU request instead of

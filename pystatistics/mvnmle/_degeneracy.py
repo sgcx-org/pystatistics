@@ -30,6 +30,18 @@ from pystatistics.core.exceptions import SingularMatrixError, ValidationError
 # 1e-5 sits in that gap; for two variables it corresponds to |corr| ~ 0.99999.
 DEFAULT_COLLINEARITY_TOL: float = 1e-5
 
+# A column whose observed values span no more than this fraction of their own
+# magnitude is treated as (near-)constant — zero variance, so its marginal MLE
+# is a degenerate point mass and no interior maximum-likelihood estimate exists.
+# This is deliberately a *relative-to-the-column's-own-scale* range test, NOT a
+# variance threshold: a genuinely small-variance column (e.g. values ~1e-6 that
+# really do vary) has range comparable to its magnitude and is full-rank, whereas
+# a constant column (all observed values identical) has range ~0 at any scale.
+# The scale-invariant correlation guard (below) cannot see this case — it
+# normalises each variable by its own standard deviation, dividing the zero
+# variance away — so it must be caught here, at the input boundary (Rule 2).
+CONSTANT_COLUMN_RANGE_RTOL: float = 1e-10
+
 
 def correlation_min_eigenvalue(sigma: NDArray[np.floating]) -> float:
     """Smallest eigenvalue of the correlation matrix implied by ``sigma``.
@@ -62,6 +74,72 @@ def correlation_min_eigenvalue(sigma: NDArray[np.floating]) -> float:
     corr = sigma / np.outer(d, d)
     eigvals = np.linalg.eigvalsh(corr)  # ascending order
     return float(eigvals[0])
+
+
+def _constant_columns(data: NDArray[np.floating]) -> list[int]:
+    """Indices of (near-)constant observed columns in an incomplete data matrix.
+
+    A column is constant when the range of its *observed* (non-NaN) values is at
+    most :data:`CONSTANT_COLUMN_RANGE_RTOL` times the column's magnitude — a
+    scale-relative test, so a legitimately small-variance column that really does
+    vary is not flagged, while a column of identical values is, at any scale. A
+    column with fewer than two observed values also carries no variance
+    information and is reported.
+    """
+    if data.ndim != 2:
+        raise ValidationError(f"data must be 2-D (n, p), got shape {data.shape}")
+    bad: list[int] = []
+    for j in range(data.shape[1]):
+        col = data[:, j]
+        obs = col[~np.isnan(col)]
+        if obs.size < 2:
+            bad.append(j)
+            continue
+        scale = max(float(np.max(np.abs(obs))), 1.0)
+        if float(np.ptp(obs)) <= CONSTANT_COLUMN_RANGE_RTOL * scale:
+            bad.append(j)
+    return bad
+
+
+def check_observed_variances(
+    data: NDArray[np.floating],
+    *,
+    force: bool = False,
+) -> str | None:
+    """Guard the input against (near-)constant columns before fitting.
+
+    A constant column has zero variance, so its marginal likelihood is a
+    degenerate point mass: the MLE does not exist (the observed-data
+    log-likelihood is unbounded as the fitted variance approaches zero), and a
+    naive fit returns ``converged=True`` with a meaningless, arbitrarily large
+    log-likelihood. Because this degeneracy is invisible to the scale-invariant
+    fitted-covariance guard (which divides each variable by its own standard
+    deviation), it is detected here, at the input boundary.
+
+    Returns ``None`` when every column varies. When one or more columns are
+    constant *and* ``force`` is True, returns a warning message (the caller marks
+    the fit not-converged and attaches it). Otherwise raises
+    :class:`SingularMatrixError`.
+    """
+    bad = _constant_columns(np.asarray(data))
+    if not bad:
+        return None
+
+    detail = (
+        f"column(s) {bad} have (near-)constant observed values (zero variance), "
+        f"so no interior maximum-likelihood estimate exists — the observed-data "
+        f"log-likelihood is unbounded as the fitted variance approaches zero and "
+        f"the reported fit is not a true optimum"
+    )
+    if force:
+        return (
+            f"Degenerate fit accepted under force=True: {detail}. "
+            f"Treat muhat and sigmahat with caution."
+        )
+    raise SingularMatrixError(
+        f"MVN MLE failed: {detail}. Remove the constant column(s) before "
+        f"fitting, or pass force=True to obtain the (non-converged) result anyway."
+    )
 
 
 def check_fitted_covariance(

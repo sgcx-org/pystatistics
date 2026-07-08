@@ -18,8 +18,18 @@ from pystatistics.mvnmle import mlest, datasets
 from pystatistics.mvnmle._degeneracy import (
     DEFAULT_COLLINEARITY_TOL,
     check_fitted_covariance,
+    check_observed_variances,
     correlation_min_eigenvalue,
 )
+
+
+def _constant_column_data(seed: int = 0, n: int = 400, const: float = 2.5) -> np.ndarray:
+    """Full-rank numeric columns plus one constant (zero-variance) column."""
+    rng = np.random.default_rng(seed)
+    X = rng.normal(size=(n, 3))
+    X = np.column_stack([X, np.full(n, const)])
+    X[::13, 0] = np.nan
+    return X
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -101,6 +111,78 @@ class TestCheckFittedCovariance:
         # A stricter tol flags it.
         with pytest.raises(SingularMatrixError):
             check_fitted_covariance(sigma, tol=1e-2)
+
+
+# ── check_observed_variances (constant-column input guard) ───────────
+
+class TestConstantColumnGuard:
+    """A (near-)constant column has zero variance and no interior MLE. The
+    scale-invariant fitted-covariance guard cannot see it (it divides each
+    variable by its own std, dividing the zero variance away), so it is caught
+    at the input boundary."""
+
+    def test_varying_data_returns_none(self):
+        rng = np.random.default_rng(0)
+        assert check_observed_variances(rng.normal(size=(200, 3))) is None
+
+    def test_constant_column_raises(self):
+        data = _constant_column_data()
+        with pytest.raises(SingularMatrixError, match="constant"):
+            check_observed_variances(data)
+
+    def test_constant_column_force_returns_warning(self):
+        data = _constant_column_data()
+        msg = check_observed_variances(data, force=True)
+        assert msg is not None and "force=True" in msg
+
+    def test_small_but_real_variance_not_flagged(self):
+        # A genuinely small-variance column that DOES vary is full-rank — its
+        # range is comparable to its own magnitude, unlike a constant column.
+        rng = np.random.default_rng(1)
+        X = np.column_stack([rng.normal(size=400),
+                             1e-6 * rng.normal(size=400) + 3.0])
+        assert check_observed_variances(X) is None
+
+    def test_scale_does_not_matter(self):
+        # Constant at any magnitude is still constant (range ~0 at any scale).
+        for c in (0.0, 1e-9, 2.5, 1e9):
+            data = _constant_column_data(const=c)
+            with pytest.raises(SingularMatrixError, match="constant"):
+                check_observed_variances(data)
+
+    def test_column_with_one_observed_value_flagged(self):
+        rng = np.random.default_rng(2)
+        X = rng.normal(size=(200, 3))
+        X[1:, 2] = np.nan  # only one observed value in column 2
+        with pytest.raises(SingularMatrixError):
+            check_observed_variances(X)
+
+
+class TestMlestConstantColumn:
+    """End-to-end: the default mlest(X) fails loud on a constant column instead
+    of returning converged=True with a meaningless log-likelihood."""
+
+    def test_default_call_raises(self):
+        with pytest.raises(SingularMatrixError, match="constant"):
+            mlest(_constant_column_data())
+
+    def test_force_returns_non_converged_with_warning(self):
+        res = mlest(_constant_column_data(), force=True)
+        assert res.converged is False
+        assert any("constant" in w for w in res._result.warnings)
+
+    def test_small_variance_column_not_refused(self):
+        # A genuinely small-variance column that varies must NOT be refused by
+        # the constant-column guard — mlest returns a fit rather than raising
+        # SingularMatrixError. (Its convergence flag may still reflect the
+        # conditioning the small variance induces; that is the optimizer's call,
+        # not the input guard's.)
+        rng = np.random.default_rng(3)
+        X = np.column_stack([rng.normal(size=500),
+                             1e-6 * rng.normal(size=500) + 1.0])
+        X[::11, 0] = np.nan
+        res = mlest(X)  # must not raise
+        assert res.muhat.shape == (2,)
 
 
 # ── Integration through mlest ────────────────────────────────────────
