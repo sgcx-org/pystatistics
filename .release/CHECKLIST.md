@@ -5,6 +5,14 @@
 > The CHANGELOG entry in particular is authorship work, not mechanical:
 > `UNRELEASED.md` is written in internal voice, `CHANGELOG.md` is public.
 
+## Major releases (X.0.0) only — clear scheduled removals FIRST
+
+Before cutting a major, open `docs/ROADMAP.md` → "Deprecations & scheduled
+removals" and **remove every alias/shim whose "Remove in" is this major** (delete
+the code path, drop it from any `Literal`/type, delete the deprecation warning and
+its test, and delete the table row). A deprecation that is never removed is just
+permanent cruft with a warning. Do this as its own commit before the release bump.
+
 ## Release flow
 
 1. **Sanity check:** `python .release/release.py --status`

@@ -195,6 +195,20 @@ GPU tolerances are defined centrally in the project README and enforced in test 
 
 ---
 
+## Deprecations & scheduled removals
+
+Deprecated API that is kept working (with a `DeprecationWarning`) only until a
+named future release, then **removed**. The default library policy is a hard
+rename with no shim (see `CONVENTIONS.md`, the 4.0 consistency release); a shim
+is used only when a rename would otherwise be a breaking change inside a patch
+release, and every such shim MUST appear here with its removal version so
+"deprecated" does not silently become "eternal". The major-release checklist
+(`.release/CHECKLIST.md`) requires clearing everything scheduled for that major.
+
+| Deprecated | Replacement | Deprecated in | **Remove in** | Notes |
+|---|---|---|---|---|
+| `mvnmle.mlest(backend='cpu-reference')` | `mvnmle.mlest(solver='reference')` | 4.6.13 | **5.0** | `backend=` is reserved for device+precision; the reference numpy inverse-Cholesky path is a `solver` (numerical-routine) choice. The alias warns and forwards; delete the alias branch in `mvnmle/solvers.mlest` and drop `'cpu-reference'` from `BackendChoice`. |
+
 ## Contributing
 
 This is a living document. As modules are built, their status moves from **Planned → In Progress → Completed**. Each module's scope may evolve based on implementation experience and user feedback.
