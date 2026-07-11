@@ -81,10 +81,14 @@ class PolrGPULikelihood:
             self._link_name = "probit"
         elif link_lc == "cloglog":
             self._link_name = "cloglog"
+        elif link_lc == "loglog":
+            self._link_name = "loglog"
+        elif link_lc == "cauchit":
+            self._link_name = "cauchit"
         else:
             raise RuntimeError(
                 f"GPU polr: unsupported link {link_name!r}. "
-                "Supported: logistic, probit, cloglog."
+                "Supported: logistic, probit, cloglog, loglog, cauchit."
             )
 
         # Accept numpy or device-resident torch.Tensor for X. In the
@@ -119,6 +123,13 @@ class PolrGPULikelihood:
         if self._link_name == "probit":
             # Normal CDF = 0.5 * (1 + erf(x / sqrt(2))).
             return 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+        if self._link_name == "loglog":
+            # Gumbel (max) CDF: exp(-exp(-eta)). Clamp mirrors the CPU path.
+            x_clamped = torch.clamp(x, min=-500.0, max=500.0)
+            return torch.exp(-torch.exp(-x_clamped))
+        if self._link_name == "cauchit":
+            # Standard Cauchy CDF: 1/2 + arctan(eta) / pi.
+            return 0.5 + torch.arctan(x) / math.pi
         # cloglog: 1 - exp(-exp(eta)). Clamp to mirror the CPU path's
         # overflow guard on ``eta``.
         x_clamped = torch.clamp(x, min=-500.0, max=500.0)

@@ -217,12 +217,56 @@ def _extract_loadings(
     return loadings
 
 
+def _factor_scores(
+    X_arr: NDArray,
+    loadings: NDArray,
+    psi: NDArray,
+    S: NDArray,
+    method: str,
+) -> NDArray:
+    """Estimate factor scores, matching R's ``factanal(scores=)``.
+
+    Both estimators operate on the column-standardised data ``Z`` (centered and
+    scaled to unit sample variance, ddof=1 — R's ``scale(x, TRUE, TRUE)``):
+
+    - ``"regression"`` (Thomson): ``Z @ solve(S, Lambda)`` where ``S`` is the
+      correlation matrix. R's ``stats::promax`` returns no factor-correlation
+      ``Phi``, so ``factanal`` uses this identical formula for every rotation
+      (with the rotated *pattern* loadings) — no oblique correction is applied.
+    - ``"bartlett"`` (weighted least squares):
+      ``Z Psi^{-1} Lambda (Lambda' Psi^{-1} Lambda)^{-1}``.
+
+    Args:
+        X_arr: Raw data matrix (n x p).
+        loadings: The final (rotated) loadings ``Lambda`` (p x m).
+        psi: Uniquenesses ``Psi`` diagonal (length p).
+        S: Correlation matrix used in the fit (p x p).
+        method: ``"regression"`` or ``"bartlett"``.
+
+    Returns:
+        Factor scores, shape (n x m).
+    """
+    mean = X_arr.mean(axis=0)
+    sd = X_arr.std(axis=0, ddof=1)
+    Z = (X_arr - mean) / sd
+
+    if method == "regression":
+        return Z @ np.linalg.solve(S, loadings)
+
+    # Bartlett: sc = Z Psi^{-1} Lambda (Lambda' Psi^{-1} Lambda)^{-1}
+    d = 1.0 / psi
+    weighted = loadings * d[:, np.newaxis]          # Psi^{-1} Lambda  (p x m)
+    gram = loadings.T @ weighted                    # Lambda' Psi^{-1} Lambda (m x m)
+    return (Z @ weighted) @ np.linalg.inv(gram)
+
+
 def factor_analysis(
     X: ArrayLike,
     *,
     n_factors: int,
     rotation: str = "varimax",
     method: str = "ml",
+    scores: str = "none",
     names: list[str] | None = None,
     lower: float = 0.005,
     tol: float = 1e-8,
@@ -249,6 +293,11 @@ def factor_analysis(
         n_factors: Number of factors to extract.
         rotation: 'varimax' (orthogonal), 'promax' (oblique), or 'none'.
         method: 'ml' (only ML supported).
+        scores: Factor-score estimator, matching R's ``factanal(scores=)``:
+            'none' (default, no scores computed), 'regression' (Thomson
+            regression scores), or 'bartlett' (weighted-least-squares /
+            Bartlett scores). When not 'none', ``FactorSolution.scores`` holds
+            the (n x n_factors) score matrix.
         names: Variable names.
         lower: Lower bound on the uniquenesses, enforced during the
             optimisation. Matches R's ``factanal(lower=)`` (default 0.005).
@@ -274,6 +323,12 @@ def factor_analysis(
     if rotation not in valid_rotations:
         raise ValidationError(
             f"rotation: must be one of {valid_rotations}, got '{rotation}'"
+        )
+
+    valid_scores = ("none", "regression", "bartlett")
+    if scores not in valid_scores:
+        raise ValidationError(
+            f"scores: must be one of {valid_scores}, got '{scores}'"
         )
 
     if not (0.0 < lower < 1.0):
@@ -384,6 +439,11 @@ def factor_analysis(
             chi_sq = float(effective_n * objective)
             p_value = float(chi2.sf(chi_sq, dof))
 
+    # ---- Factor scores (optional) ----
+    scores_matrix: NDArray | None = None
+    if scores != "none":
+        scores_matrix = _factor_scores(X_arr, loadings_final, uniquenesses, S, scores)
+
     params = FactorParams(
         loadings=loadings_final,
         uniquenesses=uniquenesses,
@@ -401,6 +461,7 @@ def factor_analysis(
         converged=converged,
         n_iter=n_iter,
         objective=objective,
+        scores=scores_matrix,
     )
     return FactorSolution(
         _result=Result(

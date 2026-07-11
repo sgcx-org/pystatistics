@@ -158,7 +158,7 @@ class TestSmoothTerm:
 
     def test_unknown_basis_raises(self):
         with pytest.raises(ValidationError, match="bs must be"):
-            s("x", bs="cc")   # cyclic basis not implemented: fail loud
+            s("x", bs="gp")   # Gaussian-process basis unimplemented: fail loud
 
     def test_is_pure_spec(self):
         """No fit-derived caches on the spec object (stale-state hazard)."""
@@ -568,7 +568,7 @@ class TestAnalyticGradient:
             fit = fit_fixed_lambda(y, X, roots, lam, fam, 1e-12, 50,
                                    gaussian_cache=gc)
             if method == "REML":
-                return reml_score(fit, y, fam, roots, lam)
+                return reml_score(fit, y, X, fam, roots, lam)
             edf = total_edf(
                 influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
             return gcv_score(fit.deviance, n, edf)
@@ -615,7 +615,7 @@ class TestAnalyticGradient:
             fit = fit_fixed_lambda(y, X, roots, lam, fam, 1e-12, 50,
                                    gaussian_cache=gc)
             if method == "REML":
-                return crit.reml_score(fit, y, fam, roots, lam)
+                return crit.reml_score(fit, y, X, fam, roots, lam)
             edf = total_edf(
                 influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
             return crit.gcv_score(fit.deviance, n, edf)
@@ -629,7 +629,7 @@ class TestAnalyticGradient:
                                "gtol": 1e-9, "eps": 1e-4})
         lam_fd = np.exp(fd.x)
 
-        lam_an, converged = crit.select_lambdas(
+        lam_an, converged, _mu = crit.select_lambdas(
             y, X, roots, fam, method, 1e-8, 50)
         assert converged
         rel = np.abs(lam_an - lam_fd) / (np.abs(lam_fd) + 1e-300)

@@ -11,6 +11,7 @@ import numpy as np
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
 from pystatistics.core.compute.linalg.qr import qr_solve
+from pystatistics.regression.backends._hat import hat_diagonal as _hat_diagonal
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import LinearParams
 
@@ -78,8 +79,15 @@ class CPUQRBackend:
                 mss = float(np.sum(weights * (fitted_values - f_mean) ** 2))
             tss = mss + rss
 
+        # Leverage (hat) diagonal: h_i = || row_i(sqrt(w)·X) R^{-1} ||^2 with the
+        # pivoted QR of the (weighted) design. Weights default to 1 for OLS.
+        hat = _hat_diagonal(
+            X, np.ones(n) if weights is None else np.asarray(weights),
+            qr_result.R, qr_result.pivot, qr_result.rank,
+        )
+
         timer.stop()
-        
+
         params = LinearParams(
             coefficients=coefficients,
             residuals=residuals,
@@ -89,7 +97,7 @@ class CPUQRBackend:
             rank=qr_result.rank,
             df_residual=n - qr_result.rank,
         )
-        
+
         return Result(
             params=params,
             info={
@@ -97,6 +105,7 @@ class CPUQRBackend:
                 'rank': qr_result.rank,
                 'pivot': qr_result.pivot.tolist(),
                 'R': qr_result.R,
+                'hat': hat,
             },
             timing=timer.result(),
             backend_name=self.name,

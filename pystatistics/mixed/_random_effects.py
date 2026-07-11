@@ -51,6 +51,37 @@ class RandomEffectSpec:
     n_terms: int
     theta_size: int
     value_cols: NDArray | None = None
+    # When False the random-effects covariance for this factor is DIAGONAL
+    # (uncorrelated terms, R's ``(… || g)``): θ carries only the q diagonal
+    # Cholesky entries, no off-diagonals. Default True = full covariance.
+    correlated: bool = True
+
+
+def _theta_positions(spec: RandomEffectSpec):
+    """Yield the (row, col) Cholesky position of each θ element for a spec.
+
+    Full lower triangle when correlated; only the diagonal (i, i) when the factor
+    is uncorrelated. This single generator keeps θ packing/unpacking, bounds,
+    starts, and the singularity test consistent across the correlated and
+    diagonal parameterisations.
+    """
+    q = spec.n_terms
+    if spec.correlated:
+        for row in range(q):
+            for col in range(row + 1):
+                yield row, col
+    else:
+        for i in range(q):
+            yield i, i
+
+
+def theta_to_factor(theta_k: NDArray, spec: RandomEffectSpec) -> NDArray:
+    """Build the q×q lower-triangular (or diagonal) Cholesky factor T from θ."""
+    q = spec.n_terms
+    T = np.zeros((q, q), dtype=np.float64)
+    for k, (row, col) in enumerate(_theta_positions(spec)):
+        T[row, col] = theta_k[k]
+    return T
 
 
 def parse_random_effects(
@@ -59,6 +90,7 @@ def parse_random_effects(
     random_data: dict[str, NDArray] | None,
     n: int,
     build_dense: bool = True,
+    correlated: dict[str, bool] | bool | None = None,
 ) -> list[RandomEffectSpec]:
     """Parse user input into structured RandomEffectSpec objects.
 
@@ -105,6 +137,14 @@ def parse_random_effects(
         terms = tuple(terms)
         n_terms = len(terms)
 
+        # Correlated (full covariance) vs uncorrelated (diagonal, R's ``|| ``).
+        if isinstance(correlated, dict):
+            corr = correlated.get(group_name, True)
+        elif correlated is None:
+            corr = True
+        else:
+            corr = bool(correlated)
+
         # Compact (n, q) term-value matrix — always cheap to build.
         value_cols = _build_value_cols(terms, random_data, n)
 
@@ -114,7 +154,7 @@ def parse_random_effects(
             if build_dense else None
         )
 
-        theta_size = n_terms * (n_terms + 1) // 2
+        theta_size = (n_terms * (n_terms + 1) // 2) if corr else n_terms
 
         specs.append(RandomEffectSpec(
             group_name=group_name,
@@ -125,6 +165,7 @@ def parse_random_effects(
             n_terms=n_terms,
             theta_size=theta_size,
             value_cols=value_cols,
+            correlated=corr,
         ))
 
     return specs
@@ -280,13 +321,9 @@ def build_lambda(theta: NDArray, specs: list[RandomEffectSpec]) -> NDArray:
         theta_k = theta[theta_start:theta_start + n_theta]
         theta_start += n_theta
 
-        # Form q × q lower-triangular Cholesky factor
-        T = np.zeros((q, q), dtype=np.float64)
-        idx = 0
-        for row in range(q):
-            for col in range(row + 1):
-                T[row, col] = theta_k[idx]
-                idx += 1
+        # Form q × q Cholesky factor (lower-triangular, or diagonal when the
+        # factor is uncorrelated).
+        T = theta_to_factor(theta_k, spec)
 
         # T ⊗ I_J: for each pair of terms (r, c), place T[r,c] × I_J
         # Term r's columns start at base_col + r*J
@@ -318,13 +355,8 @@ def theta_lower_bounds(specs: list[RandomEffectSpec]) -> NDArray:
     """
     bounds = []
     for spec in specs:
-        q = spec.n_terms
-        for row in range(q):
-            for col in range(row + 1):
-                if row == col:
-                    bounds.append(0.0)      # diagonal: variance ≥ 0
-                else:
-                    bounds.append(-np.inf)   # off-diagonal: unbounded
+        for row, col in _theta_positions(spec):
+            bounds.append(0.0 if row == col else -np.inf)
     return np.array(bounds, dtype=np.float64)
 
 
@@ -356,12 +388,10 @@ def is_singular_fit(
     """
     idx = 0
     for spec in specs:
-        q = spec.n_terms
-        for row in range(q):
-            for col in range(row + 1):
-                if row == col and theta[idx] < tol:
-                    return True
-                idx += 1
+        for row, col in _theta_positions(spec):
+            if row == col and theta[idx] < tol:
+                return True
+            idx += 1
     return False
 
 
@@ -379,11 +409,6 @@ def theta_start(specs: list[RandomEffectSpec]) -> NDArray:
     """
     theta0 = []
     for spec in specs:
-        q = spec.n_terms
-        for row in range(q):
-            for col in range(row + 1):
-                if row == col:
-                    theta0.append(1.0)
-                else:
-                    theta0.append(0.0)
+        for row, col in _theta_positions(spec):
+            theta0.append(1.0 if row == col else 0.0)
     return np.array(theta0, dtype=np.float64)

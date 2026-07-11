@@ -16,24 +16,35 @@ mgcv 1.9-3 at fixed smoothing parameters):
 free, UBRE when it is fixed — selecting UBRE for a Poisson/binomial GAM is
 what mgcv's default does, not a substitution.
 
-The outer search minimises over log(lambda) with L-BFGS-B and finite
-differences. The 4.5.x objective was garbage in exactly the small-lambda
-regime the optimizer probes (unconstrained singular design + normal-equations
-EDF); on the stable QR path the criterion surface is smooth, so a
-quasi-Newton search with a good starting point converges reliably.
+The outer search minimises over log(lambda) with L-BFGS-B driven by the
+EXACT analytic criterion gradient for every supported family — the
+Gaussian-identity closed form (``_gradient``) or the Wood (2011)
+implicit-derivative GLM form (``_gradient_glm``) — one inner fit per
+outer step, never the ``2m+1`` finite-difference fits of 4.6.x. The 4.5.x
+objective was garbage in exactly the small-lambda regime the optimizer
+probes (unconstrained singular design + normal-equations EDF); on the
+stable QR path the criterion surface is smooth, so a quasi-Newton search
+with a good starting point converges reliably.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize
 
-from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.gam._edf import influence_matrix, logdet_penalized, total_edf
 from pystatistics.gam._gradient import gcv_gradient, reml_gradient_gauss
+from pystatistics.gam._gradient_glm import (
+    gcv_gradient_glm,
+    is_canonical,
+    reml_gradient_glm,
+    reml_logdet_glm,
+    ubre_gradient_glm,
+)
 from pystatistics.gam._pirls import (
     PenaltyRoot,
     PirlsFit,
@@ -72,11 +83,18 @@ def ubre_score(deviance: float, n: int, edf: float, scale: float) -> float:
 def reml_score(
     fit: PirlsFit,
     y: NDArray[np.floating[Any]],
+    X: NDArray[np.floating[Any]],
     family: Family,
     roots: list[PenaltyRoot],
     lambdas: NDArray[np.floating[Any]],
 ) -> float:
     """Laplace REML criterion (Wood 2011), mgcv-exact conventions.
+
+    The Laplace determinant ``log|A|`` uses the fit's exact QR factor at
+    canonical links (where Newton == Fisher weights) and the NEWTON-weight
+    Hessian ``log|X'WnX + S_lambda|`` otherwise — mgcv's convention, which
+    the Fisher determinant misses by O(1e-2) on probit/nb (verified exactly
+    against mgcv's reported score, ~1e-8 post-fix).
 
     Raises:
         ValidationError: for free-dispersion families other than
@@ -91,7 +109,6 @@ def reml_score(
     p = fit.rank
     rank_s = sum(r.rank for r in roots)
     m_p = max(p - rank_s, 0)
-    logdet_a = logdet_penalized(fit.R, fit.rank)
     logdet_s = float(sum(
         r.rank * np.log(lam) + r.logdet_pos
         for r, lam in zip(roots, lambdas)
@@ -101,11 +118,16 @@ def reml_score(
         phi = 1.0
         wt = np.ones(n, dtype=np.float64)
         neg_ll = -family.log_likelihood(y, fit.mu, wt, phi)
+        logdet_a = (
+            logdet_penalized(fit.R, fit.rank) if is_canonical(family)
+            else reml_logdet_glm(fit, roots, lambdas, y, X, family)
+        )
         return float(
             neg_ll + fit.penalty / 2.0
             + (logdet_a - logdet_s) / 2.0
             - (m_p / 2.0) * _LOG2PI
         )
+    logdet_a = logdet_penalized(fit.R, fit.rank)
 
     if _is_gauss_identity(family):
         d_p = fit.deviance + fit.penalty
@@ -183,13 +205,18 @@ def select_lambdas(
     tol: float,
     max_iter: int,
     smooth_names: list[str] | None = None,
-) -> tuple[NDArray[np.floating[Any]], bool]:
+) -> tuple[NDArray[np.floating[Any]], bool, NDArray[np.floating[Any]] | None]:
     """Minimise the requested criterion over log(lambda).
 
     Returns:
-        ``(lambdas, outer_converged)`` — ``outer_converged`` is False when
-        the optimizer reports failure or the solution sits on the search
-        bound (reported honestly, never silently).
+        ``(lambdas, outer_converged, mu_final)`` — ``outer_converged`` is
+        False when the optimizer reports failure or the solution sits on
+        the search bound (reported honestly, never silently). ``mu_final``
+        (GLM families; None for Gaussian-identity) is the converged mean of
+        the winning P-IRLS branch at the selected lambdas: the caller's
+        final fit must warm-start from it so the reported fit sits on the
+        branch the criterion was accepted on (see the branch-resolution
+        block below; mgcv semantics).
 
     Raises:
         ValidationError: unknown method (callers validate too, belt and
@@ -197,7 +224,7 @@ def select_lambdas(
     """
     n_smooth = len(roots)
     if n_smooth == 0:
-        return np.array([], dtype=np.float64), True
+        return np.array([], dtype=np.float64), True, None
 
     method_u = method.upper()
     if method_u not in ("GCV", "REML"):
@@ -212,56 +239,65 @@ def select_lambdas(
     # Warm start: nearby lambdas need ~2 PIRLS steps from the previous
     # evaluation's mu instead of ~6 from family.initialize.
     warm: dict[str, Any] = {"mu": None}
-    # The finite-difference gradient reads the criterion through the inner
-    # P-IRLS convergence noise; at the user tol (1e-8) that noise floor
-    # hides the gradient on flat GCV surfaces (e.g. Gamma-log) and stalls
-    # the search short of the optimum. Selection-time evaluations therefore
-    # run tighter — warm starts make the extra iterations cheap. The FINAL
-    # fit still honours the user's tol.
+    # The line search reads the criterion through the inner P-IRLS
+    # convergence noise; at the user tol (1e-8) that noise floor is large
+    # enough to stall the search short of the optimum on flat surfaces
+    # (e.g. Gamma-log GCV). Selection-time evaluations therefore run
+    # tighter — warm starts make the extra iterations cheap. The FINAL fit
+    # still honours the user's tol.
     tol_inner = min(tol, 1e-12)
 
-    def objective(log_lam: NDArray[np.floating[Any]]) -> float:
-        lam = np.exp(np.asarray(log_lam, dtype=np.float64))
-        fit = fit_fixed_lambda(
-            y, X, roots, lam, family, tol_inner, max_iter,
-            smooth_names=smooth_names, gaussian_cache=gauss_cache,
-            mu_start=warm["mu"],
-        )
-        warm["mu"] = fit.mu
-        h = influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank)
-        edf = total_edf(h)
+    # Every supported family/method combination is driven by the exact
+    # analytic criterion gradient — the Gaussian-identity closed form
+    # (constant IRLS weights, `_gradient`) or the Wood (2011) implicit-
+    # derivative GLM form (`_gradient_glm`) — one inner fit per outer step,
+    # replacing the 4.6.x finite-difference path (2m+1 fits per step).
+    gauss_identity = _is_gauss_identity(family)
+
+    def score_of(fit: PirlsFit, lam: NDArray[np.floating[Any]]) -> float:
+        """The selection criterion at an inner fit (single source)."""
         if method_u == "REML":
-            return reml_score(fit, y, family, roots, lam)
+            return reml_score(fit, y, X, family, roots, lam)
+        edf = total_edf(influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
         if family.dispersion_is_fixed:
             return ubre_score(fit.deviance, n, edf, scale=1.0)
         return gcv_score(fit.deviance, n, edf)
-
-    # Analytic-gradient path (Gaussian-identity only): the constant IRLS
-    # weights make the criterion an exact closed form of log(lambda), so the
-    # outer L-BFGS-B is driven by the analytic gradient (one inner fit per
-    # step) instead of scipy's finite differences (2m+1 fits per step). GLM
-    # families keep the finite-difference `objective` above (their weights
-    # depend on beta -> an implicit d beta/d rho term not implemented here).
-    use_analytic = _is_gauss_identity(family)
 
     def value_and_grad(
         log_lam: NDArray[np.floating[Any]],
     ) -> tuple[float, NDArray[np.floating[Any]]]:
         lam = np.exp(np.asarray(log_lam, dtype=np.float64))
-        fit = fit_fixed_lambda(
-            y, X, roots, lam, family, tol_inner, max_iter,
-            smooth_names=smooth_names, gaussian_cache=gauss_cache,
-        )
-        edf = total_edf(influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
-        if method_u == "REML":
-            return (
-                reml_score(fit, y, family, roots, lam),
-                reml_gradient_gauss(fit, roots, lam, n),
+        try:
+            fit = fit_fixed_lambda(
+                y, X, roots, lam, family, tol_inner, max_iter,
+                smooth_names=smooth_names, gaussian_cache=gauss_cache,
+                mu_start=warm["mu"],
             )
-        return (
-            gcv_score(fit.deviance, n, edf),
-            gcv_gradient(fit, roots, lam, n, edf),
-        )
+        except ConvergenceError:
+            # A diverging inner fit at a TRIAL lambda is a soft barrier,
+            # not a fatal state: +inf makes the line search backtrack
+            # (mgcv's newton likewise halves its step when a trial fit
+            # fails) instead of aborting the whole selection. The warm mu
+            # is left untouched. A divergence at the FINAL fit still fails
+            # loud in the caller.
+            return np.inf, np.zeros(len(roots), dtype=np.float64)
+        warm["mu"] = fit.mu
+        val = score_of(fit, lam)
+        if method_u == "REML":
+            grad = (
+                reml_gradient_gauss(fit, roots, lam, n) if gauss_identity
+                else reml_gradient_glm(fit, roots, lam, y, X, family)
+            )
+        elif family.dispersion_is_fixed and not gauss_identity:
+            grad = ubre_gradient_glm(fit, roots, lam, y, X, family)
+        else:
+            edf = total_edf(
+                influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank))
+            grad = (
+                gcv_gradient(fit, roots, lam, n, edf) if gauss_identity
+                else gcv_gradient_glm(fit, roots, lam, y, X, family, edf)
+            )
+        return val, grad
 
     # REML support check up front (fail before burning optimizer time).
     if method_u == "REML" and not (
@@ -285,44 +321,69 @@ def select_lambdas(
     # the same data in different units (panel-verified). Normalize by the
     # objective at the starting point so the same fit is selected at every
     # response scale.
-    f0 = value_and_grad(log_lam0)[0] if use_analytic else objective(log_lam0)
+    f0 = value_and_grad(log_lam0)[0]
+    if not np.isfinite(f0):
+        # The soft +inf barrier is for TRIAL points; a diverging fit at the
+        # mgcv-style starting values means the problem is degenerate from
+        # the outset — fail loud, never optimize a surface of infinities.
+        raise ConvergenceError(
+            "smoothing-parameter selection could not evaluate the "
+            "criterion at its starting values (inner P-IRLS diverged)"
+        )
     ref = max(abs(f0), 1e-300)
 
-    if use_analytic:
-        def fun_scaled(
-            log_lam: NDArray[np.floating[Any]],
-        ) -> tuple[float, NDArray[np.floating[Any]]]:
-            val, grad = value_and_grad(log_lam)
-            return val / ref, grad / ref
+    def fun_scaled(
+        log_lam: NDArray[np.floating[Any]],
+    ) -> tuple[float, NDArray[np.floating[Any]]]:
+        val, grad = value_and_grad(log_lam)
+        return val / ref, grad / ref
 
-        result = minimize(
-            fun_scaled,
-            log_lam0,
-            method="L-BFGS-B",
-            jac=True,
-            bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9},
-        )
-    else:
-        def objective_scaled(log_lam: NDArray[np.floating[Any]]) -> float:
-            return objective(log_lam) / ref
+    result = minimize(
+        fun_scaled,
+        log_lam0,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds,
+        options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9},
+    )
 
-        # eps: the FD step must sit WELL above the inner P-IRLS convergence
-        # noise floor or the quasi-Newton curvature estimate is built from
-        # noise and the line search collapses short of the optimum (observed
-        # on the flat Gamma-log GCV surface: effective evaluation noise
-        # ~1e-9 relative even at tol_inner=1e-12, so eps=1e-6 gave gradient
-        # noise the SAME size as the true gradient). eps=1e-4 keeps gradient
-        # noise ~1e-5 while the induced position error (~eps/2 in log-lambda)
-        # is a ~0.005% sp perturbation — far inside the optimizer tolerance
-        # tier of the validation contract.
-        result = minimize(
-            objective_scaled,
-            log_lam0,
-            method="L-BFGS-B",
-            bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-12, "gtol": 1e-9, "eps": 1e-4},
-        )
+    # Branch resolution at the accepted optimum (GLM families only; the
+    # Gaussian-identity solve is closed-form and branch-unique). At
+    # near-zero penalty the inner P-IRLS problem can be MULTIMODAL: the
+    # warm-chained search can converge on one fixed-point branch while a
+    # fresh fit at the same lambdas lands on another with a very different
+    # criterion (adversarially verified: gaussian-log n=60, warm branch
+    # GCV 4.4 — matching mgcv's 4.8 on the same data — vs fresh branch
+    # 38.2). mgcv never refits from scratch after selection: its reported
+    # fit is the warm continuation of the search. Both branches at the
+    # accepted lambdas are therefore evaluated here and the BETTER one's mu
+    # is handed back so the caller's final fit continues that branch — the
+    # reported criterion always belongs to the reported fit, never a
+    # silently different branch.
+    mu_final: NDArray[np.floating[Any]] | None = None
+    if not gauss_identity:
+        lam_hat = np.exp(result.x)
+
+        def _branch_fit(mu0):
+            fit = fit_fixed_lambda(
+                y, X, roots, lam_hat, family, tol_inner, max_iter,
+                smooth_names=smooth_names, mu_start=mu0,
+            )
+            return fit, score_of(fit, lam_hat) / ref
+
+        candidates: list[tuple[float, NDArray[np.floating[Any]]]] = []
+        for mu0 in (warm["mu"], None):
+            try:
+                fit_b, f_b = _branch_fit(mu0)
+                candidates.append((f_b, fit_b.mu))
+            except ConvergenceError:
+                continue  # that branch diverges at lam_hat; try the other
+        if not candidates:
+            # Neither branch converges at the accepted lambdas — report
+            # the search's answer honestly unconverged (the caller warns;
+            # its final fit will surface the divergence loudly).
+            return np.exp(result.x), False, None
+        mu_final = min(candidates, key=lambda c: c[0])[1]
 
     # A coordinate sitting ON a search bound is fine when the criterion has
     # asymptoted there (|gradient| small): lambda -> inf is the CORRECT
@@ -339,12 +400,14 @@ def select_lambdas(
         for v, g, (lo, hi) in zip(result.x, jac, bounds)
     )
     # L-BFGS-B can end with success=False (ABNORMAL_..._LNSRCH) when the
-    # line search bottoms out on the finite-difference noise floor AFTER
-    # reaching the minimum; a small normalized projected gradient means
-    # converged. (FD noise in normalized units is ~2*tol/eps ~ 2e-2 worst
-    # case for non-Gaussian fits, hence the 5e-2 threshold.)
+    # line search bottoms out on the inner P-IRLS convergence noise in the
+    # criterion VALUES after reaching the minimum (the gradient is analytic
+    # but the line search still compares noisy function values); a small
+    # normalized projected gradient means converged. The 5e-2 threshold is
+    # a generous upper bound retained from the finite-difference era —
+    # analytic gradients at a true optimum sit orders of magnitude below it.
     grad_small = bool(np.max(jac) < 5e-2)
     outer_converged = (
         (bool(result.success) or grad_small) and not at_bound_unconverged
     )
-    return np.exp(result.x), outer_converged
+    return np.exp(result.x), outer_converged, mu_final

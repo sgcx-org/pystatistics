@@ -1,5 +1,111 @@
 # Changelog
 
+## 4.7.0
+
+A broad feature release that closes a range of mainstream R capabilities across
+the generalized-linear, ordinal, mixed-model, additive-model, ANOVA,
+factor-analysis and bootstrap modules — new link functions and families, model
+diagnostics, analysis-of-deviance tables, profile-likelihood intervals, extra
+smooth bases, and more — together with several correctness fixes and a GAM
+performance improvement. All additions are validated against R.
+
+### Added
+
+**Generalized linear models (`regression`)**
+
+- New link functions `cloglog`, `cauchit`, `sqrt`, and `1/mu^2`
+  (inverse-squared), and new families `inverse.gaussian`, `quasipoisson`, and
+  `quasibinomial`. A non-canonical link is selected through the family, e.g.
+  `fit(X, y, family=Binomial(link='cloglog'))`. The quasi families fit
+  identically to `poisson`/`binomial` but estimate the dispersion (so standard
+  errors are inflated and inference uses the t-distribution) and report `AIC` as
+  `NaN`, matching R's `quasipoisson()`/`quasibinomial()`.
+- Regression diagnostics on linear and GLM fits: `.hat_values` (leverage),
+  `.cooks_distance`, and `.residuals_standardized` — matching R's `hatvalues`,
+  `cooks.distance`, and `rstandard`.
+- `anova()` and `drop1()` analysis-of-deviance tables: a sequential (Type I)
+  analysis of deviance for one model, a nested-model comparison for several, and
+  single-term deletions — with a chi-square or F test chosen the way R does, and
+  multi-column factor terms grouped with the correct degrees of freedom.
+- Profile-likelihood confidence intervals for GLM coefficients via
+  `GLMSolution.profile_conf_int()` (R's `confint.glm`) — more accurate than the
+  Wald intervals in `.conf_int` when a coefficient's likelihood is asymmetric.
+
+**Ordinal regression (`polr`)**
+
+- The `loglog` and `cauchit` link functions, completing the full set of five
+  `MASS::polr` links (`logistic`, `probit`, `cloglog`, `loglog`, `cauchit`).
+
+**Mixed models (`glmm`)**
+
+- `offset=` (a per-observation offset in the linear predictor, e.g.
+  `log(exposure)` for a rate model), `weights=` (prior weights), and a two-column
+  `[successes, failures]` response for aggregated-binomial data (R's
+  `cbind(k, n-k)`).
+- `correlated=` to fit an **uncorrelated** (diagonal) random-effects covariance —
+  R's `(… || g)` — instead of the default full covariance.
+- A boundary-fit diagnostic on GLMM fits, `GLMMSolution.is_singular`, mirroring
+  `lme4`'s `isSingular()` (already available on LMM fits).
+
+**Generalized additive models (`gam`)**
+
+- Cyclic-cubic (`bs='cc'`) and P-spline (`bs='ps'`) smooth bases; `cc` is for
+  periodic/seasonal covariates. `cr`/`tp`/`cc`/`ps` now cover the mainstream mgcv
+  bases.
+- Continuous `by=` (varying-coefficient) smooths: `s(x, by='z')` fits `z · f(x)`.
+- A usable negative-binomial family: `gam(family='nb')` now estimates the
+  dispersion under REML (previously a fixed `theta` was required); the estimate
+  is available on `solution.info['nb_theta']`.
+
+**Factor analysis (`multivariate`)**
+
+- `scores=` to compute factor scores (`'regression'` / Thompson or `'bartlett'`),
+  matching R's `factanal(scores=…)`.
+
+**ANOVA (`anova`)**
+
+- Omega-squared and partial omega-squared effect sizes, Cohen's d on pairwise
+  post-hoc comparisons, and the Games-Howell post-hoc test (for groups with
+  unequal variances).
+
+### Performance
+
+- **GAM smoothing-parameter selection is faster for non-Gaussian families.** The
+  outer smoothing-parameter search for Poisson/binomial, Gamma, and
+  negative-binomial GAMs now uses an exact analytic gradient instead of finite
+  differences — 1.1–9.0× faster on multi-smooth GLM fits (REML 2.0–9.0×), with
+  the same selected smoothness.
+
+### Changed
+
+- **BCa bootstrap intervals now use R's regression acceleration on balanced and
+  stratified bootstraps.** Previously only the ordinary bootstrap used R's default
+  regression estimate of the BCa acceleration; the balanced and stratified paths
+  fell back to a jackknife estimate that can move a tail endpoint by a few percent
+  for a strongly non-linear statistic. They now match `boot.ci`'s default. The
+  parametric bootstrap continues to use the jackknife (it has no resample
+  frequencies — the same limitation R has).
+
+### Fixed
+
+- **Factor-analysis promax rotation.** The promax loadings were mis-normalised (up
+  to ~6% off R). Promax rotation now matches R's `promax` (loadings and the factor
+  correlation matrix).
+- **GAM non-canonical-link REML.** The REML criterion for non-canonical links
+  (e.g. binomial-probit, negative-binomial-log) used the Fisher-weight Laplace
+  determinant rather than the full Newton-weight one R uses, so REML smoothness
+  selection sat slightly away from mgcv. Probit and negative-binomial REML fits now
+  match `mgcv::gam`. Canonical-link fits are unchanged.
+- **Quasi and inverse-Gaussian dispersion.** These families now report the Pearson
+  dispersion R's `summary.glm` uses (the definitional quasi-likelihood estimate),
+  rather than the deviance-based estimate.
+- **`ConvergenceError` no longer requires an iteration count** — a genuinely
+  diverging GAM fit again raises the documented `ConvergenceError` (it previously
+  raised `TypeError` on some fail-loud paths).
+- **`gam` rejects families it has not validated.** With the quasi and
+  inverse-Gaussian families now available generally, `gam` refuses them with a
+  clear error rather than silently fitting an unvalidated criterion.
+
 ## 4.6.13
 
 Makes `mvnmle.mlest` fail loud on a constant (zero-variance) column instead of

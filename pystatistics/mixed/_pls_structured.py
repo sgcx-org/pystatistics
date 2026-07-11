@@ -76,6 +76,10 @@ class StructuredContext:
     single_factor: bool
     Z_sparse: object = None
     sp_blocks: list | None = None
+    # GLMM offset (η = Xβ + Zb + offset) and per-observation prior weights.
+    # None ⇒ zero offset / unit weights (the LMM path leaves both unset).
+    offset: NDArray | None = None
+    prior_weights: NDArray | None = None
     # Single-factor analytic-gradient cache (None for the sparse path).
     bat_S: NDArray | None = None       # (J, q, q) per-group Vⱼ'Vⱼ
     bat_P: NDArray | None = None       # (J, q, p) per-group Vⱼ'Xⱼ
@@ -86,8 +90,13 @@ class StructuredContext:
 
 def build_structured_context(
     X: NDArray, y: NDArray, specs: list[RandomEffectSpec], reml: bool,
+    offset: NDArray | None = None, prior_weights: NDArray | None = None,
 ) -> StructuredContext:
-    """Prepare the θ-independent context for structured solves."""
+    """Prepare the θ-independent context for structured solves.
+
+    ``offset`` and ``prior_weights`` are GLMM-only per-observation vectors (None
+    for the LMM path). They are stored verbatim; the GLMM PIRLS reads them.
+    """
     single = len(specs) == 1
     Z_sparse, blocks = (None, None)
     bat_S = bat_P = bat_Vty = bat_V = bat_gids = None
@@ -111,6 +120,7 @@ def build_structured_context(
         specs=specs, X=X, y=y, reml=reml,
         single_factor=single, Z_sparse=Z_sparse, sp_blocks=blocks,
         bat_S=bat_S, bat_P=bat_P, bat_Vty=bat_Vty, bat_V=bat_V, bat_gids=bat_gids,
+        offset=offset, prior_weights=prior_weights,
     )
 
 
@@ -236,14 +246,17 @@ def deviance_and_grad_structured(
     single-entry lower-triangular basis matrix. Validated against a finite-
     difference gradient of the same deviance to ~1e-7.
     """
-    from pystatistics.mixed._struct_batched import _theta_to_T
+    from pystatistics.mixed._random_effects import theta_to_factor
 
     X, y, reml = ctx.X, ctx.y, ctx.reml
     n, p = X.shape
     S, P, Vty, V, gids = ctx.bat_S, ctx.bat_P, ctx.bat_Vty, ctx.bat_V, ctx.bat_gids
     J, q = S.shape[0], S.shape[1]
 
-    T = _theta_to_T(theta, q)
+    # LMM uses the full-covariance parameterisation (correlated=True), so this is
+    # the lower-triangular Cholesky factor; the analytic gradient below iterates
+    # the same lower-triangular basis.
+    T = theta_to_factor(theta, ctx.specs[0])
     M = np.einsum('ki,jkl,lm->jim', T, S, T) + np.eye(q)
     Minv = np.linalg.inv(M)
     a = np.einsum('ki,jk->ji', T, Vty)                     # Tᵀ (Vⱼ'yⱼ)

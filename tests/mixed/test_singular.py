@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 import pytest
 
-from pystatistics.mixed import lmm
+from pystatistics.mixed import lmm, glmm
 from pystatistics.mixed._random_effects import (
     parse_random_effects, is_singular_fit,
 )
@@ -103,3 +103,63 @@ class TestSingularFitEndToEnd:
 
         assert result.is_singular is False
         assert not any("singular" in str(w.message).lower() for w in caught)
+
+
+class TestGLMMSingularFit:
+    """GLMMSolution.is_singular mirrors lme4's isSingular() on the GLMM path,
+    exactly as LMMSolution.is_singular does — the detector is a function of θ
+    only, so both model families share it (A6)."""
+
+    def _glmer_singular_data(self):
+        """The exact binary dataset lme4::glmer flags isSingular()=TRUE on
+        (varRE=3.6e-15). Committed as an R-cross-validated fixture."""
+        import json
+        from pathlib import Path
+        path = (Path(__file__).resolve().parent.parent
+                / "fixtures" / "glmm_singular_glmer.json")
+        d = json.loads(path.read_text())
+        y = np.asarray(d["y"], dtype=float)
+        x = np.asarray(d["x"], dtype=float)
+        X = np.column_stack([np.ones(len(y)), x])
+        g = np.asarray(d["g"], dtype=int)
+        return y, X, g, np.asarray(d["r_fixef"], dtype=float)
+
+    def test_glmer_singular_data_is_singular_and_warns(self):
+        """On the dataset lme4 flags isSingular()=TRUE, GLMMSolution.is_singular
+        is True, a warning is raised, and the fixed effects match glmer."""
+        y, X, group, r_fixef = self._glmer_singular_data()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sol = glmm(y, X, groups={"g": group}, family="binomial")
+        assert sol.is_singular is True
+        assert any("singular" in str(w.message).lower() for w in caught)
+        assert sol.var_components[0].variance < 1e-3
+        # Estimates are still the correct boundary MLE (match glmer).
+        np.testing.assert_allclose(sol.coefficients, r_fixef, atol=5e-3)
+
+    def test_genuine_group_effect_glmm_not_singular(self):
+        """Binary data with a real random intercept is not a boundary fit."""
+        rng = np.random.default_rng(101)
+        n_groups, n_per = 25, 16
+        n = n_groups * n_per
+        group = np.repeat(np.arange(n_groups), n_per)
+        x = rng.standard_normal(n)
+        X = np.column_stack([np.ones(n), x])
+        re = rng.standard_normal(n_groups) * 1.0  # real between-group variance
+        eta = 0.3 + 0.9 * x + re[group]
+        y = (rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-eta))).astype(float)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            sol = glmm(y, X, groups={"g": group}, family="binomial")
+        assert sol.is_singular is False
+        assert not any("singular" in str(w.message).lower() for w in caught)
+
+    def test_is_singular_matches_detector_on_theta(self):
+        """The surfaced flag equals is_singular_fit() applied to the fitted θ —
+        the GLMM path uses the identical detector as the LMM path."""
+        y, X, group, _ = self._glmer_singular_data()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sol = glmm(y, X, groups={"g": group}, family="binomial")
+        specs = parse_random_effects({"g": group}, {"g": ["1"]}, None, len(y))
+        assert sol.is_singular == is_singular_fit(sol.params.theta, specs)

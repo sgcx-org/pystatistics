@@ -463,6 +463,70 @@ batched only for convenience, never deferred for ceremony.
 
 ---
 
+## Capability scope — deliberate carve-outs from R parity
+
+The Prime Directive requires that where PyStatistics omits a capability its R
+reference offers, the omission is **deliberate, documented, and carries a GOOD
+reason** — absence by oversight is not permitted. Most such gaps are *closed by
+implementation* (the library grows the capability). The items below are the
+opposite decision: capabilities we have **examined and deliberately do not
+implement**, each because it is genuinely specialist, interface-only (the math is
+identical), or already covered by a better path we offer. Every one **fails loud**
+when requested — none silently substitutes a different computation.
+
+This list is exhaustive for the current surface: a capability an R user reaches
+for that is *not* here and *not* on this list is a gap to close, not an accepted
+carve-out.
+
+- **gam — exotic smooth bases `re` / `ds` / `gp` / `fs`.** The mainstream mgcv
+  bases are implemented (`tp` thin-plate, `cr` cubic-regression, `cc` cyclic,
+  `ps` P-splines); the random-effect (`re`), Duchon-spline (`ds`), Gaussian-
+  process (`gp`), and factor-smooth-interaction (`fs`) bases are specialist
+  constructs a working smoother rarely reaches for, and `re` in particular is
+  better served by the `mixed` module's explicit random effects. Any unknown
+  `bs=` raises `ValidationError` (fail-loud proof holds).
+
+- **regression — non-treatment factor contrasts (helmert / sum / poly).** Only
+  treatment (dummy) coding is offered — R's own default. The choice of contrast
+  coding is a **pure interface decision with no effect on the math**: the fitted
+  values, deviance, predictions, and every estimator-invariant quantity are
+  identical across coding schemes; only the individual coefficients' *meaning*
+  (and hence their labels) change. A user needing a specific contrast can recode
+  the design column directly. Because nothing statistical differs, this is a
+  labeling convenience, not a capability gap.
+
+- **regression — the fully-general `quasi(link, variance)` constructor.** The
+  mainstream overdispersion families — `quasipoisson` and `quasibinomial` — are
+  implemented as first-class families. R's fully-general `quasi()` constructor,
+  which lets the user pair an *arbitrary* variance function with an arbitrary
+  link, is a specialist tool for bespoke mean-variance relationships outside the
+  standard exponential family; it fails loud rather than being silently absent.
+
+- **survival — `exact` (exact partial-likelihood) ties.** Cox tie handling offers
+  `efron` (the default, and R's recommended method) and `breslow`, which together
+  cover standard biostatistical practice. The `exact` method — the exact marginal
+  partial likelihood — is rarely needed (relevant only with heavy tie structure
+  where Efron already approximates it well) and is computationally costly; it is
+  refused loudly rather than approximated.
+
+- **montecarlo — variance-stabilizing transforms (`h` / `hinv`), antithetic
+  sampling, and stratified/blocked permutation.** All five bootstrap CI types
+  (normal / basic / percentile / BCa / studentized) and both ordinary and
+  stratified resampling are provided. The `h`/`hinv` monotone-transform hooks of
+  `boot.ci` are an advanced variance-reduction refinement the caller can apply
+  externally (transform the statistic, invert the interval); antithetic and
+  blocked-permutation schemes are specialist variance-reduction devices outside
+  the ordinary-and-stratified core. Each unsupported option fails loud.
+
+- **multivariate — `prcomp`'s `tol` rank truncation.** PCA exposes
+  `n_components=`, which selects the retained rank directly and is the equivalent
+  (and more explicit) control; R's `tol=` — "drop components whose standard
+  deviation is below `tol × sd[0]`" — is a different spelling of the same rank
+  decision, reachable by inspecting the returned standard deviations and setting
+  `n_components`. No statistical capability is missing.
+
+---
+
 ## Amendments
 
 This constitution is **self-amending**. When a naming or API question arises

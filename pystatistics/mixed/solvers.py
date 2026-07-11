@@ -22,7 +22,7 @@ from pystatistics.mixed._common import (
 )
 from pystatistics.mixed._random_effects import (
     parse_random_effects, build_z_matrix, build_lambda,
-    theta_lower_bounds, theta_start, is_singular_fit,
+    theta_lower_bounds, theta_start, is_singular_fit, theta_to_factor,
 )
 from pystatistics.mixed._pls import solve_pls
 from pystatistics.mixed._pls_structured import (
@@ -267,6 +267,9 @@ def glmm(
     family: 'str | Family' = 'binomial',
     random_effects: dict[str, list[str]] | None = None,
     random_data: dict[str, ArrayLike] | None = None,
+    offset: ArrayLike | None = None,
+    weights: ArrayLike | None = None,
+    correlated: dict[str, bool] | bool | None = None,
     tol: float = 1e-8,
     max_iter: int = 200,
     conf_level: float = 0.95,
@@ -290,6 +293,18 @@ def glmm(
             or a Family instance from pystatistics.regression.families.
         random_effects: Optional random effects specification.
         random_data: Optional data for random slope variables.
+        offset: Optional per-observation offset ``(n,)`` added to the linear
+            predictor, ``η = Xβ + Zb + offset`` (e.g. ``log(exposure)`` for a
+            Poisson rate model). Not estimated.
+        weights: Optional per-observation prior weights ``(n,)`` (IRLS prior
+            weights). For a proportion response these are the binomial trial
+            counts; a two-column ``y = [successes, failures]`` response supplies
+            them automatically (R's ``cbind(k, n-k)`` aggregated binomial).
+        correlated: Whether a grouping factor's random-effect terms share a full
+            covariance (the default, ``True``) or are uncorrelated with a
+            **diagonal** covariance (R's ``(… || g)``). Pass ``False`` to make all
+            factors diagonal, or a ``{group_name: bool}`` dict per factor. Only
+            affects factors with two or more terms.
         tol: Convergence tolerance.
         max_iter: Maximum optimizer iterations.
 
@@ -323,24 +338,59 @@ def glmm(
             f"deviance, AIC/BIC and variance components. For a Gaussian mixed "
             f"model use lmm().")
 
+    # Response / prior-weights / offset processing.
+    #
+    # Aggregated binomial: a 2-column response ``[successes, failures]`` (R's
+    # ``cbind(k, n-k)``) is converted to a proportion response with the trial
+    # counts as prior weights — exactly how glmer handles it.
+    y_arr = np.asarray(y, dtype=np.float64)
+    prior_w = None if weights is None else np.asarray(weights, dtype=np.float64)
+    if y_arr.ndim == 2 and y_arr.shape[1] == 2:
+        if family_obj.name != 'binomial':
+            raise ValidationError(
+                "A two-column [successes, failures] response is only valid for "
+                f"family='binomial', not {family_obj.name!r}.")
+        trials = y_arr[:, 0] + y_arr[:, 1]
+        if np.any(trials <= 0):
+            raise ValidationError(
+                "Aggregated binomial: every row needs a positive trial count "
+                "(successes + failures > 0).")
+        y_arr = y_arr[:, 0] / trials
+        prior_w = trials if prior_w is None else prior_w * trials
+    elif y_arr.ndim != 1:
+        raise ValidationError(
+            f"y must be 1-D (or a 2-column binomial response), got shape "
+            f"{y_arr.shape}.")
+
+    offset_arr = None if offset is None else np.asarray(offset, dtype=np.float64)
+
     # Validate inputs
     design = MixedDesign.validate(
-        np.asarray(y, dtype=np.float64),
+        y_arr,
         np.asarray(X, dtype=np.float64),
         groups,
         random_effects,
         random_data,
     )
+    if prior_w is not None and prior_w.shape != (design.n,):
+        raise ValidationError(
+            f"weights must have length {design.n}, got {prior_w.shape}.")
+    if offset_arr is not None and offset_arr.shape != (design.n,):
+        raise ValidationError(
+            f"offset must have length {design.n}, got {offset_arr.shape}.")
 
     with timer.section('setup'):
         specs = parse_random_effects(
             design.groups, design.random_effects, design.random_data, design.n,
-            build_dense=False,
+            build_dense=False, correlated=correlated,
         )
         # Structure-exploiting context (batched per-group for a single grouping
         # factor; sparse for crossed/nested) — the GLMM PIRLS solves through it
         # so the cost scales with the block/sparsity structure, not O(#groups³).
-        ctx = build_structured_context(design.X, design.y, specs, reml=False)
+        ctx = build_structured_context(
+            design.X, design.y, specs, reml=False,
+            offset=offset_arr, prior_weights=prior_w,
+        )
         theta0 = theta_start(specs)
         lb = theta_lower_bounds(specs)
         bounds = [(lb[i], None) for i in range(len(theta0))]
@@ -380,6 +430,19 @@ def glmm(
             stacklevel=2,
         )
 
+    # Boundary (singular) fit diagnostic (mirrors lme4's isSingular). The test
+    # is on θ only, so it is identical to the LMM path.
+    is_singular = is_singular_fit(theta_hat, specs)
+    if is_singular:
+        warnings.warn(
+            "boundary (singular) fit: a random-effects variance is near zero "
+            "or a correlation is near ±1. The fit is on the boundary of the "
+            "feasible region; consider simplifying the random-effects "
+            "structure. (See GLMMSolution.is_singular.)",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
     # Final inner solve at (θ̂, β̂): the conditional modes û, the fitted mean,
     # the Laplace log-det and the p×p Schur factor RX the fixed-effect
     # covariance needs — all from the structured factor at the mode.
@@ -406,7 +469,7 @@ def glmm(
 
     # Model fit
     with timer.section('model_fit'):
-        wt = np.ones(design.n, dtype=np.float64)
+        wt = np.ones(design.n, dtype=np.float64) if prior_w is None else prior_w
         deviance = family_obj.deviance(design.y, mode.mu, wt)
         n_params = p + len(theta_hat)
 
@@ -447,6 +510,7 @@ def glmm(
         linear_predictor=mode.eta,
         residuals=design.y - mode.mu,
         theta=theta_hat,
+        is_singular=is_singular,
     )
 
     warn_list = []
@@ -454,6 +518,8 @@ def glmm(
         warn_list.append("Optimizer did not converge (L-BFGS-B + fallback)")
     if not mode.converged:
         warn_list.append(f"PIRLS did not converge after {mode.n_iter} iterations")
+    if is_singular:
+        warn_list.append("boundary (singular) fit")
 
     result = Result(
         params=params,
@@ -498,16 +564,12 @@ def _extract_var_components(
         q = spec.n_terms
         n_theta = spec.theta_size
 
-        # Reconstruct the q × q lower-triangular Cholesky factor
+        # Reconstruct the q × q Cholesky factor (lower-triangular, or diagonal
+        # when the factor is uncorrelated — off-diagonals are then exactly 0).
         theta_k = theta[theta_start:theta_start + n_theta]
         theta_start += n_theta
 
-        T = np.zeros((q, q), dtype=np.float64)
-        idx = 0
-        for row in range(q):
-            for col in range(row + 1):
-                T[row, col] = theta_k[idx]
-                idx += 1
+        T = theta_to_factor(theta_k, spec)
 
         # Covariance matrix: σ² × T T'
         cov_matrix = sigma_sq * (T @ T.T)

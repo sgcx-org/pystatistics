@@ -125,3 +125,7 @@ class GLMMParams:
 
     # Internal
     theta: NDArray
+
+    # Boundary (singular) fit diagnostic, matching lme4's isSingular. Defaults
+    # to False so any legacy constructor stays valid; the solver always sets it.
+    is_singular: bool = False

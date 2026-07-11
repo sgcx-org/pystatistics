@@ -90,6 +90,115 @@ class CLogLogLink(Link):
         return np.maximum(exp_eta * np.exp(-exp_eta), 1e-10)
 
 
+class LogLogLink(Link):
+    """
+    Log-log link: g(mu) = -log(-log(mu)).
+
+    The inverse CDF is the Gumbel (maximum) distribution,
+    g^{-1}(eta) = exp(-exp(-eta)), matching MASS::polr's ``loglog`` method.
+    It is the mirror image of the complementary log-log link: asymmetric with
+    the opposite skew, so it accumulates probability quickly at low categories.
+    """
+
+    @property
+    def name(self) -> str:
+        """Return link function name."""
+        return 'loglog'
+
+    def link(self, mu: NDArray) -> NDArray:
+        """
+        Compute g(mu) = -log(-log(mu)).
+
+        Args:
+            mu: Array of probabilities in (0, 1).
+
+        Returns:
+            Linear predictor values.
+        """
+        mu = np.clip(mu, 1e-10, 1 - 1e-10)
+        return -np.log(-np.log(mu))
+
+    def linkinv(self, eta: NDArray) -> NDArray:
+        """
+        Compute g^{-1}(eta) = exp(-exp(-eta)).
+
+        Args:
+            eta: Array of linear predictor values.
+
+        Returns:
+            Probability values in (0, 1).
+        """
+        eta = np.clip(eta, -500, 500)
+        return np.exp(-np.exp(-eta))
+
+    def mu_eta(self, eta: NDArray) -> NDArray:
+        """
+        Compute d(mu)/d(eta) = exp(-eta) * exp(-exp(-eta)).
+
+        Args:
+            eta: Array of linear predictor values.
+
+        Returns:
+            Derivative of inverse link.
+        """
+        eta = np.clip(eta, -500, 500)
+        exp_neg_eta = np.exp(-eta)
+        return np.maximum(exp_neg_eta * np.exp(-exp_neg_eta), 1e-10)
+
+
+class CauchitLink(Link):
+    """
+    Cauchit link: g(mu) = tan(pi * (mu - 1/2)).
+
+    The inverse CDF is the standard Cauchy distribution,
+    g^{-1}(eta) = 1/2 + arctan(eta) / pi, matching MASS::polr's ``cauchit``
+    method. Its heavy tails make it robust to a few extreme linear-predictor
+    values relative to logit/probit.
+    """
+
+    @property
+    def name(self) -> str:
+        """Return link function name."""
+        return 'cauchit'
+
+    def link(self, mu: NDArray) -> NDArray:
+        """
+        Compute g(mu) = tan(pi * (mu - 1/2)).
+
+        Args:
+            mu: Array of probabilities in (0, 1).
+
+        Returns:
+            Linear predictor values.
+        """
+        mu = np.clip(mu, 1e-10, 1 - 1e-10)
+        return np.tan(np.pi * (mu - 0.5))
+
+    def linkinv(self, eta: NDArray) -> NDArray:
+        """
+        Compute g^{-1}(eta) = 1/2 + arctan(eta) / pi.
+
+        Args:
+            eta: Array of linear predictor values.
+
+        Returns:
+            Probability values in (0, 1).
+        """
+        return 0.5 + np.arctan(eta) / np.pi
+
+    def mu_eta(self, eta: NDArray) -> NDArray:
+        """
+        Compute d(mu)/d(eta) = 1 / (pi * (1 + eta^2)).
+
+        Args:
+            eta: Array of linear predictor values.
+
+        Returns:
+            Derivative of inverse link.
+        """
+        return np.maximum(1.0 / (np.pi * (1.0 + eta * eta)), 1e-10)
+
+
 # -- Threshold transforms -------------------------------------------------
 
 def raw_to_thresholds(raw: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
@@ -356,6 +465,7 @@ def cumulative_gradient(
 _LINK_BY_NAME: dict[str, type[Link]] = {
     "logistic": LogitLink, "logit": LogitLink,
     "probit": ProbitLink, "cloglog": CLogLogLink,
+    "loglog": LogLogLink, "cauchit": CauchitLink,
 }
 
 
@@ -378,7 +488,7 @@ def category_probs(
             intercepts), matching the design the model was fit on.
         coefficients: Slope coefficients beta, length p.
         thresholds: Natural ordered thresholds alpha, length K-1.
-        link_name: 'logistic'/'logit', 'probit', or 'cloglog'.
+        link_name: 'logistic'/'logit', 'probit', 'cloglog', 'loglog', or 'cauchit'.
 
     Returns:
         (n, K) probability matrix; each row sums to 1.

@@ -107,6 +107,42 @@ class LinearSolution(SolutionReprMixin):
         return float(np.sqrt(self.rss / df))
 
     @property
+    def hat_values(self) -> NDArray[np.floating[Any]]:
+        """Leverage (hat-matrix diagonal): ``h_i = x_i' (X'X)^{-1} x_i`` (WLS-
+        weighted when ``weights`` were supplied). Matches R's ``hatvalues.lm``.
+        """
+        hat = self._result.info.get('hat')
+        if hat is None:
+            return np.full(self._design.n, np.nan, dtype=np.float64)
+        return np.asarray(hat)
+
+    @property
+    def cooks_distance(self) -> NDArray[np.floating[Any]]:
+        """Cook's distance: ``D_i = e_i^2 h_i / ((1-h_i)^2 p s^2)`` with residuals
+        ``e``, leverage ``h``, rank ``p`` and ``s^2 = RSS/df``. Matches R's
+        ``cooks.distance.lm``.
+        """
+        h = self.hat_values
+        e = self.residuals
+        p = self._result.params.rank
+        s2 = self.residual_std_error ** 2
+        with np.errstate(divide='ignore', invalid='ignore'):
+            d = e ** 2 * h / ((1.0 - h) ** 2 * p * s2)
+        return np.where(np.isfinite(d), d, np.nan)
+
+    @property
+    def residuals_standardized(self) -> NDArray[np.floating[Any]]:
+        """Internally studentized residuals: ``e_i / (s sqrt(1-h_i))``, ``s^2 =
+        RSS/df``. Matches R's ``rstandard.lm``.
+        """
+        h = self.hat_values
+        e = self.residuals
+        s = self.residual_std_error
+        with np.errstate(divide='ignore', invalid='ignore'):
+            r = e / (s * np.sqrt(1.0 - h))
+        return np.where(np.isfinite(r), r, np.nan)
+
+    @property
     def standard_errors(self) -> NDArray[np.floating[Any]]:
         """
         Standard errors of coefficients.

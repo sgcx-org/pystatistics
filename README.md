@@ -371,6 +371,27 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.7.0 — links, families, diagnostics, smooth bases, and more
+
+A broad feature release closing mainstream R capabilities across several modules:
+
+- **GLMs:** new links (`cloglog`, `cauchit`, `sqrt`, `1/mu^2`) and families
+  (`inverse.gaussian`, `quasipoisson`, `quasibinomial`); regression diagnostics
+  (`.hat_values`, `.cooks_distance`, `.residuals_standardized`); `anova()` /
+  `drop1()` analysis-of-deviance tables; and profile-likelihood confidence
+  intervals (`profile_conf_int()`).
+- **Ordinal:** the `loglog` and `cauchit` links, completing all five `polr` links.
+- **Mixed models:** `offset=`, prior `weights=`, aggregated-binomial responses,
+  uncorrelated random effects (`correlated=False`), and a singular-fit diagnostic.
+- **GAMs:** cyclic-cubic (`bs='cc'`) and P-spline (`bs='ps'`) bases,
+  varying-coefficient `by=` smooths, a usable `family='nb'`, and faster
+  non-Gaussian smoothing-parameter selection.
+- **Factor analysis:** factor scores (`scores=`).
+- **ANOVA:** omega-squared / Cohen's d effect sizes and the Games-Howell test.
+
+Also fixes the promax rotation normalisation, GAM non-canonical-link REML, and the
+quasi/inverse-Gaussian dispersion estimate. See the changelog for details.
+
 ### 4.6.13 — `mvnmle` fails loud on constant columns; reference-optimizer rename
 
 `mvnmle.mlest` now raises on a constant (zero-variance) column — which has no

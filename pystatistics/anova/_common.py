@@ -41,6 +41,8 @@ class AnovaParams:
     residual_ms: float
     eta_squared: dict[str, float]                  # term -> eta^2
     partial_eta_squared: dict[str, float]           # term -> partial eta^2
+    omega_squared: dict[str, float] = field(default_factory=dict)          # term -> omega^2
+    partial_omega_squared: dict[str, float] = field(default_factory=dict)  # term -> partial omega^2
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class PostHocComparison:
     ci_upper: float
     p_value: float
     se: float
+    cohens_d: float | None = None   # pairwise standardized mean diff (pooled SD)
 
 
 @dataclass(frozen=True)

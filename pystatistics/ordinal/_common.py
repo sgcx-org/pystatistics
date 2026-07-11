@@ -50,7 +50,8 @@ class OrdinalParams:
     converged : bool
         Whether the optimizer converged within tolerance.
     link : str
-        Link function name used ('logistic', 'probit', or 'cloglog').
+        Link function name used ('logistic', 'probit', 'cloglog', 'loglog',
+        or 'cauchit').
     """
 
     coefficients: NDArray[np.floating[Any]]

@@ -385,6 +385,19 @@ class GLMMSolution(SolutionReprMixin):
         return self.params.var_components
 
     @property
+    def is_singular(self) -> bool:
+        """Whether this is a boundary (singular) fit.
+
+        True when a random-effects variance has collapsed to (near) zero or an
+        implied correlation has reached ±1 — the fit sits on the boundary of the
+        feasible region. Mirrors lme4's ``isSingular()`` (and ``LMMSolution``'s
+        property of the same name). The estimates are still the correct
+        (boundary) MLE; a singular fit is a signal the random-effects structure
+        may be too complex for the data, not an error.
+        """
+        return self.params.is_singular
+
+    @property
     def icc(self) -> dict[str, float]:
         """ICC on the latent (link) scale.
 

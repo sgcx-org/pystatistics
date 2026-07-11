@@ -108,18 +108,20 @@ class ConvergenceError(PyStatisticsError):
     
     Raised when an iterative optimization method (EM, Newton-Raphson, IRLS)
     fails to meet convergence criteria within the maximum number of iterations.
-    
+
     Attributes:
-        iterations: Number of iterations completed
+        iterations: Number of iterations completed (None when the failure is
+            not tied to an iteration count, e.g. a non-finite working
+            response or a singular derivative system detected mid-algorithm)
         final_change: Final parameter or objective change
         reason: Why convergence failed (e.g., 'max_iterations', 'diverging')
         threshold: The convergence threshold that was not met
     """
-    
+
     def __init__(
         self,
         message: str,
-        iterations: int,
+        iterations: int | None = None,
         final_change: float | None = None,
         reason: str | None = None,
         threshold: float | None = None

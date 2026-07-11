@@ -23,18 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from pystatistics.mixed._random_effects import RandomEffectSpec
-
-
-def _theta_to_T(theta: NDArray, q: int) -> NDArray:
-    """Lower-triangular q×q Cholesky factor T from a θ block."""
-    T = np.zeros((q, q), dtype=np.float64)
-    idx = 0
-    for row in range(q):
-        for col in range(row + 1):
-            T[row, col] = theta[idx]
-            idx += 1
-    return T
+from pystatistics.mixed._random_effects import RandomEffectSpec, theta_to_factor
 
 
 @dataclass
@@ -111,7 +100,7 @@ def build_batched_factor(
     J, q = spec.n_groups, spec.n_terms
     n, p = X.shape
 
-    T = _theta_to_T(theta, q)
+    T = theta_to_factor(theta, spec)
     VT = V @ T                                          # (n, q) rotated values
     wVT = VT if weights is None else VT * weights[:, None]  # W-scaled rows
 

@@ -114,6 +114,48 @@ class GLMSolution(SolutionReprMixin):
         return self._result.params.residuals_response
 
     @property
+    def hat_values(self) -> NDArray[np.floating[Any]]:
+        """Leverage (hat-matrix diagonal) of the weighted fit.
+
+        ``h_i = w_i x_i' (X'WX)^{-1} x_i`` with the final IRLS working weights
+        ``w``. Matches R's ``hatvalues.glm`` / ``influence(glm)$hat``.
+        """
+        hat = self._result.info.get('hat')
+        if hat is None:
+            return np.full(self._design.n, np.nan, dtype=np.float64)
+        return np.asarray(hat)
+
+    @property
+    def cooks_distance(self) -> NDArray[np.floating[Any]]:
+        """Cook's distance per observation.
+
+        ``D_i = r_{P,i}^2 h_i / ((1 - h_i)^2 phi p)`` with Pearson residuals
+        ``r_P``, leverage ``h``, dispersion ``phi`` and rank ``p``. Matches R's
+        ``cooks.distance.glm``.
+        """
+        h = self.hat_values
+        rp = self.residuals_pearson
+        phi = self.dispersion
+        p = self.rank
+        with np.errstate(divide='ignore', invalid='ignore'):
+            d = rp ** 2 * h / ((1.0 - h) ** 2 * phi * p)
+        return np.where(np.isfinite(d), d, np.nan)
+
+    @property
+    def residuals_standardized(self) -> NDArray[np.floating[Any]]:
+        """Standardized (internally studentized) deviance residuals.
+
+        ``r_{D,i} / sqrt(phi (1 - h_i))`` — R's ``rstandard.glm`` default
+        (``type='deviance'``).
+        """
+        h = self.hat_values
+        rd = self.residuals_deviance
+        phi = self.dispersion
+        with np.errstate(divide='ignore', invalid='ignore'):
+            r = rd / np.sqrt(phi * (1.0 - h))
+        return np.where(np.isfinite(r), r, np.nan)
+
+    @property
     def deviance(self) -> float:
         """Residual deviance."""
         return self._result.params.deviance
@@ -305,6 +347,20 @@ class GLMSolution(SolutionReprMixin):
         coef = self.coefficients
         se = self.standard_errors
         return np.column_stack([coef - q * se, coef + q * se])
+
+    def profile_conf_int(
+        self, conf_level: float | None = None,
+    ) -> NDArray[np.floating[Any]]:
+        """Profile-likelihood confidence intervals, shape (p, 2).
+
+        The GLM analogue of R's ``confint(glm)`` (profile deviance), as opposed to
+        the Wald intervals in :attr:`conf_int`. More accurate than Wald when the
+        log-likelihood is asymmetric in a coefficient. ``conf_level`` defaults to
+        this solution's level.
+        """
+        from pystatistics.regression._profile import profile_conf_int
+        level = self._conf_level if conf_level is None else conf_level
+        return profile_conf_int(self, level)
 
     @property
     def info(self) -> dict[str, Any]:

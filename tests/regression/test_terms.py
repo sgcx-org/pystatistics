@@ -45,20 +45,20 @@ def ds(df):
 
 class TestCategoricalEncoding:
     def test_default_reference_is_first_sorted_level(self, ds):
-        X, names = build_terms_design(ds, [C("treatment")], intercept=True)
+        X, names, _assign, _tn = build_terms_design(ds, [C("treatment")], intercept=True)
         # treatment levels A,B,C → baseline A → columns for B, C
         assert names == ["(Intercept)", "treatment[B]", "treatment[C]"]
 
     def test_explicit_reference_level(self, ds):
-        X, names = build_terms_design(ds, [C("treatment", ref="C")], intercept=True)
+        X, names, _assign, _tn = build_terms_design(ds, [C("treatment", ref="C")], intercept=True)
         assert names == ["(Intercept)", "treatment[A]", "treatment[B]"]
 
     def test_k_minus_1_columns(self, ds):
-        X, names = build_terms_design(ds, [C("treatment")], intercept=False)
+        X, names, _assign, _tn = build_terms_design(ds, [C("treatment")], intercept=False)
         assert X.shape[1] == 2  # 3 levels → 2 indicators
 
     def test_indicator_values_are_zero_one(self, ds):
-        X, names = build_terms_design(ds, [C("sex", ref="F")], intercept=False)
+        X, names, _assign, _tn = build_terms_design(ds, [C("sex", ref="F")], intercept=False)
         assert set(np.unique(X)) <= {0.0, 1.0}
 
     def test_bad_reference_raises(self, ds):
@@ -70,18 +70,18 @@ class TestCategoricalEncoding:
 
 class TestInteractions:
     def test_numeric_x_numeric(self, ds):
-        X, names = build_terms_design(ds, [("age", "age")], intercept=False)
+        X, names, _assign, _tn = build_terms_design(ds, [("age", "age")], intercept=False)
         assert names == ["age:age"]
         np.testing.assert_allclose(X[:, 0], ds["age"] ** 2)
 
     def test_numeric_x_categorical(self, ds):
-        X, names = build_terms_design(ds, [("age", C("sex", ref="F"))], intercept=False)
+        X, names, _assign, _tn = build_terms_design(ds, [("age", C("sex", ref="F"))], intercept=False)
         assert names == ["age:sex[M]"]
         expected = ds["age"] * (ds["sex"] == "M")
         np.testing.assert_allclose(X[:, 0], expected)
 
     def test_categorical_x_categorical_label_order(self, ds):
-        X, names = build_terms_design(
+        X, names, _assign, _tn = build_terms_design(
             ds, [(C("treatment", ref="A"), C("sex", ref="F"))], intercept=False
         )
         assert names == ["treatment[B]:sex[M]", "treatment[C]:sex[M]"]
@@ -95,7 +95,7 @@ class TestInteractions:
             "b": ["p", "q", "r", "q", "r", "p", "r", "p", "q"],
         })
         ds = DataSource.from_dataframe(df)
-        X, names = build_terms_design(
+        X, names, _assign, _tn = build_terms_design(
             ds, [(C("a", ref="x"), C("b", ref="p"))], intercept=False
         )
         assert names == [

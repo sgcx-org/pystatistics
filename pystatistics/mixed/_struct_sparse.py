@@ -25,7 +25,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu, SuperLU
 
 from pystatistics.core.exceptions import NumericalError
-from pystatistics.mixed._random_effects import RandomEffectSpec
+from pystatistics.mixed._random_effects import RandomEffectSpec, theta_to_factor
 
 
 def build_sparse_z(specs: list[RandomEffectSpec]) -> tuple[sp.csc_matrix, list]:
@@ -64,16 +64,6 @@ def build_sparse_z(specs: list[RandomEffectSpec]) -> tuple[sp.csc_matrix, list]:
     return Z, blocks
 
 
-def _theta_to_T(theta_k: NDArray, q: int) -> NDArray:
-    T = np.zeros((q, q), dtype=np.float64)
-    idx = 0
-    for row in range(q):
-        for col in range(row + 1):
-            T[row, col] = theta_k[idx]
-            idx += 1
-    return T
-
-
 def build_sparse_lambda(
     theta: NDArray, specs: list[RandomEffectSpec], blocks: list
 ) -> sp.csc_matrix:
@@ -87,7 +77,7 @@ def build_sparse_lambda(
     theta_start = 0
     for spec, (offset, J, q) in zip(specs, blocks):
         n_theta = spec.theta_size
-        T = _theta_to_T(theta[theta_start:theta_start + n_theta], q)
+        T = theta_to_factor(theta[theta_start:theta_start + n_theta], spec)
         theta_start += n_theta
         jvec = np.arange(J)
         for r in range(q):

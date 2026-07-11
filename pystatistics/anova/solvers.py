@@ -27,7 +27,9 @@ from pystatistics.anova._common import (
 from pystatistics.anova._contrasts import build_model_matrix
 from pystatistics.anova._ss import compute_ss_type1, compute_ss_type2, compute_ss_type3
 from pystatistics.anova._levene import levene_test_impl
-from pystatistics.anova._posthoc import tukey_hsd, bonferroni_pairwise, dunnett_test
+from pystatistics.anova._posthoc import (
+    tukey_hsd, bonferroni_pairwise, dunnett_test, games_howell,
+)
 from pystatistics.anova._repeated import repeated_measures_anova
 from pystatistics.anova.design import AnovaDesign
 from pystatistics.anova.solution import (
@@ -36,6 +38,44 @@ from pystatistics.anova.solution import (
     LeveneSolution,
     PostHocSolution,
 )
+
+
+def _effect_sizes(
+    rows: Any, n_obs: int,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
+    """Compute term-level ANOVA effect sizes from the SS table.
+
+    Returns (eta_squared, partial_eta_squared, omega_squared,
+    partial_omega_squared), each keyed by term name (excluding 'Residuals').
+
+    - eta^2       = SS_term / SS_total
+    - partial eta^2 = SS_term / (SS_term + SS_error)
+    - omega^2     = (SS_term - df_term * MS_error) / (SS_total + MS_error)
+    - partial omega^2 = (SS_term - df_term * MS_error)
+                        / (SS_term + (N - df_term) * MS_error)
+
+    The omega formulas match R's ``effectsize::omega_squared`` (which returns
+    omega^2 for one-way designs, where partial omega^2 coincides with it).
+    """
+    residual_row = rows[-1]
+    total_ss = sum(row.sum_sq for row in rows)
+    mse = residual_row.mean_sq
+    eta_sq: dict[str, float] = {}
+    partial_eta_sq: dict[str, float] = {}
+    omega_sq: dict[str, float] = {}
+    partial_omega_sq: dict[str, float] = {}
+    for row in rows:
+        if row.term == 'Residuals':
+            continue
+        eta_sq[row.term] = row.sum_sq / total_ss if total_ss > 0 else 0.0
+        denom_pe = row.sum_sq + residual_row.sum_sq
+        partial_eta_sq[row.term] = row.sum_sq / denom_pe if denom_pe > 0 else 0.0
+        num = row.sum_sq - row.df * mse
+        denom_o = total_ss + mse
+        omega_sq[row.term] = num / denom_o if denom_o > 0 else 0.0
+        denom_po = row.sum_sq + (n_obs - row.df) * mse
+        partial_omega_sq[row.term] = num / denom_po if denom_po > 0 else 0.0
+    return eta_sq, partial_eta_sq, omega_sq, partial_omega_sq
 
 
 def anova_oneway(
@@ -91,16 +131,9 @@ def anova_oneway(
 
     # Effect sizes
     residual_row = rows[-1]
-    total_ss = sum(row.sum_sq for row in rows)
-    eta_sq: dict[str, float] = {}
-    partial_eta_sq: dict[str, float] = {}
-    for row in rows:
-        if row.term != 'Residuals':
-            eta_sq[row.term] = row.sum_sq / total_ss if total_ss > 0 else 0.0
-            partial_eta_sq[row.term] = (
-                row.sum_sq / (row.sum_sq + residual_row.sum_sq)
-                if (row.sum_sq + residual_row.sum_sq) > 0 else 0.0
-            )
+    eta_sq, partial_eta_sq, omega_sq, partial_omega_sq = _effect_sizes(
+        rows, design.n
+    )
 
     elapsed = time.perf_counter() - t0
 
@@ -116,6 +149,8 @@ def anova_oneway(
         residual_ms=residual_row.mean_sq,
         eta_squared=eta_sq,
         partial_eta_squared=partial_eta_sq,
+        omega_squared=omega_sq,
+        partial_omega_squared=partial_omega_sq,
     )
 
     result = Result(
@@ -204,16 +239,9 @@ def anova(
 
     # Effect sizes
     residual_row = rows[-1]
-    total_ss = sum(row.sum_sq for row in rows)
-    eta_sq: dict[str, float] = {}
-    partial_eta_sq: dict[str, float] = {}
-    for row in rows:
-        if row.term != 'Residuals':
-            eta_sq[row.term] = row.sum_sq / total_ss if total_ss > 0 else 0.0
-            partial_eta_sq[row.term] = (
-                row.sum_sq / (row.sum_sq + residual_row.sum_sq)
-                if (row.sum_sq + residual_row.sum_sq) > 0 else 0.0
-            )
+    eta_sq, partial_eta_sq, omega_sq, partial_omega_sq = _effect_sizes(
+        rows, design.n
+    )
 
     elapsed = time.perf_counter() - t0
 
@@ -229,6 +257,8 @@ def anova(
         residual_ms=residual_row.mean_sq,
         eta_squared=eta_sq,
         partial_eta_squared=partial_eta_sq,
+        omega_squared=omega_sq,
+        partial_omega_squared=partial_omega_sq,
     )
 
     result = Result(
@@ -329,7 +359,9 @@ def anova_posthoc(
 
     Args:
         anova_result: Result from anova_oneway() or anova()
-        method: 'tukey' (default), 'bonferroni', or 'dunnett'
+        method: 'tukey' (default), 'bonferroni', 'dunnett', or 'games-howell'
+            ('games-howell' uses per-pair variances + Welch df for the
+            unequal-variance case; it ignores the pooled ANOVA MSE)
         factor: Which factor to compare (required for factorial, auto for oneway)
         control: Control group name (required for dunnett)
         conf_level: Confidence level (default 0.95)
@@ -394,9 +426,14 @@ def anova_posthoc(
             y_arr, group_arr, mse, df_error, control,
             factor=factor, conf_level=conf_level,
         )
+    elif method == 'games-howell':
+        posthoc_params = games_howell(
+            y_arr, group_arr, factor=factor, conf_level=conf_level,
+        )
     else:
         raise ValidationError(
-            f"Unknown method {method!r}. Use 'tukey', 'bonferroni', or 'dunnett'."
+            f"Unknown method {method!r}. Use 'tukey', 'bonferroni', "
+            f"'dunnett', or 'games-howell'."
         )
 
     elapsed = time.perf_counter() - t0

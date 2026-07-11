@@ -25,6 +25,7 @@ from numpy.typing import NDArray
 
 from pystatistics.core.result import Result
 from pystatistics.core.compute.timing import Timer
+from pystatistics.regression.backends._hat import hat_diagonal as _hat_diagonal
 from pystatistics.core.compute.linalg.qr import qr_solve
 from pystatistics.regression.design import Design
 from pystatistics.regression.families import Family
@@ -168,8 +169,15 @@ class CPUIRLSBackend:
         df_residual = n - final_rank
         if family.dispersion_is_fixed:
             dispersion = 1.0
+        elif df_residual <= 0:
+            dispersion = float('nan')
+        elif family.dispersion_estimator == 'pearson':
+            # R's summary.glm convention: sum(wt * (y-mu)^2 / V(mu)) / df,
+            # the definitional dispersion for the quasi-likelihood families.
+            pearson_chisq = float(np.sum(wt * (y - mu) ** 2 / family.variance(mu)))
+            dispersion = pearson_chisq / df_residual
         else:
-            dispersion = dev / df_residual if df_residual > 0 else float('nan')
+            dispersion = dev / df_residual
 
         # ------------------------------------------------------------------
         # AIC
@@ -194,6 +202,16 @@ class CPUIRLSBackend:
             # Working residuals from the final iteration
             mu_eta_final = link.mu_eta(eta)
             resid_working = (y - mu) / mu_eta_final
+
+        # ------------------------------------------------------------------
+        # Leverage (hat) diagonal, from the weighted design at convergence.
+        # h_i = w_i * x_i' (X'WX)^{-1} x_i, with the final working weights
+        # w = wt * (dμ/dη)^2 / V(μ). This matches R's hatvalues.glm.
+        # ------------------------------------------------------------------
+        hat = _hat_diagonal(
+            X, wt * (mu_eta_final ** 2) / var_mu,
+            final_qr_R, final_qr_pivot, final_rank,
+        )
 
         timer.stop()
 
@@ -229,6 +247,8 @@ class CPUIRLSBackend:
                 'rank': final_rank,
                 'pivot': final_qr_pivot.tolist() if final_qr_pivot is not None else None,
                 'R': final_qr_R,
+                'hat': hat,
+                'family': family,
             },
             timing=timer.result(),
             backend_name=self.name,

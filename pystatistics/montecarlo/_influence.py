@@ -91,6 +91,41 @@ def jackknife_influence(
     return L
 
 
+def _regen_index_matrix(design, rng, R: int, n: int) -> NDArray:
+    """Regenerate the (R, n) resample-index matrix, mirroring the CPU backend's
+    ``_ordinary_bootstrap`` / ``_balanced_bootstrap`` exactly (same RNG calls, in
+    order), so the frequencies match the stored replicates. Supports ordinary and
+    balanced simulations, with or without strata.
+    """
+    strata = design.strata
+    idx = np.empty((R, n), dtype=int)
+
+    if design.sim == "ordinary":
+        for b in range(R):
+            if strata is None:
+                idx[b] = rng.choice(n, size=n, replace=True)
+            else:
+                for s in np.unique(strata):
+                    mask = strata == s
+                    s_idx = np.where(mask)[0]
+                    idx[b, mask] = rng.choice(s_idx, size=len(s_idx), replace=True)
+        return idx
+
+    # balanced
+    if strata is None:
+        pool = np.tile(np.arange(n), R)
+        rng.shuffle(pool)
+        return pool.reshape(R, n)
+    for s in np.unique(strata):
+        mask = strata == s
+        ns = int(mask.sum())
+        pool = np.tile(np.where(mask)[0], R)
+        rng.shuffle(pool)
+        for b in range(R):
+            idx[b, mask] = pool[b * ns:(b + 1) * ns]
+    return idx
+
+
 def regression_influence(
     boot_out: 'BootstrapSolution',
     stat_index: int = 0,
@@ -102,19 +137,25 @@ def regression_influence(
 
         L = pinv(P_c) @ (t - mean(t)),   P = freq/n,  P_c = P - colmean(P)
 
-    (then centred to sum zero), where ``freq`` is the R×n matrix of how many times
-    each observation appeared in each replicate. The frequencies are regenerated
+    (then centred to sum zero — within each stratum when the resampling is
+    stratified), where ``freq`` is the R×n matrix of how many times each
+    observation appeared in each replicate. The frequencies are regenerated
     deterministically from the stored seed rather than stored (matching R's own
     regenerate-from-seed approach), so there is no memory cost unless BCa is
     requested.
 
-    Returns ``None`` (caller falls back to the jackknife) when the estimate does
-    not apply — a non-ordinary simulation, stratified resampling, no seed, or a
-    regeneration that fails to reproduce the stored replicates (a self-check that
-    prevents a silently-wrong influence if the resampling RNG path ever drifts).
+    Applies to the **ordinary and balanced** bootstrap, with or without strata —
+    the resample frequencies exist and R's ``boot.ci`` uses this regression
+    acceleration for all of them (jackknife-fallback BCa can shift a tail endpoint
+    by several percent for a strongly non-linear statistic; see the A7
+    measurement). Returns ``None`` (caller falls back to the jackknife) only when
+    the estimate genuinely does not apply — a **parametric** simulation (no
+    resample frequencies; R has the same limitation), no seed, or a regeneration
+    that fails to reproduce the stored replicates (a self-check that prevents a
+    silently-wrong influence if the resampling RNG path ever drifts).
     """
     design = boot_out._design
-    if design.sim != "ordinary" or design.strata is not None:
+    if design.sim not in ("ordinary", "balanced"):
         return None
     if design.seed is None:
         return None
@@ -122,24 +163,23 @@ def regression_influence(
     data = boot_out.data
     statistic = design.statistic
     stype = design.stype
+    strata = design.strata
     t = boot_out.t[:, stat_index]
     n = data.shape[0]
     R = t.shape[0]
 
     rng = np.random.default_rng(design.seed)
-    freq = np.empty((R, n), dtype=np.float64)
-    first_idx = None
-    for b in range(R):
-        idx = rng.choice(n, size=n, replace=True)
-        if b == 0:
-            first_idx = idx
-        freq[b] = np.bincount(idx, minlength=n)
+    idx_matrix = _regen_index_matrix(design, rng, R, n)
+    freq = np.stack([
+        np.bincount(idx_matrix[b], minlength=n).astype(np.float64)
+        for b in range(R)
+    ])
 
     # Self-check: the regenerated replicate 0 must reproduce the stored t[0].
     # If it does not, the stored replicates did not come from this seed/path
     # (e.g. an injected/GPU solution) — fail safe to the jackknife.
     if stype == "i":
-        chk = np.atleast_1d(np.asarray(statistic(data, first_idx)))[stat_index]
+        chk = np.atleast_1d(np.asarray(statistic(data, idx_matrix[0])))[stat_index]
     elif stype == "f":
         chk = np.atleast_1d(np.asarray(statistic(data, freq[0])))[stat_index]
     else:  # "w"
@@ -150,5 +190,20 @@ def regression_influence(
 
     P = freq / n
     Pc = P - P.mean(axis=0)
-    L = np.linalg.pinv(Pc) @ (t - t.mean())
-    return L - L.mean()
+    # The frequency matrix is rank-deficient (each replicate's counts sum to n,
+    # and within each stratum to n_s), so its trailing singular values are ~0.
+    # A truncating rcond drops those degenerate directions; without it pinv's
+    # min-norm solution loads them with huge (~1e12) offsetting values that only
+    # cancel under centering with heavy round-off. The retained solution is the
+    # same empirical-influence estimate, numerically clean.
+    L = np.linalg.pinv(Pc, rcond=1e-8) @ (t - t.mean())
+    if strata is None:
+        return L - L.mean()
+    # Stratified: the frequencies are collinear within each stratum, so L is
+    # identified only up to a per-stratum constant — centre within strata
+    # (matching R's empinf for a stratified boot object).
+    L = L.copy()
+    for s in np.unique(strata):
+        mask = strata == s
+        L[mask] -= L[mask].mean()
+    return L

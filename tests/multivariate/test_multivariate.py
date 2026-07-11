@@ -967,6 +967,79 @@ class TestFactorAnalysisVsR:
         assert np.isclose(np.asarray(py.uniquenesses).min(), 0.005, atol=1e-4)
 
 
+def _align_columns(got, ref):
+    """Match ``got`` to ``ref`` up to per-column sign flips and column
+    permutation (factor order/sign are not identified), returning the max
+    absolute elementwise difference under the best alignment."""
+    import itertools
+    m = got.shape[1]
+    best = None
+    for perm in itertools.permutations(range(m)):
+        g = got[:, perm]
+        for signs in itertools.product([1.0, -1.0], repeat=m):
+            err = np.max(np.abs(g * np.asarray(signs) - ref))
+            best = err if best is None or err < best else best
+    return best
+
+
+class TestFactorScoresVsR:
+    """FA factor scores (``scores='regression'``/``'bartlett'``) and the
+    R-validated promax loadings, checked against a committed ``factanal``
+    reference fixture (VA-10a)."""
+
+    @staticmethod
+    def _fixture():
+        import json
+        from pathlib import Path
+        path = (Path(__file__).resolve().parent.parent
+                / "fixtures" / "factor_analysis_scores.json")
+        return json.loads(path.read_text())
+
+    @pytest.mark.parametrize("rotation", ["none", "varimax", "promax"])
+    @pytest.mark.parametrize("scores", ["regression", "bartlett"])
+    def test_scores_match_factanal(self, rotation, scores):
+        d = self._fixture()
+        X = np.asarray(d["X"], dtype=float)
+        ref = np.asarray(
+            d["refs"][rotation][f"scores_{scores}"], dtype=float
+        )
+        sol = factor_analysis(X, n_factors=2, rotation=rotation, scores=scores)
+        assert sol.scores is not None
+        assert sol.scores.shape == (X.shape[0], 2)
+        # Scores follow the loadings' factor sign/order, so align per column.
+        assert _align_columns(sol.scores, ref) < 1e-3
+
+    @pytest.mark.parametrize("rotation", ["none", "varimax", "promax"])
+    def test_loadings_match_factanal(self, rotation):
+        """Loadings match factanal — in particular promax, whose column
+        normalisation now follows stats::promax's sqrt(diag((U'U)^-1))."""
+        d = self._fixture()
+        X = np.asarray(d["X"], dtype=float)
+        ref = np.asarray(d["refs"][rotation]["loadings"], dtype=float)
+        sol = factor_analysis(X, n_factors=2, rotation=rotation)
+        assert _align_columns(np.asarray(sol.loadings), ref) < 1e-3
+
+    def test_scores_none_by_default(self):
+        d = self._fixture()
+        X = np.asarray(d["X"], dtype=float)
+        assert factor_analysis(X, n_factors=2).scores is None
+        assert factor_analysis(X, n_factors=2, scores="none").scores is None
+
+    def test_regression_scores_roughly_standardized(self):
+        """Regression scores are (near) mean-zero, like factanal's."""
+        d = self._fixture()
+        X = np.asarray(d["X"], dtype=float)
+        sol = factor_analysis(X, n_factors=2, rotation="varimax",
+                              scores="regression")
+        assert np.max(np.abs(sol.scores.mean(axis=0))) < 1e-8
+
+    def test_invalid_scores_raises(self):
+        d = self._fixture()
+        X = np.asarray(d["X"], dtype=float)
+        with pytest.raises(ValidationError, match="scores"):
+            factor_analysis(X, n_factors=2, scores="thomson")
+
+
 # ===========================================================================
 # Rotation Tests
 # ===========================================================================

@@ -305,6 +305,8 @@ class FactorParams:
         converged: Whether the optimisation converged.
         n_iter: Number of iterations used.
         objective: Final objective function value.
+        scores: Estimated factor scores (n_obs x n_factors), or None when
+            ``scores='none'`` was requested (the default).
     """
 
     loadings: NDArray
@@ -323,6 +325,7 @@ class FactorParams:
     converged: bool
     n_iter: int
     objective: float
+    scores: NDArray | None = None
 
 
 @dataclass
@@ -344,6 +347,16 @@ class FactorSolution(SolutionReprMixin):
     @property
     def uniquenesses(self) -> NDArray:
         return self._result.params.uniquenesses
+
+    @property
+    def scores(self) -> NDArray | None:
+        """Estimated factor scores (n_obs x n_factors), or None.
+
+        Populated only when ``factor_analysis(..., scores='regression')`` or
+        ``scores='bartlett'`` was requested (matching R's ``factanal(scores=)``);
+        None for the default ``scores='none'``.
+        """
+        return self._result.params.scores
 
     @property
     def communalities(self) -> NDArray:

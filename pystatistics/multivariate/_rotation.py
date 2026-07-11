@@ -137,15 +137,19 @@ def promax(
     target = np.sign(varimax_loadings) * np.abs(varimax_loadings) ** m
 
     # Step 3: least-squares rotation  L @ Q ≈ target
-    # Q = (L' L)^{-1} L' target, then normalise columns
+    # Q = (L' L)^{-1} L' target (the raw oblique transform U in R's promax).
     LtL = varimax_loadings.T @ varimax_loadings
     LtT = varimax_loadings.T @ target
     Q = np.linalg.solve(LtL, LtT)
 
-    # Normalise columns of Q so that diag(Q'Q) = 1
-    col_norms = np.sqrt(np.sum(Q ** 2, axis=0))
-    col_norms = np.where(col_norms == 0, 1.0, col_norms)
-    Q = Q / col_norms[np.newaxis, :]
+    # Column normalisation, matching R's stats::promax exactly:
+    #   d <- diag(solve(t(U) %*% U)); U <- U %*% diag(sqrt(d))
+    # i.e. scale column j of Q by sqrt of the j-th diagonal of (Q'Q)^{-1}.
+    # This is NOT the same as dividing by the column norm sqrt(diag(Q'Q)) unless
+    # Q'Q is diagonal; using the column norm gives a different oblique
+    # normalisation (loadings off by a few percent from factanal/promax).
+    QtQ_inv_diag = np.diag(np.linalg.inv(Q.T @ Q))
+    Q = Q * np.sqrt(QtQ_inv_diag)[np.newaxis, :]
 
     rotated_loadings = varimax_loadings @ Q
 

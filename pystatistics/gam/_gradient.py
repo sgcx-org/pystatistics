@@ -23,9 +23,9 @@ p-by-p factors the fit already produced — ``A^{-1}`` is the posterior
 covariance evaluated at unit scale. Pure numpy.
 
 Scope: Gaussian-identity ONLY. For GLM families the IRLS weights depend on
-``beta``, so the score gains an implicit ``d beta / d rho`` term (the full Wood
-2011 form) that this module deliberately does not implement; those families
-keep the finite-difference path in ``_criteria.select_lambdas``.
+``beta``, so the score gains an implicit ``d beta / d rho`` term (the full
+Wood 2011 form) — that lives in ``_gradient_glm``, which shares this
+module's ``_penalty_terms``.
 """
 
 from __future__ import annotations

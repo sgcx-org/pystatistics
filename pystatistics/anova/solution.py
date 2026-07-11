@@ -75,6 +75,24 @@ class AnovaSolution(SolutionReprMixin):
         return self._result.params.partial_eta_squared
 
     @property
+    def omega_squared(self) -> dict[str, float]:
+        """Omega-squared effect size per term (less biased than eta^2).
+
+        ``omega^2 = (SS_term - df_term * MS_error) / (SS_total + MS_error)``,
+        matching R's ``effectsize::omega_squared``.
+        """
+        return self._result.params.omega_squared
+
+    @property
+    def partial_omega_squared(self) -> dict[str, float]:
+        """Partial omega-squared effect size per term.
+
+        ``(SS_term - df_term * MS_error) / (SS_term + (N - df_term) * MS_error)``.
+        For a one-way design this coincides with :attr:`omega_squared`.
+        """
+        return self._result.params.partial_omega_squared
+
+    @property
     def group_means(self) -> dict[str, dict[str, float]]:
         return self._result.params.group_means
 
@@ -346,6 +364,7 @@ class PostHocSolution(SolutionReprMixin):
             'tukey': "Tukey HSD",
             'bonferroni': "Bonferroni Pairwise Comparisons",
             'dunnett': "Dunnett's Test",
+            'games-howell': "Games-Howell (unequal variances)",
         }
         title = method_names.get(self.method, self.method)
 

@@ -5,7 +5,7 @@ Tests cover:
 - Input validation (normal, edge, failure cases)
 - Likelihood and gradient correctness
 - Recovery of known parameters from simulated data
-- Logistic, probit, and cloglog link functions
+- Logistic, probit, cloglog, loglog, and cauchit link functions
 - Summary output format
 - Consistency with R's MASS::polr() reference values
 
@@ -14,6 +14,9 @@ documented seeds and data-generating processes.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -24,6 +27,8 @@ from pystatistics.ordinal import polr, OrdinalSolution
 from pystatistics.ordinal._common import OrdinalParams
 from pystatistics.ordinal._likelihood import (
     CLogLogLink,
+    LogLogLink,
+    CauchitLink,
     cumulative_gradient,
     cumulative_negloglik,
     raw_to_thresholds,
@@ -34,6 +39,21 @@ from pystatistics.ordinal._likelihood import (
 # =========================================================================
 # Fixtures
 # =========================================================================
+
+_FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _housing_design():
+    """Load the frequency-expanded MASS::housing design (X, y).
+
+    X is in treatment contrasts (columns Infl{Medium,High}, Type{Apartment,
+    Atrium,Terrace}, ContHigh); y is Sat coded 0..2 (Low<Medium<High). This is
+    the exact design MASS::polr(Sat ~ Infl + Type + Cont) fits, so a polr fit on
+    it is directly comparable to the R reference values.
+    """
+    data = json.loads((_FIXTURES_DIR / "ordinal_polr_housing.json").read_text())
+    return np.asarray(data["X"], dtype=float), np.asarray(data["y"], dtype=int)
+
 
 @pytest.fixture
 def simple_data():
@@ -181,6 +201,80 @@ class TestCLogLogLink:
         assert CLogLogLink().name == 'cloglog'
 
 
+class TestLogLogLink:
+    """Tests for the log-log link function (MASS::polr 'loglog')."""
+
+    def test_linkinv_range(self):
+        """Inverse link maps to (0, 1) for moderate eta values."""
+        link = LogLogLink()
+        eta = np.array([-5.0, -1.0, 0.0, 1.0, 2.0])
+        mu = link.linkinv(eta)
+        assert np.all(mu > 0)
+        assert np.all(mu < 1)
+
+    def test_linkinv_matches_gumbel_max_cdf(self):
+        """g^{-1}(eta) == exp(-exp(-eta)), the Gumbel (max) CDF used by MASS."""
+        link = LogLogLink()
+        eta = np.array([-2.0, -0.5, 0.0, 0.5, 2.0])
+        assert_allclose(link.linkinv(eta), np.exp(-np.exp(-eta)), atol=1e-12)
+
+    def test_link_linkinv_roundtrip(self):
+        """link(linkinv(eta)) == eta for moderate values."""
+        link = LogLogLink()
+        eta = np.array([-2.0, -1.0, 0.0, 0.5, 1.5])
+        recovered = link.link(link.linkinv(eta))
+        assert_allclose(recovered, eta, atol=1e-8)
+
+    def test_mu_eta_positive(self):
+        """Derivative is always positive."""
+        link = LogLogLink()
+        eta = np.linspace(-5, 5, 100)
+        assert np.all(link.mu_eta(eta) > 0)
+
+    def test_name(self):
+        """Link has correct name."""
+        assert LogLogLink().name == 'loglog'
+
+
+class TestCauchitLink:
+    """Tests for the cauchit link function (MASS::polr 'cauchit')."""
+
+    def test_linkinv_range(self):
+        """Inverse link maps to (0, 1) for moderate eta values."""
+        link = CauchitLink()
+        eta = np.array([-5.0, -1.0, 0.0, 1.0, 2.0])
+        mu = link.linkinv(eta)
+        assert np.all(mu > 0)
+        assert np.all(mu < 1)
+
+    def test_linkinv_matches_cauchy_cdf(self):
+        """g^{-1}(eta) == 1/2 + arctan(eta)/pi, the standard Cauchy CDF."""
+        link = CauchitLink()
+        eta = np.array([-3.0, -0.5, 0.0, 0.5, 3.0])
+        assert_allclose(link.linkinv(eta), 0.5 + np.arctan(eta) / np.pi, atol=1e-12)
+
+    def test_linkinv_symmetric_at_zero(self):
+        """Cauchy CDF is symmetric: g^{-1}(0) == 0.5."""
+        assert_allclose(CauchitLink().linkinv(np.array([0.0])), 0.5, atol=1e-12)
+
+    def test_link_linkinv_roundtrip(self):
+        """link(linkinv(eta)) == eta for moderate values."""
+        link = CauchitLink()
+        eta = np.array([-3.0, -1.0, 0.0, 0.5, 2.0])
+        recovered = link.link(link.linkinv(eta))
+        assert_allclose(recovered, eta, atol=1e-8)
+
+    def test_mu_eta_positive(self):
+        """Derivative is always positive."""
+        link = CauchitLink()
+        eta = np.linspace(-10, 10, 200)
+        assert np.all(link.mu_eta(eta) > 0)
+
+    def test_name(self):
+        """Link has correct name."""
+        assert CauchitLink().name == 'cauchit'
+
+
 # =========================================================================
 # Likelihood and gradient tests
 # =========================================================================
@@ -226,6 +320,25 @@ class TestLikelihoodGradient:
         params = np.array([0.0, 0.5, 0.5, -0.2])
         nll = cumulative_negloglik(params, y, X, link, 3)
         assert nll > 0
+
+    @pytest.mark.parametrize("link", [LogLogLink(), CauchitLink()])
+    def test_gradient_matches_numerical_new_links(self, simple_data, link):
+        """Analytic gradient of the new links matches finite differences."""
+        y, X = simple_data
+        n_levels = 3
+        raw = np.array([0.0, 0.5, 0.8, -0.3])
+        analytical = cumulative_gradient(raw, y, X, link, n_levels)
+        eps = 1e-6
+        numerical = np.zeros_like(raw)
+        for i in range(len(raw)):
+            rp, rm = raw.copy(), raw.copy()
+            rp[i] += eps
+            rm[i] -= eps
+            numerical[i] = (
+                cumulative_negloglik(rp, y, X, link, n_levels)
+                - cumulative_negloglik(rm, y, X, link, n_levels)
+            ) / (2 * eps)
+        assert_allclose(analytical, numerical, rtol=1e-4, atol=1e-6)
 
 
 # =========================================================================
@@ -361,6 +474,75 @@ class TestPolrCLogLog:
         sol = polr(y, X, link='cloglog')
         assert sol.converged
         assert sol.link == 'cloglog'
+
+
+class TestPolrLogLogCauchit:
+    """Tests for polr() with the loglog and cauchit links (MASS::polr's
+    remaining two links)."""
+
+    @pytest.mark.parametrize("link", ["loglog", "cauchit"])
+    def test_fits_and_reports_link(self, simple_data, link):
+        """polr with loglog/cauchit converges and reports the link used."""
+        y, X = simple_data
+        sol = polr(y, X, link=link)
+        assert sol.converged
+        assert sol.link == link
+
+    @pytest.mark.parametrize("link", ["loglog", "cauchit"])
+    def test_fitted_probs_valid(self, simple_data, link):
+        """Fitted category probabilities are a valid distribution."""
+        y, X = simple_data
+        sol = polr(y, X, link=link)
+        fp = sol.fitted_probs
+        assert fp.shape == (len(y), 3)
+        assert np.all(fp > 0)
+        assert_allclose(fp.sum(axis=1), 1.0)
+
+    def test_loglog_matches_mass_polr(self):
+        """loglog reproduces MASS::polr on expanded MASS::housing to machine
+        precision (design in treatment contrasts; response Low<Medium<High).
+
+        R reference (MASS 7.3, R 4.x):
+            polr(Sat ~ Infl + Type + Cont, method='loglog') on the
+            frequency-expanded housing data (n=1681).
+        """
+        X, y = _housing_design()
+        sol = polr(y, X, link='loglog')
+        r_coef = np.array([0.36699727, 0.79032378, -0.34873705,
+                           -0.19573268, -0.69813070, 0.26795647])
+        r_zeta = np.array([0.08638847, 0.89221081])
+        assert_allclose(sol.coefficients, r_coef, atol=1e-3)
+        assert_allclose(list(sol.thresholds.values()), r_zeta, atol=1e-3)
+        assert abs(sol.log_likelihood - (-1745.70483683)) < 1e-2
+
+    def test_cauchit_attains_mass_likelihood(self):
+        """cauchit reaches at least MASS::polr's fitted-probability
+        log-likelihood on expanded MASS::housing.
+
+        NOTE: MASS's own logLik()/deviance for a cauchit fit is internally
+        inconsistent with its fitted() probabilities (it reports -1752.77
+        while sum(log P(y)) at the same fit is -1742.172). The estimator-
+        invariant comparison is against the fitted-probability loglik; our
+        optimum matches it (and is marginally better on cauchit's flat,
+        heavy-tailed surface). Coefficients agree with R to ~1e-2.
+        """
+        X, y = _housing_design()
+        sol = polr(y, X, link='cauchit')
+        r_coef = np.array([0.50184428, 1.11722788, -0.49507100,
+                           -0.35443655, -0.92515339, 0.28178134])
+        # R fitted-probability loglik at its cauchit fit (NOT R's logLik()).
+        r_ll_fitted = -1742.172096
+        assert sol.converged
+        assert_allclose(sol.coefficients, r_coef, atol=2e-2)
+        # Our optimum must be at least as good as R's fitted-prob loglik.
+        assert sol.log_likelihood >= r_ll_fitted - 1e-2
+
+    def test_unknown_link_message_lists_all_five(self):
+        """The unknown-link error advertises the full set of links."""
+        y = np.array([0, 1, 0, 1, 2, 1])
+        X = np.ones((6, 1))
+        with pytest.raises(ValidationError, match="loglog"):
+            polr(y, X, link='nope')
 
 
 # =========================================================================

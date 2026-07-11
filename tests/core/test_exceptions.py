@@ -200,10 +200,19 @@ class TestConvergenceError:
         assert err.reason == "max_iterations"
         assert err.threshold == 1e-8
 
-    def test_required_iterations(self):
-        """iterations is required (positional)."""
+    def test_iterations_positional(self):
+        """iterations may be passed positionally."""
         err = ConvergenceError("failed", 42)
         assert err.iterations == 42
+
+    def test_iterations_optional(self):
+        """iterations is OPTIONAL: fail-loud sites that detect a
+        non-iterative failure (non-finite working response, singular
+        derivative system) construct with a message alone; iterations is
+        then None. Before this, such sites raised TypeError instead of the
+        documented ConvergenceError."""
+        err = ConvergenceError("failed mid-algorithm")
+        assert err.iterations is None
 
     def test_defaults_are_none(self):
         err = ConvergenceError("failed", iterations=10)

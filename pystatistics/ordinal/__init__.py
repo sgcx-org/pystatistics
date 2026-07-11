@@ -2,7 +2,8 @@
 Ordinal regression (proportional odds / cumulative link models).
 
 Provides the proportional odds model matching R's MASS::polr(),
-with logistic, probit, and complementary log-log link functions.
+with logistic, probit, complementary log-log, log-log, and cauchit link
+functions (the full set of MASS::polr links).
 
 Public API:
     polr(y, X, ...)        - Fit a proportional odds model

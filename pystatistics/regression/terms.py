@@ -152,12 +152,21 @@ def _resolve_interaction(
     return np.hstack(out_cols), out_labels
 
 
+def _term_display_name(term: Term) -> str:
+    """Human-readable name of a term for anova/drop1 table rows."""
+    if isinstance(term, tuple):
+        return ":".join(_term_display_name(e) for e in term)
+    if isinstance(term, C):
+        return term.name
+    return str(term)
+
+
 def build_terms_design(
     source: Mapping[str, Any],
     terms: Sequence[Term],
     *,
     intercept: bool = True,
-) -> tuple[NDArray[np.floating[Any]], list[str]]:
+) -> tuple[NDArray[np.floating[Any]], list[str], list[int], list[str]]:
     """Build a numeric design matrix and aligned column labels from a term spec.
 
     Args:
@@ -168,9 +177,13 @@ def build_terms_design(
             False for Cox PH (which has no intercept).
 
     Returns:
-        (X, names) where X is (n, p) float64 and names has length p, aligned
-        column-for-column with X. When intercept is True, names[0] is
-        "(Intercept)".
+        ``(X, names, assign, term_names)``. ``X`` is (n, p) float64 and ``names``
+        has length p, aligned column-for-column with X (when ``intercept`` is
+        True, ``names[0]`` is "(Intercept)"). ``assign[j]`` is the index into
+        ``term_names`` of the term that produced column j — the intercept, when
+        present, is term 0 ("(Intercept)"); every subsequent term (which may span
+        several dummy/interaction columns) gets the next index. This grouping is
+        what ``anova``/``drop1`` use to add or drop whole terms.
 
     Raises:
         ValueError: empty terms, non-numeric bare column, or malformed term.
@@ -181,14 +194,18 @@ def build_terms_design(
 
     blocks: list[NDArray[np.floating[Any]]] = []
     names: list[str] = []
+    assign: list[int] = []
+    term_names: list[str] = []
     n: int | None = None
 
     if intercept:
         # n is unknown until the first column is resolved; defer the intercept
         # column to the end and stitch it in front once we know n.
         names.append("(Intercept)")
+        term_names.append("(Intercept)")
 
-    for term in terms:
+    base_term = 1 if intercept else 0
+    for k, term in enumerate(terms):
         if isinstance(term, tuple):
             cols, labels = _resolve_interaction(source, term)
         else:
@@ -202,12 +219,15 @@ def build_terms_design(
             )
         blocks.append(cols)
         names.extend(labels)
+        term_names.append(_term_display_name(term))
+        assign.extend([base_term + k] * cols.shape[1])
 
     if n is None:
         raise ValidationError("terms produced no columns")
 
     if intercept:
         blocks.insert(0, np.ones((n, 1), dtype=np.float64))
+        assign.insert(0, 0)
 
     X = np.hstack(blocks)
-    return X, names
+    return X, names, assign, term_names

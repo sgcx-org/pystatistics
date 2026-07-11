@@ -289,7 +289,7 @@ class OrdinalSolution(SolutionReprMixin):
 
     @property
     def link(self) -> str:
-        """Link function name ('logistic', 'probit', or 'cloglog')."""
+        """Link name ('logistic', 'probit', 'cloglog', 'loglog', 'cauchit')."""
         return self._result.params.link
 
     # -- Metadata accessors ----------------------------------------------------

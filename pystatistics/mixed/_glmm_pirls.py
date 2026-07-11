@@ -63,14 +63,20 @@ class GLMMModeResult:
         return float(self.deviance + self.penalty + self.logdet_M)
 
 
-def _working(family, y, eta):
-    """Clamped mean, working response and IRLS weights at η."""
+def _working(family, y, eta, offset, wt):
+    """Clamped mean, working response and IRLS weights at η.
+
+    ``offset`` is removed from the working response so the WLS solve fits only the
+    ``Xβ + Zb`` part (η is reconstructed with the offset added back); ``wt`` are
+    the per-observation prior weights folded into the IRLS weight
+    ``w = wt (dμ/dη)² / V(μ)`` (e.g. binomial trial counts for grouped data).
+    """
     link = family.link
     eta_c = np.clip(eta, -_ETA_CLAMP, _ETA_CLAMP)
     mu = link.linkinv(eta_c)
     mu_eta = link.mu_eta(eta_c)
-    z = eta_c + (y - mu) / mu_eta
-    w = np.maximum((mu_eta ** 2) / family.variance(mu), 1e-10)
+    z = (eta_c - offset) + (y - mu) / mu_eta
+    w = np.maximum(wt * (mu_eta ** 2) / family.variance(mu), 1e-10)
     return mu, z, w
 
 
@@ -97,21 +103,25 @@ def _iterate(ctx: StructuredContext, theta: NDArray, family, beta_fixed,
     n, p = X.shape
     joint = beta_fixed is None
 
+    # GLMM offset / prior weights (default: none / unit).
+    offset = ctx.offset if ctx.offset is not None else np.zeros(n)
+    wt = ctx.prior_weights if ctx.prior_weights is not None else np.ones(n)
+
     beta = np.zeros(p) if joint else np.asarray(beta_fixed, dtype=np.float64)
     # Start from an intercept-free mean init; the mode is unique so the start
     # affects only iteration count.
-    mu = family.initialize(y)
+    mu = family.initialize(y, wt)
     eta = family.link.link(mu)
     u = None
     factor = None
     w = np.ones(n)
     pdev_old = float(family.deviance(y, family.link.linkinv(
-        np.clip(eta, -_ETA_CLAMP, _ETA_CLAMP)), np.ones(n)))
+        np.clip(eta, -_ETA_CLAMP, _ETA_CLAMP)), wt))
     converged = False
 
     it = 0
     for it in range(1, max_iter + 1):
-        mu, z, w = _working(family, y, eta)
+        mu, z, w = _working(family, y, eta, offset, wt)
         factor = build_weighted_factor(ctx, theta, z, w)
 
         if joint:
@@ -125,9 +135,9 @@ def _iterate(ctx: StructuredContext, theta: NDArray, family, beta_fixed,
             u_new = factor.apply_Minv(factor.a - factor.B @ beta)
 
         def _pdev(bt, uu):
-            eta_try = X @ bt + factor.z_apply(factor.lambda_apply(uu))
+            eta_try = X @ bt + factor.z_apply(factor.lambda_apply(uu)) + offset
             mu_try = family.link.linkinv(np.clip(eta_try, -_ETA_CLAMP, _ETA_CLAMP))
-            return (float(family.deviance(y, mu_try, np.ones(n)) + uu @ uu),
+            return (float(family.deviance(y, mu_try, wt) + uu @ uu),
                     eta_try, mu_try)
 
         # Step-halving on the penalized deviance.
@@ -152,11 +162,11 @@ def _iterate(ctx: StructuredContext, theta: NDArray, family, beta_fixed,
 
     # Final quantities at the converged mode (recompute weights/factor so the
     # log-det and Schur are exactly at the mode).
-    mu, z, w = _working(family, y, eta)
+    mu, z, w = _working(family, y, eta, offset, wt)
     factor = build_weighted_factor(ctx, theta, z, w)
     RX, _, _ = _schur(ctx, factor, w)
     b = factor.lambda_apply(u)
-    dev = float(family.deviance(y, mu, np.ones(n)))
+    dev = float(family.deviance(y, mu, wt))
     return GLMMModeResult(
         u=u, b=b, beta=beta, mu=mu, eta=eta, weights=w,
         logdet_M=float(factor.logdet_M), RX=RX, deviance=dev,

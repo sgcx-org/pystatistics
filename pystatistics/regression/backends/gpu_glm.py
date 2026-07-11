@@ -592,8 +592,15 @@ class GPUIRLSBackend:
         df_residual = n - final_rank
         if family.dispersion_is_fixed:
             dispersion = 1.0
+        elif df_residual <= 0:
+            dispersion = float('nan')
+        elif family.dispersion_estimator == 'pearson':
+            # R's summary.glm convention (see cpu_glm): Pearson chi^2 / df.
+            pearson_chisq = float(
+                np.sum(wt_np * (y_np - mu_final) ** 2 / family.variance(mu_final)))
+            dispersion = pearson_chisq / df_residual
         else:
-            dispersion = dev / df_residual if df_residual > 0 else float('nan')
+            dispersion = dev / df_residual
 
         # ------------------------------------------------------------------
         # AIC

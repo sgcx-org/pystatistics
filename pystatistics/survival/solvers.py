@@ -235,7 +235,8 @@ def coxph(
         if names is not None:
             raise ValidationError("Pass either terms or names, not both")
         from pystatistics.regression.terms import build_terms_design
-        X, names = build_terms_design(X, terms, intercept=False)
+        X, names, _assign, _term_names = build_terms_design(
+            X, terms, intercept=False)
 
     design = SurvivalDesign.for_survival(time, event, X)
 

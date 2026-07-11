@@ -438,8 +438,15 @@ def _fit_glm_ridge(
     null_deviance = CPUIRLSBackend._null_deviance(y, wt, family)
 
     df_residual = n - p
-    dispersion = 1.0 if family.dispersion_is_fixed else (
-        dev / df_residual if df_residual > 0 else float('nan'))
+    if family.dispersion_is_fixed:
+        dispersion = 1.0
+    elif df_residual <= 0:
+        dispersion = float('nan')
+    elif family.dispersion_estimator == 'pearson':
+        # R's summary.glm convention: sum of squared Pearson residuals / df.
+        dispersion = float(np.sum(resid_pearson ** 2)) / df_residual
+    else:
+        dispersion = dev / df_residual
     aic = family.aic(y, mu_final, wt, p, dispersion)
 
     params = GLMParams(

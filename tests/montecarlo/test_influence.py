@@ -83,3 +83,74 @@ class TestJackknifeInfluence:
 
         # Should be nonzero for skewed data
         assert abs(a) > 0.01
+
+
+class TestRegressionInfluenceNonOrdinary:
+    """A7: regression empinf now applies to balanced + stratified bootstrap
+    (was jackknife fallback); parametric still (correctly) falls back."""
+
+    @staticmethod
+    def _var_stat(data, indices):
+        return np.array([np.var(data[indices], ddof=1)])
+
+    @staticmethod
+    def _accel(L):
+        s2 = np.sum(L ** 2)
+        return np.sum(L ** 3) / (6 * s2 ** 1.5) if s2 > 0 else 0.0
+
+    def _data(self):
+        rng = np.random.default_rng(1)
+        return rng.gamma(2.0, 1.0, 40)
+
+    def test_balanced_uses_regression_influence(self):
+        from pystatistics.montecarlo._influence import regression_influence
+        x = self._data()
+        b = boot(x, self._var_stat, n_resamples=3000, method="balanced",
+                 seed=7, statistic_type="index")
+        L = regression_influence(b)
+        assert L is not None                      # no longer falls back
+        assert L.shape == (len(x),)
+        assert np.all(np.isfinite(L))
+        # centred to (approximately) sum zero — the balanced frequency matrix is
+        # near-degenerate, so pinv leaves a small numerical residual.
+        assert abs(np.sum(L)) < 1e-3
+
+    def test_balanced_accel_matches_ordinary(self):
+        """The balanced reg-empinf estimates the same influence as the ordinary
+        one (both converge to the true empirical influence)."""
+        from pystatistics.montecarlo._influence import regression_influence
+        x = self._data()
+        bo = boot(x, self._var_stat, n_resamples=4000, method="ordinary",
+                  seed=7, statistic_type="index")
+        bb = boot(x, self._var_stat, n_resamples=4000, method="balanced",
+                  seed=7, statistic_type="index")
+        a_ord = self._accel(regression_influence(bo))
+        a_bal = self._accel(regression_influence(bb))
+        assert abs(a_ord - a_bal) < 5e-3
+
+    def test_stratified_uses_regression_influence_centred_within_strata(self):
+        from pystatistics.montecarlo._influence import regression_influence
+        x = self._data()
+        strata = np.repeat([0, 1], 20)
+        b = boot(x, self._var_stat, n_resamples=3000, method="ordinary",
+                 seed=7, statistic_type="index", strata=strata)
+        L = regression_influence(b)
+        assert L is not None
+        # centred within each stratum (R's empinf for a stratified boot object);
+        # the near-degenerate frequency matrix leaves a small pinv residual.
+        assert abs(np.sum(L[strata == 0])) < 1e-3
+        assert abs(np.sum(L[strata == 1])) < 1e-3
+
+    def test_parametric_falls_back_to_jackknife(self):
+        """Parametric bootstrap has no resample frequencies → regression empinf
+        does not apply (documented B); the caller uses the jackknife."""
+        from pystatistics.montecarlo._influence import regression_influence
+        x = self._data()
+
+        def ran_gen(data, mle, rng):
+            return rng.normal(mle[0], mle[1], len(data))
+
+        b = boot(x, lambda d: np.array([np.var(d, ddof=1)]),
+                 n_resamples=500, method="parametric", seed=7,
+                 ran_gen=ran_gen, mle=(float(x.mean()), float(x.std())))
+        assert regression_influence(b) is None

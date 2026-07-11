@@ -42,6 +42,12 @@ class Design:
     _p: int
     _source: DataSource | None = None
     _names: tuple[str, ...] | None = None
+    # Term structure for anova/drop1: _assign[j] is the term index of column j;
+    # _term_names[t] is the display name of term t. Populated when the design is
+    # built from a term spec; None for a raw-array design (each column is then
+    # treated as its own term by the analysis functions).
+    _assign: tuple[int, ...] | None = None
+    _term_names: tuple[str, ...] | None = None
 
     @classmethod
     def from_datasource(
@@ -149,8 +155,13 @@ class Design:
             y_arr = y_arr.cpu().numpy()
         y_arr = np.asarray(y_arr, dtype=np.float64)
 
-        X_arr, names = build_terms_design(source, terms, intercept=True)
-        return cls._build(X_arr, y_arr, source=source, names=tuple(names))
+        X_arr, names, assign, term_names = build_terms_design(
+            source, terms, intercept=True
+        )
+        return cls._build(
+            X_arr, y_arr, source=source, names=tuple(names),
+            assign=tuple(assign), term_names=tuple(term_names),
+        )
 
     @classmethod
     def _build(
@@ -159,6 +170,8 @@ class Design:
         y: NDArray,
         source: DataSource | None,
         names: tuple[str, ...] | None = None,
+        assign: tuple[int, ...] | None = None,
+        term_names: tuple[str, ...] | None = None,
     ) -> Design:
         """Internal builder with validation."""
         # Ensure correct shapes
@@ -182,7 +195,8 @@ class Design:
                 f"names has {len(names)} entries but X has {p} columns"
             )
 
-        return cls(_X=X, _y=y, _n=n, _p=p, _source=source, _names=names)
+        return cls(_X=X, _y=y, _n=n, _p=p, _source=source, _names=names,
+                   _assign=assign, _term_names=term_names)
     
     # === Properties ===
     
@@ -219,7 +233,21 @@ class Design:
         names to fit() in that case).
         """
         return self._names
-    
+
+    @property
+    def assign(self) -> tuple[int, ...] | None:
+        """Term index of each column (for anova/drop1), or None for raw designs.
+
+        ``assign[j]`` indexes into :attr:`term_names`. Present only when the
+        design was built from a term spec.
+        """
+        return self._assign
+
+    @property
+    def term_names(self) -> tuple[str, ...] | None:
+        """Display name of each model term, or None for a raw-array design."""
+        return self._term_names
+
     def supports(self, capability: str) -> bool:
         """Check if underlying data supports a capability."""
         if self._source is not None:

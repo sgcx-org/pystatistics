@@ -43,9 +43,63 @@ from pystatistics.gam._pirls import fit_fixed_lambda, make_penalty_roots
 from pystatistics.gam._smooth import SmoothTerm
 from pystatistics.gam._smooth_test import smooth_term_test
 from pystatistics.gam.solution import GAMSolution
-from pystatistics.regression.families import Family, resolve_family
+from pystatistics.regression.families import (
+    Family, NegativeBinomial, resolve_family,
+)
+from pystatistics.regression._nb_theta import theta_ml
 
 _BACKEND_NAME = "cpu_qr_pirls"
+
+def _fit_nb_outer(
+    y_arr, X_aug, roots, fam, tol, max_iter, smooth_names, select_and_fit,
+    criterion,
+):
+    """Estimate a negative-binomial GAM's dispersion ``theta`` the way mgcv's
+    ``nb()`` does: optimise ``theta`` jointly with the smoothing parameters by
+    minimising the *profiled* smoothness-selection criterion — for each trial
+    ``theta`` the smoothing parameters are re-selected and the model refit, and
+    ``theta`` is chosen to minimise the resulting REML (or GCV/UBRE) score.
+
+    This differs from MASS::glm.nb's plain maximum-likelihood ``theta`` (which
+    ignores the effective degrees of freedom); matching mgcv requires the
+    criterion-based estimate.
+
+    Returns ``(fam, lambdas, outer_converged, fit)`` with ``fam`` carrying the
+    estimated ``theta``.
+    """
+    from scipy.optimize import minimize_scalar
+
+    link = fam.link
+    _cache: dict[float, Any] = {}
+
+    def _fit_at(theta):
+        fam_t = NegativeBinomial(theta=theta, link=link)
+        lambdas, conv, mu0 = select_and_fit(fam_t)
+        # Continue the selection's winning P-IRLS branch (mu0) — see
+        # select_lambdas' branch-resolution contract.
+        fit = fit_fixed_lambda(
+            y_arr, X_aug, roots, lambdas, fam_t, tol, max_iter,
+            smooth_names=smooth_names, mu_start=mu0,
+        )
+        return fam_t, lambdas, conv, fit
+
+    def _obj(log_theta):
+        theta = float(np.exp(log_theta))
+        fam_t, lambdas, conv, fit = _fit_at(theta)
+        _cache[theta] = (fam_t, lambdas, conv, fit)
+        return criterion(fit, fam_t, lambdas)
+
+    # theta.ml gives a good MASS-style warm start; bracket a decade around it.
+    theta0 = float(theta_ml(y_arr, np.full_like(y_arr, y_arr.mean())))
+    theta0 = float(np.clip(theta0, 1e-2, 1e4))
+    res = minimize_scalar(
+        _obj, bounds=(np.log(theta0) - 3.0, np.log(theta0) + 3.0),
+        method="bounded", options={"xatol": 1e-4},
+    )
+    theta = float(np.exp(res.x))
+    if theta in _cache:
+        return _cache[theta]
+    return _fit_at(theta)
 
 
 def gam(
@@ -122,6 +176,19 @@ def gam(
 
     fam = resolve_family(family)
 
+    # gam validates only the classic exponential families against mgcv; the
+    # overdispersion (quasi*) and inverse-Gaussian families now in the shared
+    # registry are not part of gam's validated surface, so refuse them loudly
+    # rather than silently fitting an unvalidated criterion (Guarantee 2).
+    _GAM_SUPPORTED = {
+        "gaussian", "binomial", "poisson", "Gamma", "negative.binomial",
+    }
+    if fam.name not in _GAM_SUPPORTED:
+        raise ValidationError(
+            f"gam does not support family '{fam.name}'. Supported families: "
+            f"gaussian, binomial, poisson, Gamma, negative.binomial (nb)."
+        )
+
     method_upper = method.upper()
     if method_upper not in ("GCV", "REML"):
         raise ValidationError(
@@ -130,17 +197,19 @@ def gam(
 
     smooth_data_np: dict[str, NDArray] = {}
     for st in smooths:
-        if st.var_name not in smooth_data:
-            raise ValidationError(
-                f"smooth_data missing variable {st.var_name!r}"
-            )
-        arr = np.asarray(smooth_data[st.var_name], dtype=np.float64).ravel()
-        if arr.shape[0] != n:
-            raise ValidationError(
-                f"y has {n} obs but smooth variable {st.var_name!r} "
-                f"has {arr.shape[0]}"
-            )
-        smooth_data_np[st.var_name] = arr
+        needed = [st.var_name] + ([st.by] if st.by is not None else [])
+        for var in needed:
+            if var not in smooth_data:
+                raise ValidationError(
+                    f"smooth_data missing variable {var!r}"
+                )
+            arr = np.asarray(smooth_data[var], dtype=np.float64).ravel()
+            if arr.shape[0] != n:
+                raise ValidationError(
+                    f"y has {n} obs but smooth variable {var!r} "
+                    f"has {arr.shape[0]}"
+                )
+            smooth_data_np[var] = arr
 
     if X is not None:
         X_param = np.asarray(X, dtype=np.float64)
@@ -184,43 +253,82 @@ def gam(
     smooth_names = [f"s({st.var_name})" for st in smooths]
 
     # ------------------------------------------------------------------
-    # Smoothing-parameter selection (or user-fixed sp)
+    # Smoothing-parameter selection (or user-fixed sp) + final fit.
+    #
+    # For a negative-binomial family with an unknown dispersion (theta=None,
+    # mgcv's nb()), this is wrapped in an OUTER iteration that alternates
+    # smoothing-parameter/coefficient estimation at a fixed theta with a
+    # maximum-likelihood update of theta given the fitted mean (MASS::theta.ml),
+    # matching mgcv's outer theta estimation.
     # ------------------------------------------------------------------
     import warnings as _warnings
 
-    if n_smooths == 0:
-        lambdas = np.array([], dtype=np.float64)
-        outer_converged = True
-    elif sp_arr is not None:
-        lambdas = sp_arr
-        outer_converged = True
-    else:
+    def _select_and_fit(fam_local):
+        if n_smooths == 0:
+            return np.array([], dtype=np.float64), True, None
+        if sp_arr is not None:
+            return sp_arr, True, None
         with _warnings.catch_warnings():
-            # The lambda search runs ~50-150 P-IRLS fits; per-fit warnings
-            # (separation, rank deficiency) would repeat once per
-            # evaluation. Dedupe to one occurrence within this call.
             _warnings.simplefilter("once", UserWarning)
-            lambdas, outer_converged = select_lambdas(
-                y_arr, X_aug, roots, fam, method_upper, tol, max_iter,
+            return select_lambdas(
+                y_arr, X_aug, roots, fam_local, method_upper, tol, max_iter,
                 smooth_names=smooth_names,
             )
-        if not outer_converged:
-            import warnings
 
-            warnings.warn(
-                f"smoothing-parameter search did not cleanly converge "
-                f"(method={method_upper}); results may sit on the search "
-                f"boundary — inspect solution.params.lambdas",
-                UserWarning, stacklevel=2,
-            )
+    def _criterion(fit_local, fam_local, lambdas_local):
+        """The smoothness-selection score being minimised — as a function of
+        theta — so the NB theta search matches mgcv's REML/GCV objective."""
+        if method_upper == "REML" and n_smooths > 0:
+            return reml_score(fit_local, y_arr, X_aug, fam_local, roots,
+                              lambdas_local)
+        H_ = influence_matrix(fit_local.R, fit_local.R_x, fit_local.piv,
+                              fit_local.rank)
+        edf_ = total_edf_of(H_)
+        if fam_local.dispersion_is_fixed:
+            return ubre_score(fit_local.deviance, n, edf_, scale=1.0)
+        return gcv_score(fit_local.deviance, n, edf_)
 
-    # ------------------------------------------------------------------
-    # Final fit + inference quantities
-    # ------------------------------------------------------------------
-    fit = fit_fixed_lambda(
-        y_arr, X_aug, roots, lambdas, fam, tol, max_iter,
-        smooth_names=smooth_names,
-    )
+    nb_auto = isinstance(fam, NegativeBinomial) and fam.theta is None
+    if nb_auto and method_upper != "REML":
+        # Profiling the UBRE/GCV score over theta is structurally
+        # degenerate: the NB deviance shrinks monotonically as theta -> 0
+        # (more overdispersion "explains" any fit) and UBRE carries no
+        # counterweight, so the profiled optimum collapses to theta ~ 0
+        # (panel-verified: UBRE falls monotonically over theta in
+        # {10 .. 0.04} while the REML profile is properly minimised near
+        # the true theta). mgcv's GCV-era nb() uses a different theta
+        # estimator entirely, which is neither implemented nor validated
+        # here — refuse loudly rather than return a silently degenerate
+        # dispersion.
+        raise ValidationError(
+            "family='nb' with estimated dispersion requires method='REML' "
+            "(profiling the GCV/UBRE score over theta collapses to "
+            "theta~0); use method='REML' or fix the dispersion via "
+            "NegativeBinomial(theta=...)"
+        )
+    if nb_auto:
+        fam, lambdas, outer_converged, fit = _fit_nb_outer(
+            y_arr, X_aug, roots, fam, tol, max_iter, smooth_names,
+            _select_and_fit, _criterion,
+        )
+    else:
+        lambdas, outer_converged, mu0 = _select_and_fit(fam)
+        # Continue the selection's winning P-IRLS branch (mu0): the inner
+        # problem can be multimodal at near-zero penalty, and a fresh
+        # restart here could land on a DIFFERENT branch than the criterion
+        # was accepted on (mgcv likewise reports the search's own fit).
+        fit = fit_fixed_lambda(
+            y_arr, X_aug, roots, lambdas, fam, tol, max_iter,
+            smooth_names=smooth_names, mu_start=mu0,
+        )
+
+    if not outer_converged:
+        _warnings.warn(
+            f"smoothing-parameter search did not cleanly converge "
+            f"(method={method_upper}); results may sit on the search "
+            f"boundary — inspect solution.params.lambdas",
+            UserWarning, stacklevel=2,
+        )
     H = influence_matrix(fit.R, fit.R_x, fit.piv, fit.rank)
     tot_edf = total_edf_of(H)
     edf = edf_per_block(H, blocks)
@@ -232,7 +340,7 @@ def gam(
     gcv = gcv_score(fit.deviance, n, tot_edf)
     ubre = ubre_score(fit.deviance, n, tot_edf, scale=scale)
     reml = (
-        reml_score(fit, y_arr, fam, roots, lambdas)
+        reml_score(fit, y_arr, X_aug, fam, roots, lambdas)
         if (method_upper == "REML" and n_smooths > 0) else None
     )
 
@@ -317,6 +425,9 @@ def gam(
             "rank": fit.rank,
             "n_coefficients": int(X_aug.shape[1]),
             "parametric_cols": parametric_cols,
+            **({"nb_theta": float(fam.theta)}
+               if isinstance(fam, NegativeBinomial) and fam.theta is not None
+               else {}),
         },
         timing=None,
         backend_name=_BACKEND_NAME,

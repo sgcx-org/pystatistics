@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pystatistics.core.exceptions import ValidationError
 
-_VALID_BASIS_TYPES = frozenset({"cr", "tp"})
+_VALID_BASIS_TYPES = frozenset({"cr", "tp", "cc", "ps"})
 
 _MIN_K = 3
 _MAX_K = 500
@@ -29,17 +29,20 @@ class SmoothTerm:
         k: Basis dimension (>= 3), exactly as mgcv's ``s(x, k=...)``. The
             fitted smooth contributes ``k - 1`` coefficients after its
             sum-to-zero identifiability constraint (same as mgcv).
-        bs: Basis type: ``'cr'`` (cubic regression spline, default)
-            or ``'tp'`` (thin plate regression spline).
+        bs: Basis type: ``'cr'`` (cubic regression spline, default),
+            ``'tp'`` (thin plate regression spline), ``'cc'`` (cyclic cubic
+            regression spline, for periodic/seasonal covariates), or ``'ps'``
+            (P-spline).
     """
 
-    __slots__ = ("var_name", "k", "bs")
+    __slots__ = ("var_name", "k", "bs", "by")
 
     def __init__(
         self,
         var_name: str,
         k: int = 10,
         bs: str = "cr",
+        by: str | None = None,
     ) -> None:
         """Create a smooth term specification.
 
@@ -77,12 +80,19 @@ class SmoothTerm:
                 f"bs must be one of {sorted(_VALID_BASIS_TYPES)}, got {bs!r}"
             )
 
+        if by is not None and (not isinstance(by, str) or not by.strip()):
+            raise ValidationError(
+                f"by must be None or a non-empty variable name, got {by!r}"
+            )
+
         self.var_name = var_name.strip()
         self.k = k
         self.bs = bs
+        self.by = by.strip() if isinstance(by, str) else None
 
     def __repr__(self) -> str:
-        return f"s({self.var_name!r}, k={self.k}, bs={self.bs!r})"
+        by = "" if self.by is None else f", by={self.by!r}"
+        return f"s({self.var_name!r}, k={self.k}, bs={self.bs!r}{by})"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SmoothTerm):
@@ -91,13 +101,15 @@ class SmoothTerm:
             self.var_name == other.var_name
             and self.k == other.k
             and self.bs == other.bs
+            and self.by == other.by
         )
 
     def __hash__(self) -> int:
-        return hash((self.var_name, self.k, self.bs))
+        return hash((self.var_name, self.k, self.bs, self.by))
 
 
-def s(var_name: str, k: int = 10, bs: str = "cr") -> SmoothTerm:
+def s(var_name: str, k: int = 10, bs: str = "cr",
+      by: str | None = None) -> SmoothTerm:
     """Convenience constructor for smooth terms, matching ``mgcv::s()``.
 
     Usage::
@@ -108,9 +120,14 @@ def s(var_name: str, k: int = 10, bs: str = "cr") -> SmoothTerm:
     Args:
         var_name: Name of the predictor variable.
         k: Basis dimension (default 10).
-        bs: Basis type: ``'cr'`` or ``'tp'`` (default ``'cr'``).
+        bs: Basis type: ``'cr'``, ``'tp'``, ``'cc'``, or ``'ps'`` (default
+            ``'cr'``).
+        by: Optional name of a *continuous* ``by`` variable — fits the
+            varying-coefficient term ``by * f(x)`` (mgcv's ``s(x, by=z)``). The
+            smooth keeps its full basis (no centering constraint) since the
+            multiplication by ``by`` removes the constant confound.
 
     Returns:
         A :class:`SmoothTerm` specification object.
     """
-    return SmoothTerm(var_name=var_name, k=k, bs=bs)
+    return SmoothTerm(var_name=var_name, k=k, bs=bs, by=by)

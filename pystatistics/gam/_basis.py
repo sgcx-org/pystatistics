@@ -28,6 +28,8 @@ from numpy.typing import NDArray
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.gam._basis_cr import cr_basis
 from pystatistics.gam._basis_tp import tp_basis
+from pystatistics.gam._basis_cc import cc_basis
+from pystatistics.gam._basis_ps import ps_basis
 from pystatistics.gam._constraints import absorb_sum_to_zero
 from pystatistics.gam._smooth import SmoothTerm
 
@@ -77,16 +79,39 @@ def build_design(
             B, S, s_scale = cr_basis(x, k=st.k)
         elif st.bs == "tp":
             B, S, s_scale = tp_basis(x, k=st.k)
+        elif st.bs == "cc":
+            B, S, s_scale = cc_basis(x, k=st.k)
+        elif st.bs == "ps":
+            B, S, s_scale = ps_basis(x, k=st.k)
         else:
             raise ValidationError(
-                f"Unknown basis type {st.bs!r}; expected 'cr' or 'tp'"
+                f"Unknown basis type {st.bs!r}; expected 'cr', 'tp', 'cc', or 'ps'"
             )
-        # Sum-to-zero identifiability constraint — EVERY basis type: the
-        # cr span contains the constant outright, and the tp basis carries
-        # an explicit constant null-space column; either way the constraint
-        # removes exactly the direction that would collide with the
-        # intercept, keeping k-1 columns (linear trend survives).
-        B_c, S_c, Z = absorb_sum_to_zero(B, S)
+
+        if st.by is not None:
+            # Continuous varying-coefficient smooth ``by * f(x)`` (mgcv
+            # ``s(x, by=z)``): keep the FULL basis — the by-multiplication
+            # removes the constant confound, so no sum-to-zero centering — and
+            # scale each row by the by-variable. The penalty is unchanged.
+            if st.by not in smooth_data:
+                raise ValidationError(
+                    f"smooth_data missing by-variable {st.by!r} for s({st.var_name!r})"
+                )
+            z = np.asarray(smooth_data[st.by], dtype=np.float64).ravel()
+            if z.shape[0] != n:
+                raise ValidationError(
+                    f"by-variable {st.by!r} has {z.shape[0]} obs, expected {n}"
+                )
+            B_c = B * z[:, np.newaxis]
+            S_c = S
+            Z = np.eye(B.shape[1], dtype=np.float64)
+        else:
+            # Sum-to-zero identifiability constraint — EVERY basis type: the
+            # cr span contains the constant outright, and the tp basis carries
+            # an explicit constant null-space column; either way the constraint
+            # removes exactly the direction that would collide with the
+            # intercept, keeping k-1 columns (linear trend survives).
+            B_c, S_c, Z = absorb_sum_to_zero(B, S)
         kc = B_c.shape[1]
         blocks_x.append(B_c)
         built.append(BuiltSmooth(

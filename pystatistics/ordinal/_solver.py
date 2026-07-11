@@ -2,7 +2,7 @@
 Proportional odds model solver.
 
 Fits cumulative link models via L-BFGS-B optimization with analytical
-gradients. Matches R's MASS::polr() for logistic, probit, and cloglog
+gradients. Matches R's MASS::polr() for logistic, probit, cloglog, loglog, cauchit
 link functions.
 
 The entry point is polr(), which validates inputs, computes starting
@@ -39,6 +39,8 @@ from pystatistics.regression.families import LogitLink, ProbitLink, Link
 from pystatistics.ordinal._common import OrdinalParams
 from pystatistics.ordinal._likelihood import (
     CLogLogLink,
+    LogLogLink,
+    CauchitLink,
     category_probs,
     cumulative_negloglik,
     cumulative_gradient,
@@ -84,29 +86,31 @@ _LINK_MAP: dict[str, type[Link]] = {
     'logistic': LogitLink,
     'probit': ProbitLink,
     'cloglog': CLogLogLink,
+    'loglog': LogLogLink,
+    'cauchit': CauchitLink,
 }
 
 
 def _resolve_method_link(method: str) -> Link:
     """
-    Resolve a method name to a Link instance.
+    Resolve a link name to a Link instance.
 
     Args:
-        method: One of 'logistic', 'probit', 'cloglog'.
+        method: One of 'logistic', 'probit', 'cloglog', 'loglog', 'cauchit'
+            (the full set of MASS::polr links).
 
     Returns:
         Corresponding Link instance.
 
     Raises:
-        ValidationError: If method is not recognized.
+        ValidationError: If the link name is not recognized.
     """
     cls = _LINK_MAP.get(method.lower())
     if cls is None:
         valid = ', '.join(sorted(_LINK_MAP.keys()))
         raise ValidationError(
-            f"Unknown link: {method!r}. Valid links: {valid}. (Note: MASS::polr's "
-            f"'loglog' and 'cauchit' links are not supported; no silent "
-            f"substitution.)"
+            f"Unknown link: {method!r}. Valid links: {valid}. No silent "
+            f"substitution."
         )
     return cls()
 
@@ -508,7 +512,8 @@ def polr(
         X: Design matrix of shape (n, p). Must NOT include an intercept
             column (thresholds serve as category-specific intercepts).
         link: Link function. One of 'logistic' (default, proportional
-            odds), 'probit', or 'cloglog'.
+            odds), 'probit', 'cloglog', 'loglog', or 'cauchit' — the full
+            set of MASS::polr links.
         names: Labels for the p predictor columns. If None, defaults to
             'x1', 'x2', etc.
         category_names: Labels for the K ordered categories. If None,

@@ -174,12 +174,21 @@ class ProbitLink(Link):
 # Link name → class mapping
 # =====================================================================
 
+from pystatistics.regression._links_extra import (  # noqa: E402
+    CLogLogLink, CauchitLink, SqrtLink, InverseSquaredLink,
+)
+
 _LINK_CLASSES: dict[str, type[Link]] = {
     'identity': IdentityLink,
     'logit': LogitLink,
     'log': LogLink,
     'inverse': InverseLink,
     'probit': ProbitLink,
+    'cloglog': CLogLogLink,
+    'cauchit': CauchitLink,
+    'sqrt': SqrtLink,
+    '1/mu^2': InverseSquaredLink,
+    'inverse-squared': InverseSquaredLink,
 }
 
 
@@ -259,6 +268,20 @@ class Family(ABC):
         False for Gaussian (φ=σ² estimated from data).
         """
         return False
+
+    @property
+    def dispersion_estimator(self) -> str:
+        """How an *estimated* dispersion is computed from the fit.
+
+        ``'pearson'`` → ``Σ (Pearson residual)² / df_residual`` (R's
+        ``summary.glm`` convention, and the definitional estimate for the
+        quasi-likelihood families); ``'deviance'`` → ``deviance / df_residual``.
+        Only consulted when ``dispersion_is_fixed`` is False. The base default is
+        ``'deviance'`` to preserve each existing family's validated convention;
+        the quasi and inverse-Gaussian families override to ``'pearson'`` to
+        match R.
+        """
+        return 'deviance'
 
     @property
     def n_ic_dispersion_params(self) -> int:
@@ -684,6 +707,10 @@ class NegativeBinomial(Family):
 # Family name → class mapping + resolver
 # =====================================================================
 
+from pystatistics.regression._families_extra import (  # noqa: E402
+    QuasiPoisson, QuasiBinomial, InverseGaussian,
+)
+
 _FAMILY_CLASSES: dict[str, type[Family]] = {
     'gaussian': Gaussian,
     'normal': Gaussian,
@@ -692,6 +719,9 @@ _FAMILY_CLASSES: dict[str, type[Family]] = {
     'gamma': GammaFamily,
     'negative.binomial': NegativeBinomial,
     'nb': NegativeBinomial,
+    'quasipoisson': QuasiPoisson,
+    'quasibinomial': QuasiBinomial,
+    'inverse.gaussian': InverseGaussian,
 }
 
 
