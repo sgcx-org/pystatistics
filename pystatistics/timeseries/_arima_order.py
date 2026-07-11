@@ -191,10 +191,12 @@ def _try_fit(
     max_iter: int,
     method: str = "CSS-ML",
     backend: str | None = None,
+    include_drift: bool = False,
 ) -> tuple[object | None, float]:
     """Attempt to fit an ARIMA model; return (result, ic_value).
 
-    On failure returns ``(None, inf)``.
+    On failure returns ``(None, inf)``. ``include_drift`` adds a linear
+    trend (drift) regressor — used by the constant/drift search below.
 
     Parameters
     ----------
@@ -227,6 +229,7 @@ def _try_fit(
             tol=tol,
             max_iter=max_iter,
             backend=backend,
+            include_drift=include_drift,
         )
         if not result.converged:
             return None, math.inf
@@ -236,6 +239,40 @@ def _try_fit(
     except (ConvergenceError, ValidationError, np.linalg.LinAlgError,
             ValueError, RuntimeError):
         return None, math.inf
+
+
+def _fit_best_constant(
+    y: NDArray,
+    order: tuple[int, int, int],
+    s_order: tuple[int, int, int, int] | None,
+    ic: str,
+    tol: float,
+    max_iter: int,
+    method: str,
+    backend: str | None,
+    allowdrift: bool,
+) -> tuple[object | None, float]:
+    """Fit a candidate order, choosing the better of with/without drift.
+
+    A drift (linear-trend) term is a candidate only when the total
+    differencing order ``d + D == 1`` — matching ``forecast::auto.arima``,
+    which offers a constant (drift for ``d + D == 1``) and selects it by
+    information criterion. For ``d + D != 1`` this is exactly the plain
+    ``_try_fit`` (no drift), so seasonal and higher-differencing
+    selections are unaffected. Returns the winning ``(result, ic)``.
+    """
+    d_tot = order[1] + (s_order[1] if s_order is not None else 0)
+    drift_opts = (False, True) if (allowdrift and d_tot == 1) else (False,)
+    best_result: object | None = None
+    best_ic = math.inf
+    for drift in drift_opts:
+        result, ic_val = _try_fit(
+            y, order, s_order, ic, tol, max_iter, method, backend,
+            include_drift=drift,
+        )
+        if ic_val < best_ic:
+            best_result, best_ic = result, ic_val
+    return best_result, best_ic
 
 
 # Root-modulus floor below which a candidate is rejected, matching
@@ -370,6 +407,7 @@ def _stepwise_search(
     backend: str | None = None,
     max_P: int = 2,
     max_Q: int = 2,
+    allowdrift: bool = True,
 ) -> tuple[
     object,
     tuple[int, int, int],
@@ -452,8 +490,8 @@ def _stepwise_search(
         nonlocal best_result, best_key, best_ic
         visited.add(key)
         order, s_order = _orders(key)
-        result, ic_val = _try_fit(
-            y, order, s_order, ic, tol, max_iter, method, backend,
+        result, ic_val = _fit_best_constant(
+            y, order, s_order, ic, tol, max_iter, method, backend, allowdrift,
         )
         search_results.append(
             ((order, s_order) if seasonal else order, ic_val)
@@ -532,6 +570,7 @@ def _grid_search(
     backend: str | None = None,
     max_P: int = 2,
     max_Q: int = 2,
+    allowdrift: bool = True,
 ) -> tuple[
     object,
     tuple[int, int, int],
@@ -593,8 +632,8 @@ def _grid_search(
     ):
         order = (p, d, q)
         s_order = (P, D, Q, m) if seasonal else None
-        result, ic_val = _try_fit(
-            y, order, s_order, ic, tol, max_iter, method, backend,
+        result, ic_val = _fit_best_constant(
+            y, order, s_order, ic, tol, max_iter, method, backend, allowdrift,
         )
         search_results.append(
             ((order, s_order) if seasonal else order, ic_val)
@@ -631,6 +670,7 @@ def auto_arima(
     period: int = 1,
     ic: str = "aicc",
     stepwise: bool = True,
+    allowdrift: bool = True,
     tol: float = 1e-8,
     max_iter: int = 1000,
     method: str = "CSS-ML",
@@ -666,6 +706,13 @@ def auto_arima(
         Information criterion: ``'aic'``, ``'aicc'``, or ``'bic'``.
     stepwise : bool
         Use stepwise search (default) or grid search.
+    allowdrift : bool
+        Allow a drift (linear-trend) term to be selected when the total
+        differencing order ``d + D == 1`` — the models R reports "with
+        drift" (``forecast::auto.arima``'s ``allowdrift``). Each visited
+        order is fit with and without drift and the better information
+        criterion wins; the chosen model exposes ``include_drift`` and a
+        ``'drift'`` entry in ``best_model.xreg_coef``. Default ``True``.
     tol : float
         Convergence tolerance passed to :func:`arima`.
     max_iter : int
@@ -742,14 +789,14 @@ def auto_arima(
         best_result, best_order, best_seasonal, best_ic_val, search_results = (
             _stepwise_search(
                 arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
-                method, backend, max_P, max_Q,
+                method, backend, max_P, max_Q, allowdrift,
             )
         )
     else:
         best_result, best_order, best_seasonal, best_ic_val, search_results = (
             _grid_search(
                 arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
-                method, backend, max_P, max_Q,
+                method, backend, max_P, max_Q, allowdrift,
             )
         )
 

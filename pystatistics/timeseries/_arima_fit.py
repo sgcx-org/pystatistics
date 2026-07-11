@@ -40,6 +40,7 @@ from pystatistics.timeseries._arima_likelihood import (
     arima_negloglik,
     check_invertible,
     check_stationary,
+    compute_numerical_hessian as _compute_hessian,
     minimize_quiet,
 )
 
@@ -181,64 +182,6 @@ def _reject_gpu_backend_without_whittle(backend: str | None, method: str) -> Non
 # ---------------------------------------------------------------------------
 # Core optimization
 # ---------------------------------------------------------------------------
-
-def _compute_hessian(
-    fun,
-    params: NDArray,
-    step: float = 1e-4,
-) -> NDArray:
-    """
-    Compute the numerical Hessian of ``fun`` at ``params``.
-
-    Uses second-order central finite differences. ``fun`` maps a
-    parameter vector to a scalar negative log-likelihood; callers
-    supply a closure over the data and likelihood method, which lets
-    seasonal fits differentiate in the FACTORED parameterization
-    (ar, ma, sar, sma, mean) rather than the expanded polynomial.
-
-    Parameters
-    ----------
-    fun : callable
-        Scalar objective ``fun(params) -> float``.
-    params : NDArray
-        Point at which to evaluate the Hessian.
-    step : float
-        Finite difference step size.
-
-    Returns
-    -------
-    NDArray
-        Hessian matrix (k x k).
-    """
-    k = len(params)
-    hessian = np.zeros((k, k))
-
-    for i in range(k):
-        for j in range(i, k):
-            params_pp = params.copy()
-            params_pm = params.copy()
-            params_mp = params.copy()
-            params_mm = params.copy()
-
-            params_pp[i] += step
-            params_pp[j] += step
-            params_pm[i] += step
-            params_pm[j] -= step
-            params_mp[i] -= step
-            params_mp[j] += step
-            params_mm[i] -= step
-            params_mm[j] -= step
-
-            fpp = fun(params_pp)
-            fpm = fun(params_pm)
-            fmp = fun(params_mp)
-            fmm = fun(params_mm)
-
-            hessian[i, j] = (fpp - fpm - fmp + fmm) / (4.0 * step * step)
-            hessian[j, i] = hessian[i, j]
-
-    return hessian
-
 
 def _optimize_arima(
     y_diff: NDArray,
@@ -435,6 +378,9 @@ def arima(
     order: tuple[int, int, int] = (0, 0, 0),
     seasonal: tuple[int, int, int, int] | None = None,
     include_mean: bool = True,
+    xreg: ArrayLike | None = None,
+    include_drift: bool = False,
+    fixed: dict | ArrayLike | None = None,
     method: str = "CSS-ML",
     init: ArrayLike | None = None,
     tol: float = 1e-8,
@@ -484,6 +430,33 @@ def arima(
         Whether to include a mean term. Default ``True``. Ignored (no
         mean is estimated) when the model has any differencing
         (``d + D > 0``), matching R ``stats::arima``'s ``include.mean``.
+        With ``xreg`` / ``include_drift`` the mean is carried as the
+        ``'intercept'`` regression coefficient.
+    xreg : ArrayLike or None
+        External regressors for regression with ARIMA errors: fit
+        ``y = X @ beta + eta`` where ``eta`` follows the ARIMA process
+        (R's ``stats::arima(xreg=)`` / ``forecast::Arima(xreg=)``). Shape
+        ``(n,)`` or ``(n, k)`` with one row per observation of *y*. The
+        regression coefficients appear on the solution as ``xreg_coef``
+        (named ``xreg1..xregk``), with joint standard errors in ``vcov``.
+        Forecasting a model with ``xreg`` requires future regressor values
+        (``forecast_arima(..., newxreg=)``). Default ``None``.
+    include_drift : bool
+        Include a linear time-trend (drift) regressor — the models R
+        reports "with drift" (``forecast::Arima(include.drift=TRUE)``).
+        Reported as the ``'drift'`` regression coefficient. Requires total
+        differencing ``d + D <= 1`` (the trend vanishes under higher-order
+        differencing). Default ``False``.
+    fixed : dict or ArrayLike or None
+        Hold coefficients fixed during estimation (R's
+        ``stats::arima(fixed=)`` parameter masking). Primary form is a
+        ``{name: value}`` mapping over the coefficient names
+        (``ar1``, ``ma1``, ..., ``intercept``, ``drift``, ``xreg1``, ...)
+        — e.g. ``fixed={'ma1': 0}`` holds ma1 at 0 and estimates the
+        rest. A positional array aligned to the coefficient order with
+        ``nan`` for free parameters (R's convention) is also accepted.
+        Fixed coefficients carry zero variance in ``vcov`` and do not
+        count toward the information criteria. Default ``None``.
     method : str
         ``'CSS'``, ``'ML'``, or ``'CSS-ML'``. Default ``'CSS-ML'``.
     init : ArrayLike or None
@@ -518,11 +491,11 @@ def arima(
     Notes
     -----
     **R interface coverage.** Supported R parameters: ``order``,
-    ``seasonal``, ``include.mean`` (``include_mean``), ``method``
-    ('CSS-ML'/'ML'/'CSS'), and ``init``. Not yet implemented:
-    ``fixed`` (parameter masking) and ``xreg`` — including drift
-    terms, so models R reports "with drift" cannot be requested.
-    Not exposed, by design: ``transform.pars``, ``SSinit``, ``kappa``,
+    ``seasonal``, ``include.mean`` (``include_mean``), ``xreg``
+    (regression with ARIMA errors), ``include.drift`` (``include_drift``),
+    ``fixed`` (parameter masking), ``method`` ('CSS-ML'/'ML'/'CSS'), and
+    ``init``. Not exposed, by design: ``transform.pars``, ``SSinit``,
+    ``kappa``,
     ``n.cond``, and ``optim.method``/``optim.control`` are knobs over
     R's optimizer and state-space internals; pystatistics guarantees
     parity of RESULTS, not of internal knobs — AR stationarity and MA
@@ -545,6 +518,24 @@ def arima(
     _reject_gpu_backend_without_whittle(backend, method)
     n_obs = len(arr)
     p, d, q = order
+
+    if xreg is not None:
+        from pystatistics.timeseries._arima_xreg import validate_xreg
+        xreg_arr = validate_xreg(xreg, n_obs)
+    else:
+        xreg_arr = None
+    use_xreg = xreg_arr is not None or include_drift or fixed is not None
+    if use_xreg and method == "Whittle":
+        raise ValidationError(
+            "xreg / include_drift / fixed are not supported with "
+            "method='Whittle' (the frequency-domain path has no regression "
+            "term). Use method='CSS-ML' (default), 'ML', or 'CSS'."
+        )
+    if use_xreg and init is not None:
+        raise ValidationError(
+            "init: not supported together with xreg / include_drift / "
+            "fixed. Supply starting values via fixed= or omit init."
+        )
 
     # R parity (stats::arima): ``include.mean`` "is ignored for ARIMA
     # models with differencing" — when d + D > 0 no mean/intercept is
@@ -569,6 +560,21 @@ def arima(
         y_diff = diff(y_diff, differences=d, lag=1)
 
     n_used = len(y_diff)
+
+    # ----- Regression with ARIMA errors (xreg / drift / fixed) -----
+    # Dispatched to the dedicated regression fitter, which subtracts the
+    # differenced regression fit from y_diff and evaluates the SAME ARMA
+    # likelihood used below. The plain-ARIMA path (no regressor, no drift,
+    # no mask) is left byte-for-byte unchanged.
+    if use_xreg:
+        from pystatistics.timeseries._arima_xreg import fit_arima_xreg
+        return fit_arima_xreg(
+            arr=arr, y_diff=y_diff, order=order, seasonal=seasonal,
+            xreg=xreg_arr, include_mean=include_mean,
+            include_drift=include_drift, fixed=fixed, method=method,
+            tol=tol, max_iter=max_iter, n_obs=n_obs, n_used=n_used,
+            yule_walker_start=_yule_walker_start,
+        )
 
     # ----- Whittle (frequency-domain approximate MLE) fast path -----
     # Non-seasonal ARMA only. Operates on the already-differenced series

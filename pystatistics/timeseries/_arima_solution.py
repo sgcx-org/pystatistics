@@ -13,7 +13,7 @@ arima-fit module stays under the 500-LOC limit.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
@@ -83,6 +83,26 @@ class ARIMAParams:
         Whether the optimizer converged.
     n_iter : int
         Number of optimizer iterations.
+    xreg_coef : NDArray
+        Regression coefficients for a model with external regressors
+        (regression with ARIMA errors, ``y = X @ beta + eta``). Ordered
+        ``[intercept?, drift?, user_1, ..., user_k]`` — the same order
+        as ``xreg_names`` and as the trailing block of ``vcov``. Empty
+        when the model has no regressors.
+    xreg_names : tuple[str, ...]
+        Names of the regression coefficients, aligned to ``xreg_coef``
+        (e.g. ``('intercept', 'x1', 'x2')`` or ``('drift',)``).
+    include_drift : bool
+        Whether a linear time-trend (drift) regressor was included.
+    xreg : NDArray or None
+        The user-supplied external regressor matrix (shape
+        ``n_obs x k``), stored so forecasts can reconstruct the
+        regression-error series. ``None`` when no user regressors were
+        supplied (the synthesized intercept/drift columns are not stored
+        here — they are regenerated from ``include_drift`` / the presence
+        of an ``'intercept'`` name). The ``vcov`` block for regression
+        coefficients is the trailing ``len(xreg_coef)`` rows/columns of
+        ``vcov``; fixed (masked) coefficients carry zero variance.
     """
 
     order: tuple[int, int, int]
@@ -105,6 +125,10 @@ class ARIMAParams:
     method: str
     converged: bool
     n_iter: int
+    xreg_coef: NDArray = field(default_factory=lambda: np.empty(0, dtype=np.float64))
+    xreg_names: tuple[str, ...] = ()
+    include_drift: bool = False
+    xreg: NDArray | None = None
 
 
 @dataclass
@@ -246,6 +270,22 @@ class ARIMASolution(SolutionReprMixin):
         return self._result.params.n_iter
 
     @property
+    def xreg_coef(self) -> NDArray:
+        return self._result.params.xreg_coef
+
+    @property
+    def xreg_names(self) -> tuple[str, ...]:
+        return self._result.params.xreg_names
+
+    @property
+    def include_drift(self) -> bool:
+        return self._result.params.include_drift
+
+    @property
+    def xreg(self) -> NDArray | None:
+        return self._result.params.xreg
+
+    @property
     def info(self) -> dict:
         return self._result.info
 
@@ -263,13 +303,20 @@ class ARIMASolution(SolutionReprMixin):
 
     @property
     def n_params(self) -> int:
-        """Total number of estimated parameters (AR + MA + seasonal + mean + sigma2)."""
+        """Total number of parameters in the reported coefficient vector
+        (AR + MA + seasonal + mean/regression + sigma2).
+
+        For a regression-with-ARIMA-errors model the mean is carried as
+        the ``'intercept'`` regression coefficient, so it is counted in
+        ``xreg_coef`` rather than via ``mean``.
+        """
         p = len(self.ar)
         q = len(self.ma)
         sp = len(self.seasonal_ar)
         sq = len(self.seasonal_ma)
-        k = p + q + sp + sq + (1 if self.mean is not None else 0) + 1
-        return k
+        k = p + q + sp + sq + (1 if self.mean is not None else 0)
+        k += len(self.xreg_coef)
+        return k + 1
 
     def summary(self) -> str:
         """
@@ -324,5 +371,9 @@ class ARIMASolution(SolutionReprMixin):
             names.append(f"sma{i + 1}"); coefs.append(float(v))
         if self.mean is not None:
             names.append("intercept"); coefs.append(self.mean)
+        # Regression-with-ARIMA-errors coefficients (intercept/drift/user)
+        # follow the ARMA block, matching R's coef() order.
+        for name, v in zip(self.xreg_names, self.xreg_coef):
+            names.append(name); coefs.append(float(v))
         return names, coefs
 

@@ -213,12 +213,66 @@ def _undifference(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _reconstruct_design(fitted: 'ARIMASolution', n: int) -> NDArray:  # noqa: F821
+    """Rebuild the full past design matrix ``(n, k)`` for a fitted xreg model.
+
+    Column order matches the fit: ``[intercept?, drift?, user...]``. The
+    intercept (ones) and drift (``1..n``) columns are synthesized from
+    ``fitted.xreg_names`` / ``include_drift``; the user columns come from
+    the stored ``fitted.xreg``.
+    """
+    cols: list[NDArray] = []
+    if "intercept" in fitted.xreg_names:
+        cols.append(np.ones(n, dtype=np.float64))
+    if fitted.include_drift:
+        cols.append(np.arange(1, n + 1, dtype=np.float64))
+    if fitted.xreg is not None:
+        user = np.asarray(fitted.xreg, dtype=np.float64).reshape(n, -1)
+        for j in range(user.shape[1]):
+            cols.append(user[:, j])
+    return np.column_stack(cols)
+
+
+def _future_design(
+    fitted: 'ARIMASolution',  # noqa: F821
+    n: int,
+    h: int,
+    newxreg: NDArray | None,
+) -> NDArray:
+    """Build the ``(h, k)`` design matrix for horizons ``n+1 .. n+h``."""
+    cols: list[NDArray] = []
+    if "intercept" in fitted.xreg_names:
+        cols.append(np.ones(h, dtype=np.float64))
+    if fitted.include_drift:
+        cols.append(np.arange(n + 1, n + h + 1, dtype=np.float64))
+    if fitted.xreg is not None:
+        n_user = np.asarray(fitted.xreg).reshape(n, -1).shape[1]
+        if newxreg is None:
+            raise ValidationError(
+                "newxreg: this model was fit with xreg, so future "
+                f"regressor values are required to forecast ({n_user} "
+                f"column(s), {h} row(s))."
+            )
+        nx = np.asarray(newxreg, dtype=np.float64)
+        if nx.ndim == 1:
+            nx = nx.reshape(-1, 1)
+        if nx.shape != (h, n_user):
+            raise ValidationError(
+                f"newxreg: expected shape ({h}, {n_user}) to match h and "
+                f"the fitted xreg columns, got {nx.shape}."
+            )
+        for j in range(n_user):
+            cols.append(nx[:, j])
+    return np.column_stack(cols) if cols else np.empty((h, 0))
+
+
 def forecast_arima(
     fitted: 'ARIMASolution',  # noqa: F821  forward reference
     y_original: ArrayLike,
     *,
     h: int = 10,
     levels: list[int] | None = None,
+    newxreg: ArrayLike | None = None,
 ) -> ARIMAForecast:
     """Generate forecasts from a fitted ARIMA model.
 
@@ -235,6 +289,12 @@ def forecast_arima(
         Forecast horizon (number of steps ahead).  Default 10.
     levels : list of int, optional
         Prediction-interval levels in percent (default ``[80, 95]``).
+    newxreg : ArrayLike, optional
+        Future values of the external regressors, shape ``(h, k)`` (or
+        ``(h,)`` for a single regressor), required when the model was fit
+        with ``xreg``. Not needed for drift-only / intercept-only models
+        (those future columns are synthesized). Ignored for models with
+        no regressors.
 
     Returns
     -------
@@ -244,7 +304,7 @@ def forecast_arima(
     Raises
     ------
     ValidationError
-        If *h* < 1 or *levels* are invalid.
+        If *h* < 1, *levels* are invalid, or *newxreg* is missing/misshaped.
     """
     from pystatistics.timeseries._arima_fit import ARIMASolution  # noqa: F811
 
@@ -266,6 +326,22 @@ def forecast_arima(
         if lv < 1 or lv > 99:
             raise ValidationError(f"levels: each must be in [1, 99], got {lv}")
 
+    # Regression with ARIMA errors: forecast the ARIMA-error series
+    # u = y - X @ beta (which is what the ARMA part was fit on), then add
+    # the future regression mean X_future @ beta back. The un-differencing
+    # and forecast-error variance below operate on u exactly as they do on
+    # a plain series. Matches R's predict.Arima, whose prediction interval
+    # reflects innovation uncertainty only (not coefficient uncertainty).
+    has_reg = len(fitted.xreg_coef) > 0
+    if has_reg:
+        n = y_orig.size
+        beta = np.asarray(fitted.xreg_coef, dtype=np.float64)
+        base = y_orig - _reconstruct_design(fitted, n) @ beta
+        reg_future = _future_design(fitted, n, h, newxreg) @ beta
+    else:
+        base = y_orig
+        reg_future = np.zeros(h)
+
     p, d, q = fitted.order
 
     # Seasonal parameters
@@ -283,8 +359,9 @@ def forecast_arima(
     ar_eff = _multiply_polynomials(fitted.ar, fitted.seasonal_ar, period)
     ma_eff = _multiply_ma_polynomials(fitted.ma, fitted.seasonal_ma, period)
 
-    # Differenced series
-    y_diff = y_orig.copy()
+    # Differenced series (of the ARIMA-error series u = y - X beta when a
+    # regression term is present; of y itself otherwise).
+    y_diff = base.copy()
     if seasonal_d > 0 and period > 1:
         for _ in range(seasonal_d):
             y_diff = diff(y_diff, differences=1, lag=period)
@@ -332,8 +409,10 @@ def forecast_arima(
         var[k] = w @ err_cov[: k + 1, : k + 1] @ w
     se = np.sqrt(var * fitted.sigma2)
 
-    # Un-difference to original scale
-    fc_orig = _undifference(fc_diff, y_orig, d, seasonal_d, period)
+    # Un-difference to original scale (of u when regression is present),
+    # then add the future regression mean X_future @ beta back.
+    fc_orig = _undifference(fc_diff, base, d, seasonal_d, period)
+    fc_orig = fc_orig + reg_future
 
     # Prediction intervals
     lower: dict[int, NDArray] = {}

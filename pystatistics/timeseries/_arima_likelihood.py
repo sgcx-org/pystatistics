@@ -279,6 +279,64 @@ def arima_gradient(
     return grad
 
 
+def compute_numerical_hessian(
+    fun,
+    params: NDArray,
+    step: float = 1e-4,
+) -> NDArray:
+    """
+    Compute the numerical Hessian of ``fun`` at ``params``.
+
+    Uses second-order central finite differences. ``fun`` maps a
+    parameter vector to a scalar negative log-likelihood; callers supply
+    a closure over the data and likelihood method, which lets seasonal
+    (or regression) fits differentiate in whichever parameterization the
+    reported coefficients live in.
+
+    Parameters
+    ----------
+    fun : callable
+        Scalar objective ``fun(params) -> float``.
+    params : NDArray
+        Point at which to evaluate the Hessian.
+    step : float
+        Finite difference step size.
+
+    Returns
+    -------
+    NDArray
+        Hessian matrix (k x k).
+    """
+    k = len(params)
+    hessian = np.zeros((k, k))
+
+    for i in range(k):
+        for j in range(i, k):
+            params_pp = params.copy()
+            params_pm = params.copy()
+            params_mp = params.copy()
+            params_mm = params.copy()
+
+            params_pp[i] += step
+            params_pp[j] += step
+            params_pm[i] += step
+            params_pm[j] -= step
+            params_mp[i] -= step
+            params_mp[j] += step
+            params_mm[i] -= step
+            params_mm[j] -= step
+
+            fpp = fun(params_pp)
+            fpm = fun(params_pm)
+            fmp = fun(params_mp)
+            fmm = fun(params_mm)
+
+            hessian[i, j] = (fpp - fpm - fmp + fmm) / (4.0 * step * step)
+            hessian[j, i] = hessian[i, j]
+
+    return hessian
+
+
 # ---------------------------------------------------------------------------
 # Stationarity and invertibility checks
 # ---------------------------------------------------------------------------
