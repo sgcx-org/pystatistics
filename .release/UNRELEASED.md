@@ -9,6 +9,12 @@
 
 ## Changes
 
+- **survival: split `solution.py` into one module per Solution class** (internal
+  refactor, no behavior change). `KMSolution`, `LogRankSolution`, `CoxSolution`
+  and `DiscreteTimeSolution` now live in `_solution_km.py`, `_solution_logrank.py`,
+  `_solution_cox.py` and `_solution_discrete.py`; `pystatistics.survival.solution`
+  remains as a re-exporting facade, so all existing imports keep working. Class
+  bodies are byte-identical to the pre-split file.
 - **survival: Cox fitting is now at or below R's speed, and hardened against
   degenerate/ill-scaled inputs** (found while validating the feature cluster;
   applies to the whole Cox path, stratified and unstratified).
