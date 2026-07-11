@@ -102,7 +102,7 @@ def _problem(family_key, m=2, n=350, seed=7):
         smooths.append(s("x2", k=8, bs="cr"))
         data["x2"] = x2
     X_aug, built = build_design(np.ones((n, 1)), data, smooths)
-    roots = make_penalty_roots([b.S_block for b in built],
+    roots = make_penalty_roots([b.S_blocks[0] for b in built],
                                [b.block for b in built])
     return y, X_aug, roots, fam
 
@@ -236,7 +236,7 @@ class TestGradientEdgeCases:
         X_aug, built = build_design(
             np.ones((n, 1)), {"x1": x1, "x2": x1.copy()},
             [s("x1", k=10, bs="cr"), s("x2", k=10, bs="cr")])
-        roots = make_penalty_roots([b.S_block for b in built],
+        roots = make_penalty_roots([b.S_blocks[0] for b in built],
                                    [b.block for b in built])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # rank-deficiency warning
@@ -256,7 +256,7 @@ class TestGradientEdgeCases:
         fam = resolve_family("binomial")
         X_aug, built = build_design(np.ones((n, 1)), {"x1": x1},
                                     [s("x1", k=10, bs="cr")])
-        roots = make_penalty_roots([b.S_block for b in built],
+        roots = make_penalty_roots([b.S_blocks[0] for b in built],
                                    [b.block for b in built])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # separation warning
@@ -308,7 +308,7 @@ class TestGradientFailureCases:
         # Zero penalty (rank-0 root) so S_lambda cannot rescue the
         # singularity; the fake fit CLAIMS full rank so no column is dropped.
         root = PenaltyRoot(rows=np.zeros((1, p)), rank=0, block=(0, p),
-                           logdet_pos=0.0)
+                           logdet_pos=0.0, group=0)
         fit = PirlsFit(
             beta=np.array([0.1, 0.1]), mu=np.exp(X @ [0.1, 0.1]),
             eta=X @ [0.1, 0.1], w=np.ones(n), deviance=1.0, penalty=0.0,
@@ -553,7 +553,7 @@ class TestSelectionEquivalence:
         X_aug, built = build_design(
             np.ones((n, 1)), data,
             [s(f"x{i + 1}", k=10, bs="cr") for i in range(3)])
-        roots = make_penalty_roots([b.S_block for b in built],
+        roots = make_penalty_roots([b.S_blocks[0] for b in built],
                                    [b.block for b in built])
 
         calls = {"n": 0}

@@ -108,26 +108,82 @@ class SmoothTerm:
         return hash((self.var_name, self.k, self.bs, self.by))
 
 
-def s(var_name: str, k: int = 10, bs: str = "cr",
-      by: str | None = None) -> SmoothTerm:
+class IsotropicSmooth:
+    """Specification for an isotropic multivariate smooth ``s(x, z, ...)``.
+
+    A single thin-plate spline of ``d >= 2`` covariates that share a scale,
+    penalising wiggliness equally in every direction (one penalty, one
+    smoothing parameter) — mgcv's ``s(x, z, bs="tp")``. Use ``te()`` instead
+    when the covariates are on different scales.
+
+    Attributes:
+        var_names: Predictor names (``d >= 2``).
+        k: Total basis dimension (including the ``d + 1`` polynomial null
+            space), exactly as mgcv's ``s(..., k=k)``.
+        bs: Basis type -- only ``'tp'`` (thin plate) is defined for an
+            isotropic multivariate smooth.
+    """
+
+    __slots__ = ("var_names", "k", "bs")
+
+    def __init__(self, var_names: tuple[str, ...], k: int, bs: str) -> None:
+        if bs != "tp":
+            raise ValidationError(
+                "an isotropic multivariate smooth s(x, z, ...) supports only "
+                f"bs='tp' (thin plate); got {bs!r}. Use te() for a "
+                "tensor-product smooth of differently-scaled covariates."
+            )
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise ValidationError(f"k must be an integer, got {k!r}")
+        if k < _MIN_K or k > _MAX_K:
+            raise ValidationError(
+                f"k must be in [{_MIN_K}, {_MAX_K}], got {k}"
+            )
+        self.var_names = tuple(var_names)
+        self.k = int(k)
+        self.bs = bs
+
+    @property
+    def label(self) -> str:
+        return f"s({','.join(self.var_names)})"
+
+    def __repr__(self) -> str:
+        return f"s({', '.join(self.var_names)}, k={self.k}, bs={self.bs!r})"
+
+
+def s(*var_names: str, k: int = 10, bs: str | None = None,
+      by: str | None = None):
     """Convenience constructor for smooth terms, matching ``mgcv::s()``.
 
     Usage::
 
         from pystatistics.gam import s, gam
-        result = gam(y, X, smooths=[s('x1', k=15), s('x2')])
+        result = gam(y, smooths=[s('x1', k=15), s('x2', 'x3')], ...)
 
     Args:
-        var_name: Name of the predictor variable.
+        *var_names: One predictor name for a univariate smooth, or several
+            for an isotropic multivariate thin-plate smooth ``s(x, z, ...)``.
         k: Basis dimension (default 10).
-        bs: Basis type: ``'cr'``, ``'tp'``, ``'cc'``, or ``'ps'`` (default
-            ``'cr'``).
-        by: Optional name of a *continuous* ``by`` variable — fits the
-            varying-coefficient term ``by * f(x)`` (mgcv's ``s(x, by=z)``). The
-            smooth keeps its full basis (no centering constraint) since the
-            multiplication by ``by`` removes the constant confound.
+        bs: Basis type. Univariate: ``'cr'`` (default), ``'tp'``, ``'cc'``,
+            or ``'ps'``. Multivariate: ``'tp'`` (the default and only choice).
+        by: Optional *continuous* ``by`` variable (univariate smooths only) --
+            fits the varying-coefficient term ``by * f(x)`` (mgcv's
+            ``s(x, by=z)``), keeping the full basis (no centering) since the
+            by-multiplication removes the constant confound.
 
     Returns:
-        A :class:`SmoothTerm` specification object.
+        A :class:`SmoothTerm` (one variable) or :class:`IsotropicSmooth`
+        (several variables).
     """
-    return SmoothTerm(var_name=var_name, k=k, bs=bs, by=by)
+    if len(var_names) == 0:
+        raise ValidationError("s() needs at least one variable name")
+    if len(var_names) == 1:
+        return SmoothTerm(
+            var_name=var_names[0], k=k, bs=bs or "cr", by=by,
+        )
+    if by is not None:
+        raise ValidationError(
+            "by= is not supported for an isotropic multivariate smooth "
+            "s(x, z, ...); use a univariate s(x, by=...)"
+        )
+    return IsotropicSmooth(var_names=var_names, k=k, bs=bs or "tp")

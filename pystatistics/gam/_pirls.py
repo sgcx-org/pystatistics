@@ -60,25 +60,39 @@ _ETA_MAX = 700.0    # exp overflow guard on the linear predictor
 
 @dataclass(frozen=True)
 class PenaltyRoot:
-    """Eigen square root of one smooth's penalty block.
+    """Eigen square root of one penalty block.
 
     ``rows`` is ``(r_j, k_j)`` with ``rows' rows = S_j`` (block coordinates);
     ``block = (start, end)`` locates the smooth's columns in the full design.
+    ``group`` ties penalties that share a coefficient block: an ordinary
+    smooth owns ONE root in its own group, a tensor-product smooth owns one
+    root PER MARGIN — all in a single group over the same ``block``, so the
+    REML penalty determinant is taken JOINTLY over the group (their null
+    spaces overlap and do not decompose per root; see ``_penalty_group``).
     """
 
     rows: NDArray[np.floating[Any]]
     rank: int
     block: tuple[int, int]
     logdet_pos: float  # log pseudo-determinant of the unit-lambda block
+    group: int         # penalties sharing a block (tensor margins) share this
 
 
 def make_penalty_roots(
     S_blocks: list[NDArray[np.floating[Any]]],
     blocks: list[tuple[int, int]],
+    groups: list[int] | None = None,
 ) -> list[PenaltyRoot]:
-    """Eigen-decompose each smooth's (block-coordinate) penalty once."""
+    """Eigen-decompose each (block-coordinate) penalty once.
+
+    ``groups`` assigns each penalty to a determinant group (tensor margins
+    share one); when ``None`` every penalty is its own singleton group —
+    the block-orthogonal case, reproducing the pre-tensor numbers exactly.
+    """
+    if groups is None:
+        groups = list(range(len(S_blocks)))
     roots: list[PenaltyRoot] = []
-    for S, blk in zip(S_blocks, blocks):
+    for S, blk, grp in zip(S_blocks, blocks, groups):
         ev, U = np.linalg.eigh(S)
         tol = ev.max() * 1e-12 if ev.size else 0.0
         pos = ev > tol
@@ -86,6 +100,7 @@ def make_penalty_roots(
         roots.append(PenaltyRoot(
             rows=rows, rank=int(pos.sum()), block=blk,
             logdet_pos=float(np.sum(np.log(ev[pos]))),
+            group=int(grp),
         ))
     return roots
 

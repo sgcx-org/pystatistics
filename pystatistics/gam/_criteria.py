@@ -37,6 +37,7 @@ from scipy.optimize import minimize
 
 from pystatistics.core.exceptions import ConvergenceError, ValidationError
 from pystatistics.gam._edf import influence_matrix, logdet_penalized, total_edf
+from pystatistics.gam._penalty_group import penalty_logdet
 from pystatistics.gam._gradient import gcv_gradient, reml_gradient_gauss
 from pystatistics.gam._gradient_glm import (
     gcv_gradient_glm,
@@ -107,12 +108,13 @@ def reml_score(
     # so both the null-space dimension and the phi-corrections must count
     # fit.rank coordinates, consistently with logdet_penalized's rank block.
     p = fit.rank
-    rank_s = sum(r.rank for r in roots)
+    # Penalty log pseudo-determinant and rank, taken JOINTLY per determinant
+    # group: for ordinary (singleton-group) smooths this equals the old
+    # block-orthogonal ``sum_j rank_j log lam_j + logdet_pos`` exactly; for a
+    # tensor smooth the overlapping margin penalties do not decompose per
+    # root, so ``_penalty_group`` sums them before the determinant.
+    logdet_s, rank_s = penalty_logdet(roots, lambdas)
     m_p = max(p - rank_s, 0)
-    logdet_s = float(sum(
-        r.rank * np.log(lam) + r.logdet_pos
-        for r, lam in zip(roots, lambdas)
-    ))
 
     if family.dispersion_is_fixed:
         phi = 1.0

@@ -50,3 +50,39 @@ def absorb_sum_to_zero(
     S_c = Z.T @ S @ Z
     S_c = 0.5 * (S_c + S_c.T)
     return B_c, S_c, Z
+
+
+def absorb_sum_to_zero_multi(
+    B: NDArray[np.floating[Any]],
+    S_list: list[NDArray[np.floating[Any]]],
+) -> tuple[
+    NDArray[np.floating[Any]],
+    list[NDArray[np.floating[Any]]],
+    NDArray[np.floating[Any]],
+]:
+    """Absorb ONE sum-to-zero constraint into a basis carrying SEVERAL penalties.
+
+    The tensor-product ``te()`` smooth applies a single identifiability
+    constraint to the whole tensor basis but owns one penalty per margin;
+    every penalty is reparameterised by the SAME ``Z`` so they stay aligned
+    in the constrained coordinate system (mgcv ``smoothCon(te, absorb.cons=
+    TRUE)``).
+
+    Args:
+        B: Unconstrained tensor basis ``(n, K)``.
+        S_list: Per-margin penalties, each ``(K, K)``.
+
+    Returns:
+        ``(B_c, S_list_c, Z)``: constrained basis ``(n, K-1)``, the same
+        penalties reparameterised to ``(K-1, K-1)``, and the ``(K, K-1)``
+        reparameterisation matrix.
+    """
+    C = B.sum(axis=0)[:, None]  # (K, 1)
+    Q_full, _ = qr(C, mode="full")
+    Z = Q_full[:, 1:]  # (K, K-1)
+    B_c = B @ Z
+    S_list_c = []
+    for S in S_list:
+        S_c = Z.T @ S @ Z
+        S_list_c.append(0.5 * (S_c + S_c.T))
+    return B_c, S_list_c, Z

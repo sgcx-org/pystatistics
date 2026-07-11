@@ -30,19 +30,28 @@ from pystatistics.gam._basis_cr import cr_basis
 from pystatistics.gam._basis_tp import tp_basis
 from pystatistics.gam._basis_cc import cc_basis
 from pystatistics.gam._basis_ps import ps_basis
+from pystatistics.gam._basis_md import md_tp_basis
+from pystatistics.gam._basis_te import te_basis
 from pystatistics.gam._constraints import absorb_sum_to_zero
-from pystatistics.gam._smooth import SmoothTerm
+from pystatistics.gam._smooth import IsotropicSmooth, SmoothTerm
+from pystatistics.gam._tensor_smooth import TensorSmooth
 
 
 @dataclass(frozen=True)
 class BuiltSmooth:
-    """One smooth term's constructed, constrained design pieces."""
+    """One smooth term's constructed, constrained design pieces.
 
-    term: SmoothTerm
-    block: tuple[int, int]           # column range in X_aug
-    S_block: NDArray[np.floating[Any]]   # (k-1, k-1) constrained penalty
-    Z: NDArray[np.floating[Any]]     # (k, k-1) constraint reparameterisation
-    s_scale: float                   # mgcv S.scale penalty normalisation
+    ``S_blocks`` holds one constrained penalty per smoothing parameter: a
+    single entry for an ordinary ``s()`` smooth, one per margin for a
+    tensor-product ``te()``/``ti()`` smooth (all over the same ``block``).
+    ``s_scales`` is aligned with ``S_blocks``.
+    """
+
+    term: Any                            # SmoothTerm | TensorSmooth
+    block: tuple[int, int]               # column range in X_aug
+    S_blocks: list[NDArray[np.floating[Any]]]  # constrained penalties
+    Z: NDArray[np.floating[Any]]         # constraint reparameterisation
+    s_scales: list[float]                # mgcv S.scale, aligned with S_blocks
 
 
 def build_design(
@@ -74,6 +83,51 @@ def build_design(
     col = X_parametric.shape[1]
 
     for st in smooths:
+        if isinstance(st, TensorSmooth):
+            margin_x = []
+            for nm in st.var_names:
+                if nm not in smooth_data:
+                    raise ValidationError(
+                        f"smooth_data missing margin {nm!r} for {st.label}"
+                    )
+                margin_x.append(
+                    np.asarray(smooth_data[nm], dtype=np.float64).ravel()
+                )
+            tb = te_basis(
+                margin_x, ks=list(st.ks), bss=list(st.bss),
+                interaction=st.interaction,
+            )
+            kc = tb.X.shape[1]
+            blocks_x.append(tb.X)
+            built.append(BuiltSmooth(
+                term=st, block=(col, col + kc), S_blocks=tb.S_blocks,
+                Z=tb.Z, s_scales=tb.s_scales,
+            ))
+            col += kc
+            continue
+
+        if isinstance(st, IsotropicSmooth):
+            cols = []
+            for nm in st.var_names:
+                if nm not in smooth_data:
+                    raise ValidationError(
+                        f"smooth_data missing variable {nm!r} for {st.label}"
+                    )
+                cols.append(
+                    np.asarray(smooth_data[nm], dtype=np.float64).ravel()
+                )
+            coords = np.column_stack(cols)
+            B, S, s_scale = md_tp_basis(coords, k=st.k)
+            B_c, S_c, Z = absorb_sum_to_zero(B, S)
+            kc = B_c.shape[1]
+            blocks_x.append(B_c)
+            built.append(BuiltSmooth(
+                term=st, block=(col, col + kc), S_blocks=[S_c], Z=Z,
+                s_scales=[s_scale],
+            ))
+            col += kc
+            continue
+
         x = np.asarray(smooth_data[st.var_name], dtype=np.float64).ravel()
         if st.bs == "cr":
             B, S, s_scale = cr_basis(x, k=st.k)
@@ -115,8 +169,8 @@ def build_design(
         kc = B_c.shape[1]
         blocks_x.append(B_c)
         built.append(BuiltSmooth(
-            term=st, block=(col, col + kc), S_block=S_c, Z=Z,
-            s_scale=s_scale,
+            term=st, block=(col, col + kc), S_blocks=[S_c], Z=Z,
+            s_scales=[s_scale],
         ))
         col += kc
 

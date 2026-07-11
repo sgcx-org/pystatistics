@@ -78,6 +78,7 @@ from scipy.linalg import cho_factor, cho_solve, lu_factor, lu_solve
 
 from pystatistics.gam._edf import influence_matrix, posterior_covariance
 from pystatistics.gam._gradient import _penalty_terms
+from pystatistics.gam._penalty_group import penalty_logdet_grad
 from pystatistics.gam._pirls import PenaltyRoot, PirlsFit
 
 if TYPE_CHECKING:
@@ -373,8 +374,9 @@ def reml_gradient_glm(
     m_k = cho_solve(chol, Xk.T).T                       # X A_n^{-1} (kept)
     a_diag = np.einsum("ij,ij->i", m_k, Xk)             # (X A_n^{-1} X')_ii
     beta = fit.beta
+    d_logdet_s = penalty_logdet_grad(roots, lambdas)    # joint per-group
     grad = np.empty(len(terms), dtype=np.float64)
-    for j, (lam, sj, rank_j) in enumerate(terms):
+    for j, (lam, sj, _rank_j) in enumerate(terms):
         sj_beta = sj @ beta
         b_sj_b = float(beta @ sj_beta)
         sj_kk = sj[np.ix_(kept, kept)]
@@ -383,7 +385,7 @@ def reml_gradient_glm(
         d_logdet_a = (
             lam * tr_term + float(np.sum(omega_n * deta * a_diag))
         )
-        grad[j] = 0.5 * lam * b_sj_b + 0.5 * d_logdet_a - 0.5 * rank_j
+        grad[j] = 0.5 * lam * b_sj_b + 0.5 * d_logdet_a - 0.5 * d_logdet_s[j]
     return grad
 
 
@@ -402,12 +404,13 @@ def _reml_gradient_fisher(
     m_mat = X @ a_inv
     a_diag = np.einsum("ij,ij->i", m_mat, X)                # (XA^{-1}X')_ii
     beta = fit.beta
+    d_logdet_s = penalty_logdet_grad(roots, lambdas)        # joint per-group
     grad = np.empty(len(terms), dtype=np.float64)
-    for j, (lam, sj, rank_j) in enumerate(terms):
+    for j, (lam, sj, _rank_j) in enumerate(terms):
         b_sj_b = float(beta @ (sj @ beta))
         tr_ainv_sj = float(np.einsum("ab,ba->", a_inv, sj))
         d_logdet_a = (
             lam * tr_ainv_sj + float(np.sum(omega * deta[:, j] * a_diag))
         )
-        grad[j] = 0.5 * lam * b_sj_b + 0.5 * d_logdet_a - 0.5 * rank_j
+        grad[j] = 0.5 * lam * b_sj_b + 0.5 * d_logdet_a - 0.5 * d_logdet_s[j]
     return grad

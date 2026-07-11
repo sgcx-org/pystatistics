@@ -506,7 +506,7 @@ class TestSummary:
         assert si.k == 12
         assert si.edf > 0 and si.ref_df >= si.edf - 1e-6
         assert 0.0 <= si.p_value <= 1.0
-        assert si.lambda_ > 0 and si.s_scale > 0
+        assert si.lambdas[0] > 0 and si.s_scales[0] > 0
 
     def test_params_frozen(self, sine_data):
         x, y, _ = sine_data

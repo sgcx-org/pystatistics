@@ -131,9 +131,12 @@ class SmoothInfo:
         p_value: Approximate p-value for the term.
         coef_indices: ``(start, end)`` slice into the full coefficient
             vector identifying this term's (constrained) coefficients.
-        lambda_: Selected smoothing parameter for this term.
-        s_scale: Penalty normalisation factor for this term
-            (``lambda_ / s_scale`` is in function-space units).
+        lambdas: Selected smoothing parameter(s) for this term — a length-1
+            tuple for an ordinary ``s()`` smooth, one entry per margin for a
+            tensor-product ``te()``/``ti()`` smooth (each margin has its own
+            penalty and smoothing parameter, as in mgcv).
+        s_scales: Penalty normalisation factor(s), aligned with ``lambdas``
+            (``lambda / s_scale`` is in function-space units).
     """
 
     term_name: str
@@ -145,5 +148,5 @@ class SmoothInfo:
     chi_sq: float
     p_value: float
     coef_indices: tuple[int, int]
-    lambda_: float
-    s_scale: float
+    lambdas: tuple[float, ...]
+    s_scales: tuple[float, ...]

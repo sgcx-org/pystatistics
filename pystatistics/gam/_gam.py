@@ -40,8 +40,21 @@ from pystatistics.gam._edf import (
     total_edf as total_edf_of,
 )
 from pystatistics.gam._pirls import fit_fixed_lambda, make_penalty_roots
-from pystatistics.gam._smooth import SmoothTerm
+from pystatistics.gam._smooth import IsotropicSmooth, SmoothTerm
 from pystatistics.gam._smooth_test import smooth_term_test
+from pystatistics.gam._tensor_smooth import TensorSmooth
+
+
+def _smooth_label(st) -> str:
+    """Display label for a smooth term (``s(x)`` / ``te(x,z)`` / ``ti(x,z)``)."""
+    if isinstance(st, (TensorSmooth, IsotropicSmooth)):
+        return st.label
+    return f"s({st.var_name})"
+
+
+def _n_penalties(st) -> int:
+    """Number of smoothing parameters a smooth owns (margins for a tensor)."""
+    return len(st.var_names) if isinstance(st, TensorSmooth) else 1
 from pystatistics.gam.solution import GAMSolution
 from pystatistics.regression.families import (
     Family, NegativeBinomial, resolve_family,
@@ -197,7 +210,10 @@ def gam(
 
     smooth_data_np: dict[str, NDArray] = {}
     for st in smooths:
-        needed = [st.var_name] + ([st.by] if st.by is not None else [])
+        if isinstance(st, (TensorSmooth, IsotropicSmooth)):
+            needed = list(st.var_names)
+        else:
+            needed = [st.var_name] + ([st.by] if st.by is not None else [])
         for var in needed:
             if var not in smooth_data:
                 raise ValidationError(
@@ -233,13 +249,15 @@ def gam(
         )
 
     n_smooths = len(smooths)
+    n_penalties = sum(_n_penalties(st) for st in smooths)
     sp_arr: NDArray | None = None
     if sp is not None:
         sp_arr = np.asarray(sp, dtype=np.float64).ravel()
-        if sp_arr.shape[0] != n_smooths:
+        if sp_arr.shape[0] != n_penalties:
             raise ValidationError(
                 f"sp has {sp_arr.shape[0]} entries but there are "
-                f"{n_smooths} smooth terms"
+                f"{n_penalties} smoothing parameters (a tensor smooth owns "
+                f"one per margin)"
             )
         if np.any(~np.isfinite(sp_arr)) or np.any(sp_arr <= 0.0):
             raise ValidationError("sp entries must be finite and > 0")
@@ -249,8 +267,21 @@ def gam(
     # ------------------------------------------------------------------
     X_aug, built = build_design(X_param, smooth_data_np, smooths)
     blocks = [b.block for b in built]
-    roots = make_penalty_roots([b.S_block for b in built], blocks)
-    smooth_names = [f"s({st.var_name})" for st in smooths]
+    # Flatten per-smooth penalties into roots. A tensor smooth owns several
+    # penalties over ONE block, all tagged with the smooth's group index so
+    # the REML penalty determinant is taken jointly (see _penalty_group);
+    # ordinary smooths are singleton groups (unchanged numbers).
+    S_flat: list[NDArray] = []
+    blk_flat: list[tuple[int, int]] = []
+    grp_flat: list[int] = []
+    for gi, b in enumerate(built):
+        for S in b.S_blocks:
+            S_flat.append(S)
+            blk_flat.append(b.block)
+            grp_flat.append(gi)
+    roots = make_penalty_roots(S_flat, blk_flat, grp_flat)
+    # roots[k] belongs to smooth grp_flat[k]; used to regroup per-smooth sp.
+    smooth_names = [_smooth_label(st) for st in smooths]
 
     # ------------------------------------------------------------------
     # Smoothing-parameter selection (or user-fixed sp) + final fit.
@@ -358,6 +389,11 @@ def gam(
     # ------------------------------------------------------------------
     # Per-smooth summaries
     # ------------------------------------------------------------------
+    # Map each smooth to its penalties' positions in the flattened root list.
+    roots_of_smooth: dict[int, list[int]] = {}
+    for k_root, gi in enumerate(grp_flat):
+        roots_of_smooth.setdefault(gi, []).append(k_root)
+
     smooth_infos: list[SmoothInfo] = []
     for i, b in enumerate(built):
         s_, e_ = b.block
@@ -367,18 +403,31 @@ def gam(
             scale_known=fam.dispersion_is_fixed,
             resid_df=n - tot_edf,
         )
+        lam_i = tuple(float(lambdas[k]) for k in roots_of_smooth.get(i, []))
+        if isinstance(b.term, TensorSmooth):
+            var_name = ",".join(b.term.var_names)
+            basis_type = "ti" if b.term.interaction else "te"
+            k_report = e_ - s_
+        elif isinstance(b.term, IsotropicSmooth):
+            var_name = ",".join(b.term.var_names)
+            basis_type = b.term.bs
+            k_report = b.term.k
+        else:
+            var_name = b.term.var_name
+            basis_type = b.term.bs
+            k_report = b.term.k
         smooth_infos.append(SmoothInfo(
             term_name=smooth_names[i],
-            var_name=b.term.var_name,
-            basis_type=b.term.bs,
-            k=b.term.k,
+            var_name=var_name,
+            basis_type=basis_type,
+            k=k_report,
             edf=float(edf[i]),
             ref_df=float(ref_df[i]),
             chi_sq=stat,
             p_value=p_val,
             coef_indices=(s_, e_),
-            lambda_=float(lambdas[i]),
-            s_scale=float(b.s_scale),
+            lambdas=lam_i,
+            s_scales=tuple(float(sc) for sc in b.s_scales),
         ))
 
     # ------------------------------------------------------------------
@@ -392,7 +441,9 @@ def gam(
         edf=edf,
         total_edf=tot_edf,
         lambdas=lambdas,
-        s_scales=np.array([b.s_scale for b in built], dtype=np.float64),
+        s_scales=np.array(
+            [sc for b in built for sc in b.s_scales], dtype=np.float64,
+        ),
         covariance=covariance,
         scale=scale,
         gcv=gcv,

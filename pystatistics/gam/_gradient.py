@@ -36,6 +36,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from pystatistics.gam._edf import influence_matrix, posterior_covariance
+from pystatistics.gam._penalty_group import penalty_logdet, penalty_logdet_grad
 from pystatistics.gam._pirls import PenaltyRoot, PirlsFit
 
 
@@ -122,18 +123,22 @@ def reml_gradient_gauss(
     a_inv = posterior_covariance(fit.R, fit.piv, fit.rank, 1.0)  # A^{-1}
     terms, _s_lam = _penalty_terms(roots, lambdas, p)
     beta = fit.beta
-    rank_s = sum(r.rank for r in roots)
+    # Joint penalty rank and log-determinant derivative (per determinant
+    # group). ``d_logdet_s[j] = lambda_j tr(S_g,lambda^+ S_j)`` generalises
+    # the block-orthogonal ``rank_j``; for singleton groups it equals rank_j.
+    _logdet_s, rank_s = penalty_logdet(roots, lambdas)
+    d_logdet_s = penalty_logdet_grad(roots, lambdas)
     m_p = max(fit.rank - rank_s, 0)
     d_p = fit.deviance + fit.penalty
     phi = d_p / (n - m_p)
 
     grad = np.empty(len(terms), dtype=np.float64)
-    for j, (lam, sj, rank_j) in enumerate(terms):
+    for j, (lam, sj, _rank_j) in enumerate(terms):
         b_sj_b = float(beta @ (sj @ beta))
         tr_ainv_sj = float(np.einsum("ab,ba->", a_inv, sj))
         grad[j] = (
             lam * b_sj_b / (2.0 * phi)
             + 0.5 * lam * tr_ainv_sj
-            - 0.5 * rank_j
+            - 0.5 * d_logdet_s[j]
         )
     return grad
