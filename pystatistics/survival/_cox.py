@@ -33,6 +33,10 @@ from numpy.typing import NDArray
 from scipy import stats
 
 from pystatistics.survival._common import CoxParams
+from pystatistics.survival._cox_newton import flag_infinite_coefs, solve_cox_newton
+from pystatistics.survival._concordance_kernel import (
+    concordance_counts_simple, concordance_counts_truncated,
+)
 
 
 def cox_fit(
@@ -43,13 +47,14 @@ def cox_fit(
     tol: float = 1e-9,
     max_iter: int = 20,
     conf_level: float = 0.95,
+    entry: NDArray | None = None,
 ) -> CoxParams:
     """Fit Cox proportional hazards model.
 
     Parameters
     ----------
     time : NDArray
-        (n,) time to event or censoring.
+        (n,) time to event or censoring (the risk-interval exit).
     event : NDArray
         (n,) event indicator (1=event, 0=censored).
     X : NDArray
@@ -60,6 +65,10 @@ def cox_fit(
         Convergence tolerance (max absolute change in β).
     max_iter : int
         Maximum Newton-Raphson iterations.
+    entry : NDArray or None
+        (n,) counting-process start times: each row is at risk on
+        ``(entry, time]``. Enables time-varying covariates (a subject split
+        into several rows) and left truncation. None = at risk from 0.
 
     Returns
     -------
@@ -67,12 +76,22 @@ def cox_fit(
     """
     n, p = X.shape
 
+    # Mean-center the covariates. The Cox partial likelihood, score, and
+    # information are all exactly invariant to a constant shift of any covariate
+    # (it cancels in every risk-set ratio), but computing the information on raw,
+    # large-magnitude covariates loses precision to cancellation (E[XX'] -
+    # E[X]E[X]') and can yield a numerically indefinite matrix — the failure R
+    # avoids by centering. Concordance depends only on the ordering of X @ beta,
+    # which a constant shift preserves. Coefficients are reported unchanged.
+    X = X - X.mean(axis=0)
+
     # Sort by descending time (events before censoring at ties)
     # This puts the largest times first, matching the way we accumulate risk sets
     order = np.lexsort((event, time))  # ascending time, censored before events
     t_sorted = time[order]
     e_sorted = event[order]
     X_sorted = X[order]
+    entry_sorted = entry[order] if entry is not None else None
 
     # Find distinct event times and group info
     event_mask = e_sorted == 1
@@ -82,91 +101,49 @@ def cox_fit(
     n_events_total = int(np.sum(event))
 
     if n_events_total == 0:
-        # No events — cannot fit Cox model
+        # No events — the partial likelihood is flat and the model is
+        # unidentified. Report converged=False (like the discrete-time twin) and
+        # NaN concordance rather than a fabricated 0.5 that asserts a fit that
+        # never ran; R likewise returns NA here, not a definite number.
         return CoxParams(
             coefficients=np.zeros(p, dtype=np.float64),
             hazard_ratios=np.ones(p, dtype=np.float64),
             standard_errors=np.full(p, np.inf),
-            z_values=np.zeros(p, dtype=np.float64),
-            p_values=np.ones(p, dtype=np.float64),
+            z_values=np.full(p, np.nan),
+            p_values=np.full(p, np.nan),
             loglik=(0.0, 0.0),
-            concordance=0.5,
+            concordance=np.nan,
             n_events=0,
             n_observations=n,
             n_iter=0,
-            converged=True,
+            converged=False,
             ties=ties,
             conf_level=conf_level,
         )
 
-    # --- Newton-Raphson ---
-    beta = np.zeros(p, dtype=np.float64)
-
-    # Null log-likelihood (β=0)
-    null_loglik = _partial_loglik(
-        beta, t_sorted, e_sorted, X_sorted, unique_event_times, ties
-    )
-
-    converged = False
-    n_iter = 0
-    loglik_old = null_loglik
-
-    for iteration in range(1, max_iter + 1):
-        loglik, score, info_matrix = _score_and_information(
-            beta, t_sorted, e_sorted, X_sorted, unique_event_times, ties
+    # --- Newton-Raphson (shared driver) ---
+    def eval_full(b: NDArray) -> tuple[float, NDArray, NDArray]:
+        return _score_and_information(
+            b, t_sorted, e_sorted, X_sorted, unique_event_times, ties,
+            entry=entry_sorted,
         )
 
-        # Newton step: β_new = β + I^{-1} @ U
-        try:
-            step = np.linalg.solve(info_matrix, score)
-        except np.linalg.LinAlgError:
-            # Singular information matrix
-            break
-
-        # Step-halving to prevent overflow (R's coxph does this too)
-        # Limit step size so exp(X @ beta) doesn't overflow
-        max_step = np.max(np.abs(step))
-        if max_step > 5.0:
-            step = step * (5.0 / max_step)
-
-        beta_new = beta + step
-
-        # Check convergence on relative change in log-likelihood
-        loglik_new = _partial_loglik(
-            beta_new, t_sorted, e_sorted, X_sorted, unique_event_times, ties
+    def eval_loglik(b: NDArray) -> float:
+        return _partial_loglik(
+            b, t_sorted, e_sorted, X_sorted, unique_event_times, ties,
+            entry=entry_sorted,
         )
 
-        # R-style convergence: max|β_new - β| < tol
-        if np.max(np.abs(beta_new - beta)) < tol:
-            beta = beta_new
-            converged = True
-            n_iter = iteration
-            break
-
-        # Also accept convergence on relative loglik change
-        if iteration > 1 and abs(loglik_new - loglik_old) / (abs(loglik_old) + 0.1) < tol:
-            beta = beta_new
-            converged = True
-            n_iter = iteration
-            break
-
-        beta = beta_new
-        loglik_old = loglik_new
-        n_iter = iteration
-
-    # Final log-likelihood
-    model_loglik = _partial_loglik(
-        beta, t_sorted, e_sorted, X_sorted, unique_event_times, ties
-    )
+    fit = solve_cox_newton(p, eval_full, eval_loglik, tol, max_iter)
+    beta = fit.beta
 
     # Standard errors from observed information matrix
-    _, _, info_final = _score_and_information(
-        beta, t_sorted, e_sorted, X_sorted, unique_event_times, ties
-    )
-
+    infinite_coefs: tuple[int, ...] = ()
     try:
-        var_matrix = np.linalg.inv(info_final)
+        var_matrix = np.linalg.inv(fit.information)
         se = np.sqrt(np.maximum(np.diag(var_matrix), 0.0))
+        if fit.converged:
+            infinite_coefs = flag_infinite_coefs(beta, fit.score, var_matrix, tol)
     except np.linalg.LinAlgError:
         se = np.full(p, np.inf)
 
@@ -175,7 +152,9 @@ def cox_fit(
     p_values = 2.0 * stats.norm.sf(np.abs(z))
 
     # Harrell's concordance
-    concordance = _concordance(beta, time, event, X)
+    concordant, discordant, tied_risk = _concordance_counts(
+        beta, time, event, X, entry=entry)
+    concordance = _concordance_ratio(concordant, discordant, tied_risk)
 
     return CoxParams(
         coefficients=beta,
@@ -183,14 +162,15 @@ def cox_fit(
         standard_errors=se,
         z_values=z,
         p_values=p_values,
-        loglik=(null_loglik, model_loglik),
+        loglik=(fit.null_loglik, fit.model_loglik),
         concordance=concordance,
         n_events=n_events_total,
         n_observations=n,
-        n_iter=n_iter,
-        converged=converged,
+        n_iter=fit.n_iter,
+        converged=fit.converged,
         ties=ties,
         conf_level=conf_level,
+        infinite_coefs=infinite_coefs,
     )
 
 
@@ -235,6 +215,45 @@ def _death_group_sums(
             "eX_sum": eX_sum, "eta_c_sum": eta_c_sum}
 
 
+def _entry_adjustment(
+    values: NDArray,
+    entry: NDArray,
+    unique_event_times: NDArray,
+) -> NDArray:
+    """Risk-set correction for delayed entry: sum of ``values`` over rows with
+    ``entry >= t_j``, per event time.
+
+    With counting-process data the risk set at ``t`` is ``{entry < t <= time}``,
+    so each stop-side reverse-cumsum ``A(t) = sum over time >= t`` must be
+    reduced by ``B(t) = sum over entry >= t``. Computed the same way: one
+    reverse cumulative sum over entry-sorted rows, indexed per event time.
+    """
+    eorder = np.argsort(entry, kind="mergesort")
+    esorted = entry[eorder]
+    cs = _reverse_cumsum(values[eorder])
+    pad = np.zeros((1,) + values.shape[1:], dtype=np.float64)
+    cs = np.concatenate([cs, pad], axis=0)           # index n -> empty sum
+    idx = np.searchsorted(esorted, unique_event_times, side="left")
+    return cs[idx]
+
+
+def _efron_steps(groups: NDArray, dkg: NDArray) -> tuple[NDArray, NDArray]:
+    """Flatten multi-death tie groups into per-step arrays, fully vectorized.
+
+    Returns ``(gk, fracs)`` where ``gk[j]`` is the event-time index of step j and
+    ``fracs[j] = step / d_k`` runs 0, 1/d_k, …, (d_k-1)/d_k within each group.
+    Avoids a Python loop over tie groups (which dominated on data with many
+    small multi-death groups, e.g. integer-day survival times).
+    """
+    dkg = dkg.astype(np.intp)
+    total = int(dkg.sum())
+    gk = np.repeat(groups, dkg)                       # group index per step
+    starts = np.repeat(np.cumsum(dkg) - dkg, dkg)     # step 0 offset per group
+    steps = np.arange(total) - starts                 # 0..d_k-1 within a group
+    fracs = steps / np.repeat(dkg, dkg)
+    return gk, fracs
+
+
 def _partial_loglik(
     beta: NDArray,
     time: NDArray,
@@ -242,6 +261,7 @@ def _partial_loglik(
     X: NDArray,
     unique_event_times: NDArray,
     ties: str,
+    entry: NDArray | None = None,
 ) -> float:
     """Compute the Cox partial log-likelihood.
 
@@ -249,7 +269,9 @@ def _partial_loglik(
     cumulative sum over time-sorted data, indexed at each event time, rather
     than re-scanning the risk set per event time. Efron's tie correction adds a
     bounded inner loop only over genuine multi-death ties (single-death times
-    reduce to Breslow and are handled in the vectorized term).
+    reduce to Breslow and are handled in the vectorized term). With ``entry``
+    (counting-process rows), each risk-set sum is reduced by the not-yet-entered
+    rows (see ``_entry_adjustment``).
 
     Parameters
     ----------
@@ -257,6 +279,7 @@ def _partial_loglik(
     time, event, X : (n,) / (n,) / (n, p), sorted ascending by time
     unique_event_times : distinct event times (ascending)
     ties : "efron" or "breslow"
+    entry : (n,) or None — row entry times, aligned with the sorted rows
     """
     n = len(time)
     eta = X @ beta
@@ -267,6 +290,8 @@ def _partial_loglik(
     cs0 = _reverse_cumsum(w)
     first = np.searchsorted(time, unique_event_times, side="left")
     S0 = cs0[first]                                  # (m,) risk-set sums
+    if entry is not None:
+        S0 = S0 - _entry_adjustment(w, entry, unique_event_times)
 
     dg = _death_group_sums(time, event, X, eta_c, w, unique_event_times)
     d, dS0, eta_c_sum = dg["d"], dg["dS0"], dg["eta_c_sum"]
@@ -275,11 +300,11 @@ def _partial_loglik(
     loglik = float(eta_c_sum.sum() - (d * np.log(S0)).sum())
 
     if ties == "efron":
-        for k in np.nonzero(d > 1)[0]:
-            dk = int(d[k])
-            loglik += dk * np.log(S0[k])             # undo the Breslow term
-            for s in range(dk):
-                loglik -= np.log(S0[k] - (s / dk) * dS0[k])
+        groups = np.nonzero(d > 1)[0]
+        if len(groups) > 0:
+            loglik += float((d[groups] * np.log(S0[groups])).sum())  # undo Breslow
+            gk, fracs = _efron_steps(groups, d[groups])
+            loglik -= float(np.log(S0[gk] - fracs * dS0[gk]).sum())
     return loglik
 
 
@@ -290,6 +315,7 @@ def _score_and_information(
     X: NDArray,
     unique_event_times: NDArray,
     ties: str,
+    entry: NDArray | None = None,
 ) -> tuple[float, NDArray, NDArray]:
     """Compute log-likelihood, score vector, and observed information matrix.
 
@@ -314,6 +340,12 @@ def _score_and_information(
     cs2 = _reverse_cumsum(wx[:, :, None] * X[:, None, :])  # (n, p, p) — O(n p^2)
     first = np.searchsorted(time, unique_event_times, side="left")
     S0 = cs0[first]; S1 = cs1[first]; S2 = cs2[first]
+    if entry is not None:
+        # Counting-process rows: remove the not-yet-entered from each risk set.
+        S0 = S0 - _entry_adjustment(w, entry, unique_event_times)
+        S1 = S1 - _entry_adjustment(wx, entry, unique_event_times)
+        S2 = S2 - _entry_adjustment(wx[:, :, None] * X[:, None, :],
+                                    entry, unique_event_times)
 
     dg = _death_group_sums(time, event, X, eta_c, w, unique_event_times)
     d = dg["d"]
@@ -326,63 +358,63 @@ def _score_and_information(
                    * (S2 / S0[:, None, None]
                       - mean0[:, :, None] * mean0[:, None, :])).sum(0)
 
-    # --- Efron correction: only for genuine multi-death ties (few, small) ---
+    # --- Efron correction: only for genuine multi-death ties ---
+    # Vectorized over ALL tie groups and their fractional steps at once (the
+    # per-group / per-step Python loop was the fit's hot spot on tied data).
     if ties == "efron":
-        dS0, dS1, dS2 = dg["dS0"], dg["dS1"], dg["dS2"]
-        for k in np.nonzero(d > 1)[0]:
-            dk = int(d[k])
-            s0k, s1k, s2k = S0[k], S1[k], S2[k]
-            # Undo the Breslow term added above for this tie group, ...
-            loglik += dk * np.log(s0k)
-            score += dk * (s1k / s0k)
-            info_matrix -= dk * (s2k / s0k - np.outer(s1k / s0k, s1k / s0k))
-            # ... then add the proper Efron sum over the d_k tied deaths.
-            for s in range(dk):
-                frac = s / dk
-                denom = s0k - frac * dS0[k]
-                num1 = s1k - frac * dS1[k]
-                num2 = s2k - frac * dS2[k]
-                mean = num1 / denom
-                loglik -= np.log(denom)
-                score -= mean
-                info_matrix += num2 / denom - np.outer(mean, mean)
+        groups = np.nonzero(d > 1)[0]
+        if len(groups) > 0:
+            dS0, dS1, dS2 = dg["dS0"], dg["dS1"], dg["dS2"]
+            dkg = d[groups]                              # (G,)
+            s0g, s1g, s2g = S0[groups], S1[groups], S2[groups]
+            mean0g = s1g / s0g[:, None]                  # (G, p)
+
+            # Undo the Breslow term (added above) for every tie group at once.
+            loglik += float((dkg * np.log(s0g)).sum())
+            score += (dkg[:, None] * mean0g).sum(0)
+            info_matrix -= (dkg[:, None, None]
+                            * (s2g / s0g[:, None, None]
+                               - mean0g[:, :, None] * mean0g[:, None, :])).sum(0)
+
+            # Add the proper Efron sum, flattening (group, step) into one axis.
+            gk, fracs = _efron_steps(groups, dkg)
+            denom = S0[gk] - fracs * dS0[gk]             # (T,)
+            num1 = S1[gk] - fracs[:, None] * dS1[gk]     # (T, p)
+            num2 = S2[gk] - fracs[:, None, None] * dS2[gk]  # (T, p, p)
+            mean = num1 / denom[:, None]                 # (T, p)
+            loglik -= float(np.log(denom).sum())
+            score -= mean.sum(0)
+            info_matrix += (num2 / denom[:, None, None]
+                            - mean[:, :, None] * mean[:, None, :]).sum(0)
 
     return loglik, score, info_matrix
 
 
-def _fenwick_add(tree: NDArray, r: int, size: int) -> None:
-    """Add 1 at 1-based index ``r`` of a Fenwick (binary-indexed) tree."""
-    while r <= size:
-        tree[r] += 1.0
-        r += r & (-r)
-
-
-def _fenwick_prefix(tree: NDArray, r: int) -> float:
-    """Sum of tree[1..r] (count of inserted items with rank <= r)."""
-    s = 0.0
-    while r > 0:
-        s += tree[r]
-        r -= r & (-r)
-    return s
-
-
-def _concordance(
+def _concordance_counts(
     beta: NDArray,
     time: NDArray,
     event: NDArray,
     X: NDArray,
-) -> float:
-    """Harrell's concordance statistic (C-statistic), O(n log n).
+    entry: NDArray | None = None,
+) -> tuple[float, float, float]:
+    """Concordant / discordant / risk-tied pair counts, O(n log n).
 
     C = P(risk_i > risk_j | T_i < T_j, event_i = 1). Over comparable ordered
-    pairs (i an event, j with strictly larger time), this counts how many have a
-    larger / smaller / equal risk score. The naive form is an O(n^2) all-pairs
-    scan; here a Fenwick tree keyed by risk-score rank counts each event's
-    contribution in O(log n). Subjects are processed in descending time so the
-    tree holds exactly the strictly-later-time subjects when an event is queried;
-    a whole tied-time block is inserted only after its events are queried, which
-    enforces the strict T_i < T_j comparability. Bit-for-bit equivalent to the
-    all-pairs definition.
+    pairs — an event at t versus every row at risk beyond t — this counts how
+    many have a larger / smaller / equal risk score. A Fenwick tree keyed by
+    risk-score rank holds the currently-at-risk rows while an ascending sweep
+    over event times activates rows as their ``entry`` passes and deactivates
+    them as their exit passes, so each event's contribution costs O(log n).
+
+    Conventions (matching R's ``concordance``): a row censored AT an event
+    time outlives the event (comparable); two events at the same time are a
+    time tie (not comparable); with counting-process rows, a row is comparable
+    with an event at t only while at risk, ``entry < t <= exit`` — so
+    non-overlapping spells of one subject never form a pair.
+
+    Returned as raw counts (not the ratio) so a stratified fit can sum
+    within-stratum counts before forming a single C — matching R's
+    ``concordance.coxph``, which only compares pairs sharing a stratum.
     """
     eta = X @ beta
     n = len(time)
@@ -390,42 +422,36 @@ def _concordance(
     # Rank risk scores into 1..K (ties share a rank).
     uniq, inv = np.unique(eta, return_inverse=True)
     size = len(uniq)
-    rank = (inv + 1).astype(np.intp)
+    rank = (inv + 1).astype(np.int64)
 
-    order = np.argsort(time, kind="mergesort")
-    t = np.asarray(time)[order]
-    e = np.asarray(event)[order]
-    rk = rank[order]
+    e = np.asarray(event, dtype=np.float64)
+    uet = np.unique(time[e == 1])
 
-    tree = np.zeros(size + 1, dtype=np.float64)
-    concordant = discordant = tied_risk = 0.0
-    seen = 0
+    if entry is None:
+        # Add-only descending sweep (every subject at risk from the start).
+        order = np.argsort(time, kind="mergesort")
+        return concordance_counts_simple(
+            rank[order], np.asarray(time, dtype=np.float64)[order], e[order],
+            uet, size)
 
-    i = n - 1
-    while i >= 0:
-        # Identify the block of equal times [lo .. i].
-        tj = t[i]
-        lo = i
-        while lo >= 0 and t[lo] == tj:
-            lo -= 1
-        lo += 1
-        # Query events in this block against strictly-later-time subjects.
-        for k in range(lo, i + 1):
-            if e[k] == 1:
-                r = int(rk[k])
-                less = _fenwick_prefix(tree, r - 1)     # eta_j < eta_i
-                leq = _fenwick_prefix(tree, r)
-                concordant += less
-                tied_risk += leq - less
-                discordant += seen - leq
-        # Insert the whole block (now they become "later time" for earlier events).
-        for k in range(lo, i + 1):
-            _fenwick_add(tree, int(rk[k]), size)
-            seen += 1
-        i = lo - 1
+    # Counting-process rows: activation + deactivation sweep.
+    t = np.asarray(time, dtype=np.float64)
+    entry_vals = np.asarray(entry, dtype=np.float64)
+    stop_order = np.argsort(t, kind="mergesort")
+    event_rows = stop_order[e[stop_order] == 1].astype(np.int64)
+    return concordance_counts_truncated(rank, t, entry_vals, event_rows, uet,
+                                        size)
 
+
+def _concordance_ratio(
+    concordant: float, discordant: float, tied_risk: float
+) -> float:
+    """Harrell's C from concordant / discordant / risk-tied pair counts.
+
+    With no comparable pairs the C-statistic is undefined; return NaN (as R
+    does) rather than a fabricated 0.5 that reads as 'no discrimination'.
+    """
     total = concordant + discordant + tied_risk
     if total == 0:
-        return 0.5
-
+        return np.nan
     return (concordant + 0.5 * tied_risk) / total

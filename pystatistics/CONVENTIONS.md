@@ -704,3 +704,60 @@ on CPU paths) deliberately, in favor of a slim public core plus a best-implement
 reference. Ruling recorded 2026-06-30; capability-first Option B. (SGCX ships as a Docker
 image that bakes CPU-only torch, so managed clients get the fully accelerated build with no
 CUDA bloat — the packaging limitation never touches the product.)
+
+### A8 — Survival risk-set entry: KM `entry=` vs counting-process Cox `start=`
+
+**Question.** Left-truncated Kaplan-Meier needs a delayed-entry time
+(`survfit(Surv(entry, time, event) ~ 1)`); counting-process Cox needs an
+interval per row (`coxph(Surv(start, stop, event) ~ x)`) so a subject can span
+several rows with time-varying covariate values. Is "the time a row enters the
+risk set" one concept (one name, S0) or two?
+
+**Ruling (user, 2026-07-11): two concepts at the API surface, two names.**
+
+- `kaplan_meier(..., entry=)` — a **per-subject delayed-entry time** (left
+  truncation). Rows are subjects; the subject is at risk on `(entry, time]`.
+  Python-ecosystem precedent: statsmodels `PHReg(..., entry=)`, lifelines
+  `KaplanMeierFitter(entry=)` (S6).
+- `coxph(..., start=)` — the **counting-process interval start** per ROW; the
+  row is at risk on `(start, time]`, with `time` (the existing exit parameter)
+  playing R's `stop`. Rows are spells: one subject may occupy many rows with
+  different covariate values. Python precedent: lifelines
+  `CoxTimeVaryingFitter(start_col=)`. Constitutional support: the registry's
+  `offset` entry already steers displacement concepts to `start`/`*_start`.
+  (No `stop=` kwarg exists — `time` already IS the exit name library-wide,
+  and a second spelling for it would violate S0.)
+
+**Disclosure.** Internally the two share one validated `SurvivalDesign.entry`
+field — the estimators only ever see rows carrying a risk interval. The
+concept distinction ruled here lives at the API surface (rows-are-subjects vs
+rows-are-spells), matching how the Python ecosystem itself splits the
+spelling. S0 is satisfied by that recorded distinction; no future surface
+re-decides it.
+
+### A9 — `robust=` on coxph vs `robust=` on the STL/LOESS smoother
+
+**Question.** `coxph(..., robust=True)` requests the Lin-Wei sandwich VARIANCE
+estimator (the point estimate is unchanged). `timeseries`'s STL already uses
+`robust: bool` for LOESS robustness ITERATIONS (outlier downweighting, which
+DOES change the fitted smooth). Two `robust=` bools, two different operations —
+does S0 forbid the reuse?
+
+**Ruling (2026-07-11): both keep `robust=`; the shared meaning is "use the
+outlier/misspecification-robust variant of this procedure."**
+
+S0 binds a name to a *concept*, and "robust" here names one concept at the
+right altitude: *guard the result against departures from the model's
+assumptions*. That the mechanism differs by method (a sandwich variance for a
+regression, downweighting iterations for a smoother) is exactly analogous to
+`method=`/`ties=` taking method-specific values — the concept is shared, the
+realization is local. Both also match their R reference verbatim
+(`coxph(robust=TRUE)`, `stats::loess(family="symmetric")` / STL `robust=TRUE`),
+so a user transferring from R meets no surprise. A more specific spelling
+(`robust_se=`) was considered and rejected: it would make `coxph` the only
+place the robustness concept is not spelled `robust`, a worse S0 outcome.
+
+**Companion — `cluster=`.** The grouped-robust grouping vector is `cluster=`
+(matches `coxph(cluster=)`). Per S0's consequence rule, `cluster` is now
+reserved for "independent-unit grouping for robust variance" library-wide and
+must NOT later be reused for k-means-style cluster assignment without a rename.

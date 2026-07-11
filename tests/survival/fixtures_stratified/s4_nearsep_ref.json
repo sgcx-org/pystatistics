@@ -1,0 +1,12 @@
+{
+  "efron": {
+    "coefficients": 21.941547263916835,
+    "se": 17532.752687720586,
+    "loglik_null": -13.158502424020201,
+    "loglik_model": -7.167037880165338,
+    "iter": 20,
+    "warnings": [
+      "Loglik converged before variable  1 ; coefficient may be infinite. "
+    ]
+  }
+}

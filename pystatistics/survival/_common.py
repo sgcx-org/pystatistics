@@ -72,6 +72,10 @@ class CoxParams:
     converged: bool
     ties: str                    # "efron" or "breslow"
     conf_level: float = 0.95     # confidence level for .conf_int (Wald)
+    n_strata: int = 1            # number of strata (1 = unstratified fit)
+    infinite_coefs: tuple = ()   # indices of coefs flagged as possibly infinite
+    robust: bool = False         # standard_errors are the sandwich estimator
+    naive_standard_errors: Any = None  # model-based SE when robust (else None)
 
 
 @dataclass(frozen=True)

@@ -498,10 +498,12 @@ class TestKaplanMeierValidation:
         with pytest.raises(ValueError, match="at least one"):
             kaplan_meier([], [])
 
-    def test_strata_not_implemented(self):
-        """Stratified KM not yet implemented."""
-        with pytest.raises(NotImplementedError, match="[Ss]tratified"):
-            kaplan_meier(BASIC_TIME, BASIC_EVENT, strata=[1, 1, 1, 2, 2, 2])
+    def test_strata_returns_per_stratum_curves(self):
+        """Stratified KM returns one curve per stratum (numerics validated
+        against R in test_stratified_km.py)."""
+        sol = kaplan_meier(BASIC_TIME, BASIC_EVENT, strata=[1, 1, 1, 2, 2, 2])
+        assert sol.n_strata == 2
+        assert set(sol.strata) == {1, 2}
 
 
 class TestKaplanMeierEdgeCases:

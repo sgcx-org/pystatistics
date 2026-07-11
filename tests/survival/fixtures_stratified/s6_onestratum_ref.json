@@ -1,0 +1,36 @@
+{
+  "efron_strata": {
+    "ties": "efron",
+    "coefficients": 0.1172020411807844,
+    "se": 0.3635214813885568,
+    "loglik_null": -25.047120838764926,
+    "loglik_model": -24.993971408928058,
+    "concordance": 0.5871559633027523,
+    "concordance_counts": {
+      "concordant": 64,
+      "discordant": 45
+    },
+    "n": 20,
+    "nevent": 13,
+    "iter": 3,
+    "z": 0.3224074702080969,
+    "p": 0.7471440257203608
+  },
+  "efron_plain": {
+    "ties": "efron",
+    "coefficients": 0.1172020411807844,
+    "se": 0.3635214813885568,
+    "loglik_null": -25.047120838764926,
+    "loglik_model": -24.993971408928058,
+    "concordance": 0.5871559633027523,
+    "concordance_counts": {
+      "concordant": 64,
+      "discordant": 45
+    },
+    "n": 20,
+    "nevent": 13,
+    "iter": 3,
+    "z": 0.3224074702080969,
+    "p": 0.7471440257203608
+  }
+}

@@ -103,13 +103,29 @@ class KMSolution(SolutionReprMixin):
 
     @property
     def median_survival(self) -> float | None:
-        """Median survival time (smallest t where S(t) <= 0.5)."""
-        if len(self.survival) == 0:
+        """Median survival time, matching R survfit's ``minmin`` convention.
+
+        The median is the smallest ``t`` with ``S(t) <= 0.5``; but when the
+        curve touches exactly 0.5 (a flat step at 0.5), R averages that time
+        with the next time the curve drops strictly below 0.5. Returns None if
+        the curve never reaches 0.5.
+        """
+        import numpy as np
+
+        surv = np.asarray(self.survival)
+        time = np.asarray(self.time)
+        if len(surv) == 0:
             return None
-        idx = self.survival <= 0.5
-        if not idx.any():
+        tol = np.finfo(np.float64).eps ** 0.5
+        keep = surv < 0.5 + tol           # includes S == 0.5 within tolerance
+        if not keep.any():
             return None
-        return float(self.time[idx][0])
+        x = time[keep]
+        y = surv[keep]
+        if abs(y[0] - 0.5) < tol and np.any(y < y[0]):
+            j = int(np.argmax(y < y[0]))  # first point strictly below S(t_first)
+            return float((x[0] + x[j]) / 2.0)
+        return float(x[0])
 
     @property
     def backend_name(self) -> str:
@@ -268,11 +284,15 @@ class CoxSolution(SolutionReprMixin):
     Properties mirror R's coxph() output.
     """
 
-    __slots__ = ('_result', '_names')
+    __slots__ = ('_result', '_names', '_design')
 
-    def __init__(self, _result: Result[CoxParams], _names: tuple[str, ...] | None = None) -> None:
+    def __init__(self, _result: Result[CoxParams], _names: tuple[str, ...] | None = None,
+                 _design=None) -> None:
         self._result = _result
         self._names = _names
+        # The fitted SurvivalDesign, retained for post-fit diagnostics that
+        # need the data (cox_zph). Same pattern as GLMSolution._design.
+        self._design = _design
 
     @property
     def coefficients(self):
@@ -340,6 +360,23 @@ class CoxSolution(SolutionReprMixin):
         return self._result.params.conf_level
 
     @property
+    def n_strata(self) -> int:
+        """Number of strata (1 for an unstratified fit)."""
+        return self._result.params.n_strata
+
+    @property
+    def robust(self) -> bool:
+        """Whether ``standard_errors`` are the sandwich (robust) estimator."""
+        return self._result.params.robust
+
+    @property
+    def naive_standard_errors(self):
+        """Model-based SEs when ``robust`` — else the same as
+        ``standard_errors``."""
+        naive = self._result.params.naive_standard_errors
+        return naive if naive is not None else self.standard_errors
+
+    @property
     def conf_int(self):
         """Wald confidence intervals for the coefficients, shape (p, 2).
 
@@ -379,25 +416,31 @@ class CoxSolution(SolutionReprMixin):
         lines = []
         lines.append("Call: coxph()")
         lines.append("")
+        strata_note = f", {self.n_strata} strata" if self.n_strata > 1 else ""
         lines.append(
             f"  n= {self.n_observations}, "
-            f"number of events= {self.n_events}"
+            f"number of events= {self.n_events}{strata_note}"
         )
         lines.append("")
 
-        # Coefficient table
-        lines.append(
-            f"  {'':{col_w}s}  {'coef':>10s}  {'exp(coef)':>10s}  "
-            f"{'se(coef)':>10s}  {'z':>10s}  {'Pr(>|z|)':>12s}"
-        )
+        # Coefficient table. When robust, show both the model-based se(coef)
+        # and the robust se (as R's summary.coxph does), with z/p from robust.
+        se_label = "robust se" if self.robust else "se(coef)"
+        header = (f"  {'':{col_w}s}  {'coef':>10s}  {'exp(coef)':>10s}  "
+                  f"{'se(coef)':>10s}  ")
+        if self.robust:
+            header += f"{'robust se':>10s}  "
+        header += f"{'z':>10s}  {'Pr(>|z|)':>12s}"
+        lines.append(header)
+        naive_se = self.naive_standard_errors
         for i, name in enumerate(names):
-            lines.append(
-                f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
-                f"{self.hazard_ratios[i]:10.6f}  "
-                f"{self.standard_errors[i]:10.6f}  "
-                f"{self.z_values[i]:10.4f}  "
-                f"{self.p_values[i]:12.4g}"
-            )
+            row = (f"  {name:>{col_w}s}  {self.coefficients[i]:10.6f}  "
+                   f"{self.hazard_ratios[i]:10.6f}  "
+                   f"{naive_se[i]:10.6f}  ")
+            if self.robust:
+                row += f"{self.standard_errors[i]:10.6f}  "
+            row += f"{self.z_values[i]:10.4f}  {self.p_values[i]:12.4g}"
+            lines.append(row)
 
         # HR confidence intervals (like R's summary.coxph), at conf_level.
         ci = np.exp(self.conf_int)                 # hazard-ratio scale

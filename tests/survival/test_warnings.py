@@ -44,10 +44,19 @@ ZERO_EVT_TIME = np.array([3, 5, 7, 1, 2, 4, 6, 8, 9, 10], dtype=np.float64)
 ZERO_EVT_EVENT = np.array([0, 0, 0, 1, 1, 1, 1, 1, 1, 1], dtype=np.float64)
 ZERO_EVT_GROUP = np.array(["A", "A", "A", "B", "B", "B", "B", "B", "B", "B"])
 
-# Simple Cox fixture (single binary covariate).
+# Simple Cox fixture (single binary covariate). The covariate is deliberately
+# NON-separating (alternating 0/1) so the fit is genuinely clean — R's coxph
+# converges in a few iterations with no warning. (An earlier version used a
+# perfectly separating covariate, which R warns on: "coefficient may be
+# infinite"; that is now covered by SEP_X below.)
 COX_TIME = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], dtype=np.float64)
 COX_EVENT = np.array([1, 1, 1, 0, 1, 1, 0, 1, 1, 1], dtype=np.float64)
-COX_X = np.array([[0], [0], [0], [0], [0], [1], [1], [1], [1], [1]],
+COX_X = np.array([[0], [1], [0], [1], [0], [1], [0], [1], [0], [1]],
+                 dtype=np.float64)
+
+# Perfectly separating covariate (low x dies early) — a monotone likelihood.
+# R's coxph warns "coefficient may be infinite" and runs to the iteration cap.
+SEP_X = np.array([[0], [0], [0], [0], [0], [1], [1], [1], [1], [1]],
                  dtype=np.float64)
 
 # Discrete-time fixture (person-period logistic).
@@ -94,6 +103,14 @@ class TestCoxWarnings:
         result = coxph(COX_TIME, COX_EVENT, COX_X, max_iter=1)
         assert not result.converged
         assert any("converge" in w for w in result.warnings)
+
+    def test_separation_warns_like_r(self):
+        # Perfectly separating covariate: R's coxph warns "coefficient may be
+        # infinite" and drives the coefficient to a large magnitude. pystatistics
+        # must match that warning (RIGOR R10), not silently return the value.
+        result = coxph(COX_TIME, COX_EVENT, SEP_X, names=["x"])
+        assert any("infinite" in w for w in result.warnings)
+        assert abs(result.coefficients[0]) > 10.0
 
 
 # ── kaplan_meier / KMSolution ────────────────────────────────────────

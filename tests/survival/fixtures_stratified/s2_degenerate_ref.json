@@ -1,0 +1,36 @@
+{
+  "efron": {
+    "ties": "efron",
+    "coefficients": 0.7058364612823252,
+    "se": 0.5406816990630346,
+    "loglik_null": -16.097664346085796,
+    "loglik_model": -15.200244236754662,
+    "concordance": 0.7446808510638298,
+    "concordance_counts": {
+      "concordant": 35,
+      "discordant": 12
+    },
+    "n": 26,
+    "nevent": 13,
+    "iter": 3,
+    "z": 1.305456542186452,
+    "p": 0.1917374358365896
+  },
+  "breslow": {
+    "ties": "breslow",
+    "coefficients": 0.7058364612823252,
+    "se": 0.5406816990630346,
+    "loglik_null": -16.097664346085796,
+    "loglik_model": -15.200244236754662,
+    "concordance": 0.7446808510638298,
+    "concordance_counts": {
+      "concordant": 35,
+      "discordant": 12
+    },
+    "n": 26,
+    "nevent": 13,
+    "iter": 3,
+    "z": 1.305456542186452,
+    "p": 0.1917374358365896
+  }
+}

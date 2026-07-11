@@ -28,6 +28,7 @@ def kaplan_meier_fit(
     event: NDArray,
     conf_level: float,
     conf_type: str,
+    entry: NDArray | None = None,
 ) -> KMParams:
     """Compute Kaplan-Meier survival curve.
 
@@ -41,6 +42,10 @@ def kaplan_meier_fit(
         Confidence level for CI (e.g. 0.95).
     conf_type : str
         CI type: "log" (default, matches R), "plain", "log-log".
+    entry : NDArray or None
+        (n,) delayed-entry times (left truncation): a subject is at risk on
+        ``(entry, time]``, so ``n_risk(t) = #{entry < t <= time}``. Matches
+        ``survfit(Surv(entry, time, event) ~ 1)``. None = at risk from 0.
 
     Returns
     -------
@@ -81,6 +86,31 @@ def kaplan_meier_fit(
     out_n_risk = np.zeros(m, dtype=np.float64)
     out_n_events = np.zeros(m, dtype=np.float64)
     out_n_censored = np.zeros(m, dtype=np.float64)
+
+    if entry is not None:
+        # Left truncation: n_risk(t) = #{time >= t} - #{entry >= t}
+        #                           = #{entry < t <= time}.
+        entry_sorted = np.sort(entry)
+        ge_time = n_total - np.searchsorted(t_sorted, unique_event_times,
+                                            side="left")
+        ge_entry = n_total - np.searchsorted(entry_sorted, unique_event_times,
+                                             side="left")
+        out_n_risk = (ge_time - ge_entry).astype(np.float64)
+        # Events at each unique event time.
+        death_times = t_sorted[event_mask]
+        np.add.at(out_n_events, np.searchsorted(unique_event_times,
+                                                death_times), 1.0)
+        # Censored strictly between event times, (t_{j-1}, t_j), counted at j —
+        # the same convention as the loop below (a censoring tied exactly to an
+        # event time is absorbed into the risk-set update, not counted here).
+        cens_times = t_sorted[~event_mask]
+        idx = np.searchsorted(unique_event_times, cens_times, side="right")
+        inside = (idx < m) & ~np.isin(cens_times, unique_event_times)
+        np.add.at(out_n_censored, idx[inside], 1.0)
+        return _km_from_counts(
+            out_time, out_n_risk, out_n_events, out_n_censored,
+            conf_level, conf_type, n_total, n_events_total,
+        )
 
     # At each unique event time, compute:
     #   n_risk: number alive (not yet failed or censored) just before time t
@@ -131,6 +161,27 @@ def kaplan_meier_fit(
             remaining_cens += 1
         prev_time_idx += 1
 
+    return _km_from_counts(
+        out_time, out_n_risk, out_n_events, out_n_censored,
+        conf_level, conf_type, n_total, n_events_total,
+    )
+
+
+def _km_from_counts(
+    out_time: NDArray,
+    out_n_risk: NDArray,
+    out_n_events: NDArray,
+    out_n_censored: NDArray,
+    conf_level: float,
+    conf_type: str,
+    n_total: int,
+    n_events_total: int,
+) -> KMParams:
+    """Product-limit curve + Greenwood SE + CI from per-event-time counts.
+
+    Shared tail of the plain and left-truncated estimators — the two differ
+    only in how the risk-set counts are computed.
+    """
     # Product-limit estimate: S(t) = ∏_{j: t_j <= t} (1 - d_j / n_j)
     hazard_component = out_n_events / out_n_risk
     survival = np.cumprod(1.0 - hazard_component)

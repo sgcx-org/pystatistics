@@ -273,11 +273,24 @@ class TestCoxPHValidation:
         with pytest.raises(ValueError, match="ties"):
             coxph(SIMPLE_TIME, SIMPLE_EVENT, SIMPLE_X, ties="invalid")
 
-    def test_strata_not_implemented(self):
-        """Stratified Cox not yet implemented."""
-        with pytest.raises(NotImplementedError, match="[Ss]tratified"):
-            coxph(SIMPLE_TIME, SIMPLE_EVENT, SIMPLE_X,
-                  strata=[1, 1, 1, 1, 1, 2, 2, 2, 2, 2])
+    def test_exact_ties_fails_loud(self):
+        """The exact partial-likelihood tie method is a documented capability
+        carve-out (CONVENTIONS "Capability scope"): Efron + Breslow cover
+        practice, exact is rare and costly, so it is refused loudly rather than
+        approximated or silently substituted."""
+        with pytest.raises(ValueError, match="ties"):
+            coxph(SIMPLE_TIME, SIMPLE_EVENT, SIMPLE_X, ties="exact")
+
+    def test_strata_runs_and_reports_n_strata(self):
+        """Stratified Cox fits and reports the stratum count (see
+        test_stratified.py for the R-validated numerics)."""
+        # Covariate varies within each stratum so the coefficient is identified.
+        x = np.array([[0], [1], [0], [1], [0], [1], [0], [1], [0], [1]],
+                     dtype=np.float64)
+        result = coxph(SIMPLE_TIME, SIMPLE_EVENT, x,
+                       strata=[1, 1, 1, 1, 1, 2, 2, 2, 2, 2])
+        assert result.n_strata == 2
+        assert result.coefficients.shape == (1,)
 
     def test_negative_time_rejected(self):
         """Negative times rejected."""

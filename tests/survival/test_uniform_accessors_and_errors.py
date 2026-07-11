@@ -2,9 +2,10 @@
 
 C2 — KMSolution exposes the constitutional `.standard_errors` and `.conf_int`
 alongside the legacy `.se` / `.ci_lower` / `.ci_upper`.
-C3 — unimplemented features (stratified KM / Cox) raise
-NotImplementedFeatureError, which is both a PyStatisticsError (uniform catch)
-and a builtin NotImplementedError (backward-compatible catch).
+C3 — the NotImplementedFeatureError type is both a PyStatisticsError (uniform
+catch) and a builtin NotImplementedError (backward-compatible catch). Stratified
+KM/Cox are now implemented, so this is exercised via the `exact` tie method,
+which remains a documented fail-loud carve-out.
 """
 
 import numpy as np
@@ -39,20 +40,29 @@ def test_km_conf_int_stacks_bounds():
 
 # --- C3: not-implemented feature exception ------------------------------------
 
-def test_stratified_km_raises_feature_error():
-    with pytest.raises(NotImplementedFeatureError):
-        kaplan_meier(_TIME, _EVENT, strata=_GROUP)
+def test_stratified_km_fits():
+    # Stratified KM is implemented; returns one curve per stratum (numerics
+    # validated against R in test_stratified_km.py).
+    sol = kaplan_meier(_TIME, _EVENT, strata=_GROUP)
+    assert sol.n_strata == 2
+    assert set(sol.strata) == {0, 1}
 
 
-def test_stratified_cox_raises_feature_error():
-    with pytest.raises(NotImplementedFeatureError):
-        coxph(_TIME, _EVENT, _X, strata=_GROUP)
+def test_stratified_cox_fits():
+    # Stratified Cox is implemented; fit on a within-stratum-varying covariate
+    # (numerics validated against R in test_stratified.py).
+    x = np.linspace(-1, 1, 14).reshape(-1, 1)
+    sol = coxph(_TIME, _EVENT, x, strata=_GROUP)
+    assert sol.n_strata == 2
+    assert sol.coefficients.shape == (1,)
 
 
 def test_feature_error_catchable_both_ways():
-    # As a library error (uniform catch) ...
+    # NotImplementedFeatureError is the library's fail-loud type for a feature
+    # that is deliberately not implemented. It must be catchable both as a
+    # library error (uniform catch) and as the builtin (backward compatible),
+    # independent of which specific features currently use it.
     with pytest.raises(PyStatisticsError):
-        kaplan_meier(_TIME, _EVENT, strata=_GROUP)
-    # ... and as the builtin (backward-compatible catch).
+        raise NotImplementedFeatureError("demo")
     with pytest.raises(NotImplementedError):
-        kaplan_meier(_TIME, _EVENT, strata=_GROUP)
+        raise NotImplementedFeatureError("demo")
