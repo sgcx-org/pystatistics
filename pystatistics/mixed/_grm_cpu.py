@@ -48,17 +48,17 @@ class GRMFit:
     n_iter: int
 
 
-def grm_solve_cpu(theta: float, W: NDArray, X: NDArray, y: NDArray,
-                  reml: bool) -> dict:
+def grm_solve_cpu(theta: float, random_factor: NDArray, X: NDArray,
+                  y: NDArray, reml: bool) -> dict:
     """Solve the profiled GRM system at a fixed θ (CPU float64).
 
     Returns a dict with beta, u, sigma_e2, pwrss, logdet_G, RX, genetic_values,
     fitted, residuals. Raises NumericalError if a Cholesky fails.
     """
-    n, M = W.shape
+    n, M = random_factor.shape
     p = X.shape[1]
     c = theta / np.sqrt(M)
-    ZL = c * W                                     # (n, M)
+    ZL = c * random_factor                         # (n, M)
 
     G = ZL.T @ ZL + np.eye(M)                       # (M, M) dense Gram
     try:
@@ -103,12 +103,12 @@ def grm_solve_cpu(theta: float, W: NDArray, X: NDArray, y: NDArray,
     }
 
 
-def grm_deviance_cpu(theta: float, W: NDArray, X: NDArray, y: NDArray,
-                     reml: bool) -> float:
+def grm_deviance_cpu(theta: float, random_factor: NDArray, X: NDArray,
+                     y: NDArray, reml: bool) -> float:
     """Profiled REML/ML deviance at θ (the 1-D objective to minimize)."""
-    n, M = W.shape
+    n, M = random_factor.shape
     p = X.shape[1]
-    s = grm_solve_cpu(theta, W, X, y, reml)
+    s = grm_solve_cpu(theta, random_factor, X, y, reml)
     log_det_RX = 2.0 * float(np.sum(np.log(np.maximum(np.abs(np.diag(s["RX"])), 1e-300))))
     if reml:
         df = n - p
@@ -117,7 +117,7 @@ def grm_deviance_cpu(theta: float, W: NDArray, X: NDArray, y: NDArray,
     return float(s["logdet_G"] + n * (1.0 + np.log(2.0 * np.pi * s["pwrss"] / n)))
 
 
-def grm_fit_cpu(W: NDArray, X: NDArray, y: NDArray, *, reml: bool,
+def grm_fit_cpu(random_factor: NDArray, X: NDArray, y: NDArray, *, reml: bool,
                 tol: float, max_iter: int, theta_max: float = 1.0e3) -> GRMFit:
     """Fit the GRM model on the CPU by minimizing the profiled deviance over θ.
 
@@ -125,7 +125,7 @@ def grm_fit_cpu(W: NDArray, X: NDArray, y: NDArray, *, reml: bool,
     [0, theta_max] locates the REML/ML optimum.
     """
     res = minimize_scalar(
-        grm_deviance_cpu, args=(W, X, y, reml),
+        grm_deviance_cpu, args=(random_factor, X, y, reml),
         bounds=(0.0, theta_max), method="bounded",
         options={"xatol": tol, "maxiter": max_iter},
     )
@@ -133,7 +133,7 @@ def grm_fit_cpu(W: NDArray, X: NDArray, y: NDArray, *, reml: bool,
     converged = bool(res.success)
     n_iter = int(getattr(res, "nfev", 0))
 
-    s = grm_solve_cpu(theta_hat, W, X, y, reml)
+    s = grm_solve_cpu(theta_hat, random_factor, X, y, reml)
     return GRMFit(
         theta=theta_hat, beta=s["beta"], u=s["u"], sigma_e2=s["sigma_e2"],
         pwrss=s["pwrss"], logdet_G=s["logdet_G"], RX=s["RX"],

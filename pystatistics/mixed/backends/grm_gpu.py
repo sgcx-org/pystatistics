@@ -57,9 +57,9 @@ from pystatistics.mixed._grm_cpu import GRMFit
 _MIN_EIG_RATIO_FP32 = 1.0e-7
 
 
-def _gram_condition_ratio(W: NDArray) -> float:
+def _gram_condition_ratio(random_factor: NDArray) -> float:
     """λ_min/λ_max of W'W, computed on the host in float64 (the CF-1 gate)."""
-    G = W.T @ W
+    G = random_factor.T @ random_factor
     eig = np.linalg.eigvalsh(G)            # ascending, symmetric
     max_eig = float(eig[-1])
     min_eig = float(eig[0])
@@ -68,17 +68,18 @@ def _gram_condition_ratio(W: NDArray) -> float:
     return max(min_eig, 0.0) / max_eig
 
 
-def _check_cf1_gate(W: NDArray, use_fp64: bool, force: bool) -> None:
+def _check_cf1_gate(random_factor: NDArray, use_fp64: bool,
+                    force: bool) -> None:
     """Refuse a float32 GRM fit whose W'W is past the float32-safe boundary."""
     if use_fp64 or force:
         return
-    ratio = _gram_condition_ratio(W)
+    ratio = _gram_condition_ratio(random_factor)
     if ratio < _MIN_EIG_RATIO_FP32:
-        cond_W = float(np.sqrt(1.0 / ratio)) if ratio > 0 else float("inf")
+        cond_rf = float(np.sqrt(1.0 / ratio)) if ratio > 0 else float("inf")
         raise NumericalError(
-            f"GRM GPU float32 path: the low-rank factor W is too "
-            f"ill-conditioned for single precision (estimated cond(W) ≈ "
-            f"{cond_W:.2e}; λ_min/λ_max of W'W = {ratio:.2e} vs. required "
+            f"GRM GPU float32 path: the low-rank factor random_factor (W) is "
+            f"too ill-conditioned for single precision (estimated cond(W) ≈ "
+            f"{cond_rf:.2e}; λ_min/λ_max of W'W = {ratio:.2e} vs. required "
             f"> {_MIN_EIG_RATIO_FP32:.0e}). Forming W'W in float32 would lose "
             f"its trailing eigenvalues and bias the variance components. "
             f"Options: backend='gpu_fp64' (CUDA, exact), backend='cpu' "
@@ -145,7 +146,7 @@ def _deviance_torch(theta, Wt, Xt, yt, reml, eye_M) -> float:
 
 
 def grm_fit_gpu(
-    W: NDArray, X: NDArray, y: NDArray, *,
+    random_factor: NDArray, X: NDArray, y: NDArray, *,
     reml: bool, tol: float, max_iter: int,
     device_type: str, use_fp64: bool, force: bool,
     theta_max: float = 1.0e3,
@@ -153,7 +154,7 @@ def grm_fit_gpu(
     """Fit the GRM model on a GPU device, mirroring the CPU reference.
 
     Args:
-        W, X, y: numpy float64 arrays (validated upstream).
+        random_factor, X, y: numpy float64 arrays (validated upstream).
         reml: REML or ML.
         tol, max_iter: optimizer settings for the 1-D θ search.
         device_type: 'cuda' or 'mps'.
@@ -164,11 +165,11 @@ def grm_fit_gpu(
 
     # CF-1 gate (host float64) before any device work — refuse a float32 fit
     # whose W is past the safe boundary.
-    _check_cf1_gate(W, use_fp64, force)
+    _check_cf1_gate(random_factor, use_fp64, force)
 
     device = torch.device(device_type)
     dtype = torch.float64 if use_fp64 else torch.float32
-    Wt = torch.as_tensor(W, device=device, dtype=dtype)
+    Wt = torch.as_tensor(random_factor, device=device, dtype=dtype)
     Xt = torch.as_tensor(X, device=device, dtype=dtype)
     yt = torch.as_tensor(y, device=device, dtype=dtype)
     M = Wt.shape[1]

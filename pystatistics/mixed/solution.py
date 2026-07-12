@@ -69,6 +69,11 @@ class LMMSolution(SolutionReprMixin):
         return dict(zip(self.params.coefficient_names, self.params.coefficients))
 
     @property
+    def coef(self) -> dict[str, float]:
+        """Fixed effects as name → value dict (alias of ``fixef``)."""
+        return dict(zip(self.params.coefficient_names, self.params.coefficients))
+
+    @property
     def standard_errors(self) -> NDArray:
         """Standard errors of fixed effects."""
         return self.params.se
@@ -180,6 +185,18 @@ class LMMSolution(SolutionReprMixin):
         not an error.
         """
         return self.params.is_singular
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def timing(self):
+        return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     # --- Model comparison ---
 
@@ -342,6 +359,11 @@ class GLMMSolution(SolutionReprMixin):
         return dict(zip(self.params.coefficient_names, self.params.coefficients))
 
     @property
+    def coef(self) -> dict[str, float]:
+        """Fixed effects as name → value dict (alias of ``fixef``)."""
+        return dict(zip(self.params.coefficient_names, self.params.coefficients))
+
+    @property
     def standard_errors(self) -> NDArray:
         return self.params.se
 
@@ -462,6 +484,18 @@ class GLMMSolution(SolutionReprMixin):
     @property
     def n_iter(self) -> int:
         return self.params.n_iter
+
+    @property
+    def backend_name(self) -> str:
+        return self._result.backend_name
+
+    @property
+    def timing(self):
+        return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
 
     # --- Summary ---
 

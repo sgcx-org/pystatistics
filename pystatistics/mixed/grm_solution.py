@@ -180,6 +180,14 @@ class GRMSolution(SolutionReprMixin):
     def backend_name(self) -> str:
         return self._result.backend_name
 
+    @property
+    def timing(self):
+        return self._result.timing
+
+    @property
+    def warnings(self) -> tuple[str, ...]:
+        return self._result.warnings
+
     # --- Display ---
 
     def summary(self) -> str:

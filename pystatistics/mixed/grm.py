@@ -38,7 +38,7 @@ from pystatistics.mixed.grm_solution import GRMParams, GRMSolution
 def grm_lmm(
     y: ArrayLike,
     X: ArrayLike,
-    W: ArrayLike,
+    random_factor: ArrayLike,
     *,
     backend: str | None = None,
     reml: bool = True,
@@ -53,8 +53,8 @@ def grm_lmm(
     Args:
         y: Response vector (n,).
         X: Fixed-effects design (n, p) — include an intercept column if wanted.
-        W: Low-rank factor (n, M) defining K = WW'/M (e.g. a standardized
-            genotype matrix). M is the rank.
+        random_factor: Low-rank factor W (n, M) defining K = WW'/M (e.g. a
+            standardized genotype matrix). M is the rank.
         backend: Compute backend — ``'cpu'`` (float64 reference), ``'gpu'``
             (float32 speed path), ``'gpu_fp64'`` (CUDA-only exact), or
             ``'auto'``. ``None`` resolves to ``'cpu'`` for a numpy input.
@@ -84,20 +84,21 @@ def grm_lmm(
 
     y_arr = np.ascontiguousarray(np.asarray(y, dtype=np.float64)).ravel()
     X_arr = np.ascontiguousarray(np.asarray(X, dtype=np.float64))
-    W_arr = np.ascontiguousarray(np.asarray(W, dtype=np.float64))
+    rf_arr = np.ascontiguousarray(np.asarray(random_factor, dtype=np.float64))
     if X_arr.ndim != 2:
         raise ValidationError(f"X must be 2-D (n, p), got shape {X_arr.shape}")
-    if W_arr.ndim != 2:
-        raise ValidationError(f"W must be 2-D (n, M), got shape {W_arr.shape}")
-    n, p = X_arr.shape
-    if y_arr.shape[0] != n or W_arr.shape[0] != n:
+    if rf_arr.ndim != 2:
         raise ValidationError(
-            f"y ({y_arr.shape[0]}), X ({n}), and W ({W_arr.shape[0]}) must "
-            f"share the same number of rows.")
+            f"random_factor must be 2-D (n, M), got shape {rf_arr.shape}")
+    n, p = X_arr.shape
+    if y_arr.shape[0] != n or rf_arr.shape[0] != n:
+        raise ValidationError(
+            f"y ({y_arr.shape[0]}), X ({n}), and random_factor "
+            f"({rf_arr.shape[0]}) must share the same number of rows.")
     check_finite(y_arr, "y")
     check_finite(X_arr, "X")
-    check_finite(W_arr, "W")
-    M = W_arr.shape[1]
+    check_finite(rf_arr, "random_factor")
+    M = rf_arr.shape[1]
 
     target = resolve_backend(backend, supports_fp64=True)
 
@@ -105,13 +106,13 @@ def grm_lmm(
     timer.start()
     with timer.section("fit"):
         if target.device_type == "cpu":
-            fit = grm_fit_cpu(W_arr, X_arr, y_arr, reml=reml, tol=tol,
+            fit = grm_fit_cpu(rf_arr, X_arr, y_arr, reml=reml, tol=tol,
                               max_iter=max_iter)
             backend_label = "grm_cpu"
         else:
             from pystatistics.mixed.backends.grm_gpu import grm_fit_gpu
             fit = grm_fit_gpu(
-                W_arr, X_arr, y_arr, reml=reml, tol=tol, max_iter=max_iter,
+                rf_arr, X_arr, y_arr, reml=reml, tol=tol, max_iter=max_iter,
                 device_type=target.device_type, use_fp64=target.use_fp64,
                 force=force,
             )
