@@ -435,6 +435,60 @@ These are breaking interface changes. They ship together as **4.0**, the
 consistency release. No deprecation shim — the old names/flags are removed.
 Statistical results are unchanged.
 
+## 5.0 migration table (old → new → reason)
+
+The single pre-launch consistency sweep (see the versioning policy below). Like
+4.0: hard renames, no shims, statistical results unchanged.
+
+| Old | Module | → 5.0 | Reason |
+|---|---|---|---|
+| `p` (expected proportions) | chisq_test | `expected_probs` | S0/S1: bare `p` named three concepts. |
+| `rescale_p` | chisq_test | `rescale_probs` | follows `expected_probs`. |
+| `B` | chisq_test, fisher_test | `n_resamples` | S1 + reserved `n_<thing>`. |
+| `p` (null proportion) | prop_test | `null_value` | S0/S1 + A2 (generic null). |
+| `n` | prop_test | `n_trials` | S1: no single-letter params. |
+| `p` (p-value vector) | p_adjust | `p_values` | S0/S1. |
+| `n` | p_adjust | `n_comparisons` | S1. |
+| `ratio` | var_test | `null_value` | A2: generic null (variance ratio). |
+| `dfcom` | pool | `df_complete` | S1: de-abbreviate. |
+| `alpha` (0.05) | pool | `conf_level` (0.95) | S0 + reserved confidence-level name. |
+| `i` | MICESolution.completed | `index` | S1. |
+| `.se` | PooledSolution, GAMSolution | `.standard_errors` | uniform accessor. |
+| `.ci_low` / `.ci_high` | PooledSolution | `.ci_lower` / `.ci_upper` (+ `.conf_int`) | uniform accessor. |
+| `.R` | Bootstrap/PermutationSolution | `.n_resamples` | S1 accessor leftover (param already migrated in 4.0). |
+| `.se` / `.ci` / `.sim` / `.ci_conf_level` | BootstrapSolution | `.standard_errors` / `.conf_int` / `.method` / `.conf_level` | uniform accessors. |
+| values `perc` / `stud` | boot_ci `ci_type` | `percentile` / `studentized` | A1: descriptive option values. |
+| `anova` | regression | `deviance_table` | S0: collided with the `anova` module. |
+| `AnovaTable` | regression | `DevianceTable` | follows the function rename. |
+| values `Chisq` / `LRT` / `F` | deviance_table `test=` | `chisq` / `lrt` / `f` | A1: lowercase option values. |
+| values `negative.binomial` / `inverse.gaussian` | regression `family=` | `negative-binomial` / `inverse-gaussian` | S2/A1 (value + emitted `.family_name`). |
+| `GammaFamily` / `.family_name='Gamma'` | regression | `Gamma` / `'gamma'` | S0 consistency with sibling families. |
+| value `1/mu^2` | regression `link=` | `inverse-squared` | A1: descriptive option value. |
+| `lam` | ridge | `l2` | S4: reserved L2-penalty name. |
+| values `gg` / `hf` | anova_rm `correction=` | `greenhouse-geisser` / `huynh-feldt` | A1: descriptive option values. |
+| `type` | decompose | `kind` | S3: shadows a builtin. |
+| `.type` | ACF/DecompositionSolution | `.kind` | S3. |
+| `h` | forecast_ets, forecast_arima | `n_ahead` | S1. |
+| `alpha` (significance) | ndiffs | `significance_level` | S0: collided with the ETS smoothing `alpha`. |
+| `allowdrift` | auto_arima | `allow_drift` | S1: snake_case. |
+| `newxreg` | arima, forecast_arima | `new_xreg` | S1: snake_case. |
+| values `CSS-ML`/`ML`/`CSS`/`Whittle` | arima, auto_arima `method=` | `css-ml`/`ml`/`css`/`whittle` | A1: lowercase option values. |
+| `levels` (whole percents) | forecast_ets, forecast_arima | `conf_level` (fractions) | S0 + reserved confidence-level name. |
+| `backend='cpu-reference'` | mvnmle | `solver='reference'` | scheduled removal; `backend` ≠ a `solver` choice. |
+| bare `RuntimeError` | little_mcar_test | `ConvergenceError` / `NumericalError` | A4: error taxonomy. |
+| `SmoothInfo.lambda_` / `.s_scale` | gam | `.lambdas` / `.s_scales` | scheduled removal (per-margin tuples). |
+| `W` | grm_lmm | `random_factor` | S1: no single-letter matrix param. |
+| `type` | ordinal/multinomial `predict()` | `kind` | S3: shadows a builtin. |
+| value `logistic` | ordinal `link=` | `logit` | S0: one spelling for the logit link (A13). |
+| `…Params` exports | 7 modules | removed from public API | internal payloads; the public surface is `…Solution` (A12). |
+| bare `TypeError`/`ValueError`/`NotImplementedError` | regression, core, ordinal, mvnmle | `ValidationError`/`DimensionError`/`NotImplementedFeatureError` | A4: `core.exceptions` on public paths. |
+
+Additive (non-breaking) companions shipped in the same cut: uniform envelope
+accessors (`.backend_name`/`.timing`/`.warnings`) on the mixed/multinomial
+Solutions; `.coef` on LMM/GLMM; `.category_names` on OrdinalSolution;
+`.coefficients` alias on MultinomialSolution; `.coef`/`.conf_int` on GAMSolution;
+`boot_ci` now fails loud on a multi-level `conf_level`.
+
 ### Versioning policy — what a major means, and when the next one happens
 
 A **major** version means exactly one thing: **a breaking change to the public
@@ -442,15 +496,16 @@ API**. Size is irrelevant — semver majors are cheap, not ceremonial. Do not tr
 "major" as "big coordinated event"; that framing is what lets deprecations rot and
 breaking debt pile up until a mega-release (the pain 4.0 was paying down).
 
-**The next major is `5.0` — the pre-launch consistency sweep.** It is cut **once
-`pystatistics` is feature-complete and about to launch publicly**, not for any
-single deprecation. Rationale: breaking changes are *free* before there are real
-users and downstream consumers pinning us, and expensive forever after — so the one
-deliberate, comprehensive break happens at the last free moment. Everything in the
-ROADMAP "Deprecations & scheduled removals" table (currently
-`backend='cpu-reference'`) is removed then, along with any other v1-regret API
-smells a final consistency pass surfaces. Keep *hunting* for those and parking them
-in that table so 5.0 is one clean cut, not the first of several.
+**`5.0` is the pre-launch consistency sweep** — cut **once `pystatistics` is
+feature-complete and about to launch publicly**, not for any single deprecation.
+Rationale: breaking changes are *free* before there are real users and downstream
+consumers pinning us, and expensive forever after — so the one deliberate,
+comprehensive break happens at the last free moment. The 5.0 cut cleared every
+scheduled removal in the ROADMAP "Deprecations & scheduled removals" table and
+applied the v1-regret renames an in-depth consistency pass surfaced; the complete
+list is the **5.0 migration table above**. After 5.0, any new deprecation is
+parked in that ROADMAP table with its removal version so "deprecated" never
+silently becomes "eternal".
 
 **Sequencing (locked, 2026-07-08):** `pystatistics` is finished *completely* — the
 whole-library close-out plus the 5.0 pre-launch sweep — **before** any downstream
@@ -761,3 +816,68 @@ place the robustness concept is not spelled `robust`, a worse S0 outcome.
 (matches `coxph(cluster=)`). Per S0's consequence rule, `cluster` is now
 reserved for "independent-unit grouping for robust variance" library-wide and
 must NOT later be reused for k-means-style cluster assignment without a rename.
+
+### A10 — whole-data matrix `data=` vs regression design `X=`
+
+**Question.** mvnmle (`mlest`) and mice take `data` / `data_or_design`; the
+regression-family modules take `X` (design matrix) and `y` (response). Is "the
+input matrix" one concept (one name, S0) or two?
+
+**Ruling (2026-07-12): two concepts, two names.** A full data matrix carrying
+missingness — the input to MVN MLE or multiple imputation — has no
+response/predictor split; the estimator consumes the entire matrix. That is a
+genuinely different concept from a regression *design* matrix `X` paired with a
+response `y`. So `data` (mvnmle, mice) and `X`/`y` (regression, GLM, ordinal,
+multinomial, mixed, gam) name different things and S0 is satisfied by keeping
+both. Python-ecosystem precedent agrees (statsmodels/lifelines take `data` for
+whole-frame estimators, `exog`/`X` for design matrices). No rename.
+
+### A11 — single-letter `k` for the smooth basis dimension (mgcv exemption)
+
+`gam`'s `s()`, `te()`, `ti()` take `k` (the basis dimension). S1 bans
+single-letter public parameters, but `k` is a **documented exemption**, joining
+the `x`/`y`/`X` carve-out: it is the entrenched mgcv name that every smoother
+user already knows (`s(x, k=10)`), it is unambiguous in context, and renaming it
+to `basis_dim` would alienate the reference audience for no semantic gain. The
+exemption is specific to the smooth-basis dimension; it does not license
+single-letter params elsewhere.
+
+### A12 — internal `…Params` payloads are not public API
+
+Every public fit returns a `…Solution` (the result surface). The frozen
+backend-payload dataclass it wraps (`LinearParams`, `GLMParams`, `MVNParams`,
+`HTestParams`, …) is **implementation detail**: it is NOT part of the public
+API — not in any module's `__all__`, not re-exported from the package namespace.
+It remains importable from its private submodule (e.g.
+`pystatistics.regression._glm.GLMParams`) for backend authors. (Resolved in 5.0:
+seven modules had leaked their `…Params` into the public surface while seven kept
+them private; the leak was removed.)
+
+### A13 — one spelling for the logit link: `'logit'`
+
+The logit link value is `'logit'` everywhere it is selectable (regression/GLM,
+gam, ordinal, multinomial). S0 binds the one concept — the logit transform
+`g(mu)=log(mu/(1-mu))` — to one spelling. ordinal's former `'logistic'` value is
+renamed to `'logit'` (resolved in 5.0). Rationale beyond S0: `'logistic'` names a
+distribution/family, not the link transform, so it was also mildly misleading.
+
+### A14 — reference-package vocabulary exemptions
+
+A small, closed set of identifiers keep their entrenched reference-package
+spelling as **documented exemptions** to S1/A1, because each one *is* the
+canonical vocabulary a user of that reference already knows, is unambiguous in
+context, and matches the reference verbatim — so the reference spelling is
+clearer than a "corrected" one:
+
+- **mice mipo diagnostics** — `PooledSolution.riv`, `.lambda_`, `.fmi`, `.df`
+  (the `mice::mipo` column names: relative increase in variance, fraction of
+  missing information, degrees of freedom).
+- **ETS component codes** — `'A'`/`'M'`/`'N'`/`'Z'` and `model='ZZZ'` (the
+  `forecast::ets` error/trend/seasonal taxonomy).
+- **montecarlo bootstrap-object accessors** — `BootstrapSolution.t` / `.t0` (the
+  R `boot` object's observed statistic and replicate matrix).
+- **the `'nb'` family shorthand** — the mgcv-familiar alias for
+  `negative-binomial`.
+
+This list is exhaustive; a new single-letter or abbreviated public identifier
+that is not on it is an S1/A1 violation to fix, not an exemption to assume.
