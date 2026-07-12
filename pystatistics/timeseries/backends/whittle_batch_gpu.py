@@ -22,7 +22,7 @@ check freezes series that have converged so Adam doesn't keep
 wiggling them.
 
 Two-tier validation: against the single-series Whittle path (the
-``method='Whittle'`` in ``arima()``), which itself is validated
+``method='whittle'`` in ``arima()``), which itself is validated
 against exact time-domain ML. GPU FP32 matches CPU Whittle at the
 ``GPU_FP32`` tier on σ² and log-likelihood.
 """

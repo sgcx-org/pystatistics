@@ -72,7 +72,7 @@ def fits(ref):
         x = np.asarray(ref["series"][series_key], dtype=np.float64)
         seasonal = tuple(m["seasonal"]) if m.get("seasonal") else None
         fit = arima(x, order=tuple(m["order"]), seasonal=seasonal,
-                    method="CSS-ML")
+                    method="css-ml")
         out[label] = (fit, m, x)
     return out
 
@@ -170,7 +170,7 @@ class TestForecastRParity:
     @pytest.mark.parametrize("label", FORECAST_LABELS)
     def test_mean_matches_r(self, fits, label):
         fit, m, x = fits[label]
-        fc = forecast_arima(fit, x, h=12)
+        fc = forecast_arima(fit, x, n_ahead=12)
         # Scale tolerance to the series (log-scale models are ~5.5).
         scale = max(1.0, float(np.mean(np.abs(x))) / 450.0)
         assert_allclose(
@@ -180,7 +180,7 @@ class TestForecastRParity:
     @pytest.mark.parametrize("label", FORECAST_LABELS)
     def test_se_matches_r(self, fits, label):
         fit, m, x = fits[label]
-        fc = forecast_arima(fit, x, h=12)
+        fc = forecast_arima(fit, x, n_ahead=12)
         # Relative: guards both the flat-se defect (rw: 3.5x off at
         # h=12) and the sigma2 defect (1.4% off).
         assert_allclose(
@@ -216,13 +216,13 @@ class TestForecastRParity:
     def test_random_walk_se_is_analytic(self, fits):
         # (0,1,0): se(h) = sigma * sqrt(h) exactly.
         fit, _, x = fits["ns010"]
-        fc = forecast_arima(fit, x, h=8)
+        fc = forecast_arima(fit, x, n_ahead=8)
         expected = np.sqrt(fit.sigma2 * np.arange(1, 9))
         assert_allclose(fc.se, expected, rtol=1e-10)
 
     def test_se_increases_for_integrated_models(self, fits):
         fit, _, x = fits["ns211"]
-        fc = forecast_arima(fit, x, h=12)
+        fc = forecast_arima(fit, x, n_ahead=12)
         assert np.all(np.diff(fc.se) > 0)
 
 
@@ -492,7 +492,7 @@ class TestKalmanResiduals:
         )
 
         _, _, x = fits["ns211"]
-        fit = arima(x, order=(2, 1, 1), method="CSS")
+        fit = arima(x, order=(2, 1, 1), method="css")
         from pystatistics.timeseries._differencing import diff
 
         y_diff = diff(x, differences=1, lag=1)
@@ -569,7 +569,7 @@ class TestInitParameter:
 
         x = np.asarray(ref["series"]["airpassengers"], dtype=np.float64)
         with pytest.raises(ValidationError):
-            arima(x, order=(1, 1, 0), method="Whittle", init=[0.5])
+            arima(x, order=(1, 1, 0), method="whittle", init=[0.5])
 
 
 # =========================================================================

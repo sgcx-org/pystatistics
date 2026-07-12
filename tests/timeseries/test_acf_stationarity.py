@@ -133,7 +133,7 @@ class TestACF:
     def test_type_is_correlation(self, white_noise):
         """Result type should be 'correlation'."""
         result = acf(white_noise)
-        assert result.type == "correlation"
+        assert result.kind == "correlation"
 
     def test_result_is_acfresult(self, white_noise):
         """Return type should be ACFSolution."""
@@ -235,7 +235,7 @@ class TestPACF:
     def test_type_is_partial(self, white_noise):
         """Result type should be 'partial'."""
         result = pacf(white_noise)
-        assert result.type == "partial"
+        assert result.kind == "partial"
 
     def test_summary_runs(self, white_noise):
         """summary() should return a non-empty string."""

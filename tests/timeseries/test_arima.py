@@ -256,9 +256,9 @@ class TestARIMAForecast:
     def test_ar1_forecast_decays_toward_mean(self, ar1_series):
         """AR(1) forecast should decay toward the mean."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=50)
+        fc = forecast_arima(result, ar1_series, n_ahead=50)
         assert isinstance(fc, ARIMAForecast)
-        assert fc.h == 50
+        assert fc.n_ahead == 50
         # Forecasts should converge toward the series mean
         series_mean = np.mean(ar1_series)
         # Last forecasts should be closer to mean than first
@@ -269,7 +269,7 @@ class TestARIMAForecast:
     def test_random_walk_forecast_is_flat(self, random_walk):
         """Random walk ARIMA(0,1,0) forecast is flat at the last value."""
         result = arima(random_walk, order=(0, 1, 0))
-        fc = forecast_arima(result, random_walk, h=10)
+        fc = forecast_arima(result, random_walk, n_ahead=10)
         last_val = random_walk[-1]
         assert_allclose(fc.mean, last_val, atol=0.5)
 
@@ -277,17 +277,17 @@ class TestARIMAForecast:
         """ARIMA(0,1,1) forecast: first step may differ from subsequent."""
         y = np.cumsum(rng.normal(0, 1.0, 200))
         result = arima(y, order=(0, 1, 1))
-        fc = forecast_arima(result, y, h=5)
+        fc = forecast_arima(result, y, n_ahead=5)
         # After the first step, forecasts should be nearly identical
         # (MA effect dies out after step 1 on the differenced scale)
-        if fc.h >= 3:
+        if fc.n_ahead >= 3:
             diff_23 = abs(fc.mean[2] - fc.mean[1])
             assert diff_23 < 0.1  # nearly flat after step 1
 
     def test_pi_widen_with_horizon(self, ar1_series):
         """Prediction intervals widen with forecast horizon."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=20)
+        fc = forecast_arima(result, ar1_series, n_ahead=20)
         # Standard errors should be non-decreasing
         for i in range(1, len(fc.se)):
             assert fc.se[i] >= fc.se[i - 1] - 1e-10
@@ -295,23 +295,23 @@ class TestARIMAForecast:
     def test_pi_ordering(self, ar1_series):
         """Lower < mean < upper for all horizons."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=10, levels=[80, 95])
-        for lv in [80, 95]:
+        fc = forecast_arima(result, ar1_series, n_ahead=10, conf_level=[0.80, 0.95])
+        for lv in [0.80, 0.95]:
             assert np.all(fc.lower[lv] < fc.mean)
             assert np.all(fc.mean < fc.upper[lv])
 
     def test_95_wider_than_80(self, ar1_series):
         """95% PI is wider than 80% PI."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=10, levels=[80, 95])
-        width_80 = fc.upper[80] - fc.lower[80]
-        width_95 = fc.upper[95] - fc.lower[95]
+        fc = forecast_arima(result, ar1_series, n_ahead=10, conf_level=[0.80, 0.95])
+        width_80 = fc.upper[0.80] - fc.lower[0.80]
+        width_95 = fc.upper[0.95] - fc.lower[0.95]
         assert np.all(width_95 > width_80)
 
     def test_forecast_on_original_scale(self, random_walk):
         """Forecasts are on the original (un-differenced) scale."""
         result = arima(random_walk, order=(0, 1, 0))
-        fc = forecast_arima(result, random_walk, h=5)
+        fc = forecast_arima(result, random_walk, n_ahead=5)
         # Forecasts should be in the same range as the original series
         y_range = np.max(random_walk) - np.min(random_walk)
         for val in fc.mean:
@@ -320,15 +320,15 @@ class TestARIMAForecast:
     def test_h1_forecast_close_to_one_step(self, ar1_series):
         """h=1 forecast should be close to one-step-ahead prediction."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=1)
-        assert fc.h == 1
+        fc = forecast_arima(result, ar1_series, n_ahead=1)
+        assert fc.n_ahead == 1
         assert len(fc.mean) == 1
         assert np.isfinite(fc.mean[0])
 
     def test_forecast_summary(self, ar1_series):
         """summary() returns a non-empty string."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=3)
+        fc = forecast_arima(result, ar1_series, n_ahead=3)
         s = fc.summary()
         assert isinstance(s, str)
         assert "Forecast" in s
@@ -337,16 +337,16 @@ class TestARIMAForecast:
     def test_forecast_result_is_frozen(self, ar1_series):
         """ARIMAForecast is a frozen dataclass."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=3)
+        fc = forecast_arima(result, ar1_series, n_ahead=3)
         with pytest.raises(AttributeError):
-            fc.h = 999  # type: ignore[misc]
+            fc.n_ahead = 999  # type: ignore[misc]
 
     def test_default_levels(self, ar1_series):
-        """Default levels are [80, 95]."""
+        """Default confidence levels are (0.80, 0.95)."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=3)
-        assert set(fc.lower.keys()) == {80, 95}
-        assert set(fc.upper.keys()) == {80, 95}
+        fc = forecast_arima(result, ar1_series, n_ahead=3)
+        assert set(fc.lower.keys()) == {0.80, 0.95}
+        assert set(fc.upper.keys()) == {0.80, 0.95}
 
 
 # =========================================================================
@@ -518,26 +518,29 @@ class TestValidation:
         """h < 1 raises ValidationError."""
         result = arima(ar1_series, order=(1, 0, 0))
         with pytest.raises(ValidationError):
-            forecast_arima(result, ar1_series, h=0)
+            forecast_arima(result, ar1_series, n_ahead=0)
 
     def test_forecast_invalid_levels(self, ar1_series):
-        """Invalid levels raise ValidationError."""
+        """Invalid confidence levels raise ValidationError."""
         result = arima(ar1_series, order=(1, 0, 0))
+        # Outside (0, 1) on the low side.
         with pytest.raises(ValidationError):
-            forecast_arima(result, ar1_series, h=5, levels=[0])
+            forecast_arima(result, ar1_series, n_ahead=5, conf_level=[0.0])
+        # Whole-percent value (old convention) must fail loud, not produce
+        # a runaway interval.
         with pytest.raises(ValidationError):
-            forecast_arima(result, ar1_series, h=5, levels=[100])
+            forecast_arima(result, ar1_series, n_ahead=5, conf_level=[95])
 
     def test_forecast_empty_y_original(self, ar1_series):
         """Empty y_original raises ValidationError."""
         result = arima(ar1_series, order=(1, 0, 0))
         with pytest.raises(ValidationError):
-            forecast_arima(result, np.array([]), h=5)
+            forecast_arima(result, np.array([]), n_ahead=5)
 
     def test_forecast_wrong_fitted_type(self, ar1_series):
         """Passing non-ARIMASolution raises ValidationError."""
         with pytest.raises(ValidationError):
-            forecast_arima("not a result", ar1_series, h=5)  # type: ignore[arg-type]
+            forecast_arima("not a result", ar1_series, n_ahead=5)  # type: ignore[arg-type]
 
     def test_auto_arima_invalid_ic(self, ar1_series):
         """Invalid IC string raises ValidationError."""
@@ -601,7 +604,7 @@ class TestEdgeCases:
     def test_forecast_h1(self, ar1_series):
         """h=1 produces length-1 arrays."""
         result = arima(ar1_series, order=(1, 0, 0))
-        fc = forecast_arima(result, ar1_series, h=1)
+        fc = forecast_arima(result, ar1_series, n_ahead=1)
         assert len(fc.mean) == 1
         assert len(fc.se) == 1
 
@@ -643,8 +646,8 @@ class TestArimaWhittle:
 
     def test_whittle_matches_ml_on_long_ar2_ma1(self):
         y = _ar2_ma1_series(5000)
-        r_ml = arima(y, order=(2, 0, 1), method="ML")
-        r_w = arima(y, order=(2, 0, 1), method="Whittle")
+        r_ml = arima(y, order=(2, 0, 1), method="ml")
+        r_w = arima(y, order=(2, 0, 1), method="whittle")
         np.testing.assert_allclose(r_ml.ar, r_w.ar, rtol=5e-3, atol=1e-3)
         np.testing.assert_allclose(r_ml.ma, r_w.ma, rtol=5e-3, atol=1e-3)
         assert r_ml.sigma2 == pytest.approx(r_w.sigma2, rel=5e-3)
@@ -657,7 +660,7 @@ class TestArimaWhittle:
         y[0] = eps[0]
         for t in range(1, n):
             y[t] = 0.7 * y[t - 1] + eps[t]
-        r = arima(y, order=(1, 0, 0), method="Whittle")
+        r = arima(y, order=(1, 0, 0), method="whittle")
         assert r.converged
         assert r.ar[0] == pytest.approx(0.7, abs=0.05)
 
@@ -669,7 +672,7 @@ class TestArimaWhittle:
         y[0] = eps[0]
         for t in range(1, n):
             y[t] = eps[t] + 0.5 * eps[t - 1]
-        r = arima(y, order=(0, 0, 1), method="Whittle")
+        r = arima(y, order=(0, 0, 1), method="whittle")
         assert r.converged
         assert r.ma[0] == pytest.approx(0.5, abs=0.1)
 
@@ -680,7 +683,7 @@ class TestArimaWhittle:
         eps = rng.randn(n)
         y = np.cumsum(eps) + 0.05 * np.arange(n)  # unit root + drift
         # ARIMA(1, 1, 1)
-        r = arima(y, order=(1, 1, 1), method="Whittle")
+        r = arima(y, order=(1, 1, 1), method="whittle")
         assert r.converged
         # With d=1 applied, the differenced AR(1) coefficient is modest.
         assert abs(r.ar[0]) < 1.0
@@ -688,9 +691,9 @@ class TestArimaWhittle:
     def test_whittle_rejects_seasonal(self):
         """Whittle does not support seasonal ARMA in 1.8.0 — must raise."""
         y = _ar2_ma1_series(500)
-        with pytest.raises(ValidationError, match="Whittle"):
+        with pytest.raises(ValidationError, match="whittle"):
             arima(y, order=(1, 0, 1),
-                  seasonal=(1, 0, 1, 12), method="Whittle")
+                  seasonal=(1, 0, 1, 12), method="whittle")
 
 
 class TestArimaWhittleGPU:
@@ -715,20 +718,20 @@ class TestArimaWhittleGPU:
     def test_invalid_backend_raises(self):
         y = _ar2_ma1_series(500)
         with pytest.raises(ValidationError, match="backend"):
-            arima(y, order=(2, 0, 1), method="Whittle", backend="quantum")
+            arima(y, order=(2, 0, 1), method="whittle", backend="quantum")
 
     def test_gpu_unavailable_raises_explicitly(self, monkeypatch):
         y = _ar2_ma1_series(500)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
         with pytest.raises(RuntimeError, match="No GPU available"):
-            arima(y, order=(2, 0, 1), method="Whittle", backend="gpu")
+            arima(y, order=(2, 0, 1), method="whittle", backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
         y = _ar2_ma1_series(500)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        r = arima(y, order=(2, 0, 1), method="Whittle", backend="auto")
+        r = arima(y, order=(2, 0, 1), method="whittle", backend="auto")
         assert r.converged
 
     def test_gpu_fp64_matches_cpu_whittle(self):
@@ -738,8 +741,8 @@ class TestArimaWhittleGPU:
         if not torch.cuda.is_available():
             pytest.skip("FP64 test requires CUDA (MPS has no FP64)")
         y = _ar2_ma1_series(2000)
-        r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
-        r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
+        r_cpu = arima(y, order=(2, 0, 1), method="whittle", backend="cpu")
+        r_gpu = arima(y, order=(2, 0, 1), method="whittle",
                       backend="gpu_fp64")
         np.testing.assert_allclose(r_cpu.ar, r_gpu.ar,
                                    rtol=1e-6, atol=1e-8)
@@ -752,8 +755,8 @@ class TestArimaWhittleGPU:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         y = _ar2_ma1_series(2000)
-        r_cpu = arima(y, order=(2, 0, 1), method="Whittle", backend="cpu")
-        r_gpu = arima(y, order=(2, 0, 1), method="Whittle",
+        r_cpu = arima(y, order=(2, 0, 1), method="whittle", backend="cpu")
+        r_gpu = arima(y, order=(2, 0, 1), method="whittle",
                       backend="gpu")
         assert r_cpu.sigma2 == pytest.approx(
             r_gpu.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
@@ -769,11 +772,11 @@ class TestArimaWhittleGPU:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         y = _ar2_ma1_series(2000)
-        r_numpy = arima(y, order=(2, 0, 1), method="Whittle",
+        r_numpy = arima(y, order=(2, 0, 1), method="whittle",
                         backend="gpu")
         # Repeat the numpy-input GPU fit — should be deterministic
         # and match its own previous run.
-        r_numpy_2 = arima(y, order=(2, 0, 1), method="Whittle",
+        r_numpy_2 = arima(y, order=(2, 0, 1), method="whittle",
                           backend="gpu")
         assert r_numpy.sigma2 == pytest.approx(
             r_numpy_2.sigma2, rel=GPU_FP32.rtol, abs=GPU_FP32.atol,
@@ -787,7 +790,7 @@ class TestArimaWhittleGPU:
         if not self._gpu_available():
             pytest.skip("no GPU available")
         y = _ar2_ma1_series(100_000)
-        r = arima(y, order=(2, 0, 1), method="Whittle",
+        r = arima(y, order=(2, 0, 1), method="whittle",
                   backend="gpu")
         assert r.converged
         assert np.isfinite(r.sigma2)
@@ -801,7 +804,7 @@ class TestArimaGpuBackendFailsLoud:
     GPU implementation. Regression guard for finding A7-1."""
 
     @pytest.mark.parametrize("bad_backend", ["gpu", "gpu_fp64", "mps", "cuda"])
-    @pytest.mark.parametrize("method", ["CSS-ML", "ML", "CSS"])
+    @pytest.mark.parametrize("method", ["css-ml", "ml", "css"])
     def test_arima_gpu_backend_raises_on_non_whittle(self, bad_backend, method):
         y = _ar2_ma1_series(200)
         with pytest.raises(ValidationError, match="GPU backend"):
@@ -811,7 +814,7 @@ class TestArimaGpuBackendFailsLoud:
     def test_auto_arima_gpu_backend_raises_on_non_whittle(self, bad_backend):
         y = _ar2_ma1_series(200)
         with pytest.raises(ValidationError, match="GPU backend"):
-            auto_arima(y, max_p=2, max_q=2, method="CSS-ML",
+            auto_arima(y, max_p=2, max_q=2, method="css-ml",
                        backend=bad_backend)
 
     def test_cpu_backend_unchanged_bit_identical(self):
@@ -831,7 +834,7 @@ class TestArimaGpuBackendFailsLoud:
         y = _ar2_ma1_series(200)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        r = arima(y, order=(1, 0, 0), method="CSS-ML", backend="auto")
+        r = arima(y, order=(1, 0, 0), method="css-ml", backend="auto")
         assert r.converged
         assert r.backend_name == "cpu"
 
@@ -871,14 +874,14 @@ class TestArimaBatch:
         # comparison — the batch API uses tol=1e-5 by default while
         # single-series arima uses 1e-8, so same code path runs with
         # different stopping criteria otherwise.
-        r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+        r = arima_batch(Y, order=(1, 0, 0), method="whittle",
                         backend="cpu", tol=1e-8, max_iter=200)
         assert r.n_series == 20
         assert r.ar.shape == (20, 1)
         matched = 0
         for k in range(20):
             try:
-                rs = arima(Y[k], order=(1, 0, 0), method="Whittle",
+                rs = arima(Y[k], order=(1, 0, 0), method="whittle",
                            tol=1e-8, max_iter=200)
             except Exception:
                 # scipy L-BFGS-B can report ABNORMAL when finite-diff
@@ -895,19 +898,19 @@ class TestArimaBatch:
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=5, n=500)
         with pytest.raises(ValidationError, match="backend"):
-            arima_batch(Y, order=(1, 0, 0), method="Whittle",
+            arima_batch(Y, order=(1, 0, 0), method="whittle",
                         backend="quantum")
 
     def test_non_whittle_method_raises(self):
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=5, n=500)
-        with pytest.raises(ValidationError, match="Whittle"):
-            arima_batch(Y, order=(1, 0, 0), method="ML")
+        with pytest.raises(ValidationError, match="whittle"):
+            arima_batch(Y, order=(1, 0, 0), method="ml")
 
     def test_rejects_1d_input(self):
         from pystatistics.timeseries import arima_batch
         with pytest.raises(ValidationError, match="2-D"):
-            arima_batch(np.zeros(500), order=(1, 0, 0), method="Whittle")
+            arima_batch(np.zeros(500), order=(1, 0, 0), method="whittle")
 
 
 class TestArimaBatchGPU:
@@ -946,14 +949,14 @@ class TestArimaBatchGPU:
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
         with pytest.raises(RuntimeError, match="No GPU available"):
-            arima_batch(Y, order=(1, 0, 0), method="Whittle", backend="gpu")
+            arima_batch(Y, order=(1, 0, 0), method="whittle", backend="gpu")
 
     def test_auto_backend_falls_back_to_cpu_when_no_gpu(self, monkeypatch):
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=5, n=500)
         from pystatistics.core.compute import device as dev_mod
         monkeypatch.setattr(dev_mod, "detect_gpu", lambda *a, **k: None)
-        r = arima_batch(Y, order=(1, 0, 0), method="Whittle", backend="auto")
+        r = arima_batch(Y, order=(1, 0, 0), method="whittle", backend="auto")
         assert r.converged.any()
 
     def test_gpu_matches_serial_whittle_on_phi(self):
@@ -968,13 +971,13 @@ class TestArimaBatchGPU:
             pytest.skip("no GPU available")
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=30, n=3000, seed=1)
-        r_gpu = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+        r_gpu = arima_batch(Y, order=(1, 0, 0), method="whittle",
                             backend=self._gpu_backend())
         gpu_phi = []
         cpu_phi = []
         for k in range(30):
             try:
-                rs = arima(Y[k], order=(1, 0, 0), method="Whittle")
+                rs = arima(Y[k], order=(1, 0, 0), method="whittle")
             except Exception:
                 continue
             gpu_phi.append(r_gpu.ar[k, 0])
@@ -1002,7 +1005,7 @@ class TestArimaBatchGPU:
             pytest.skip("convergence-to-1e-5 count is an FP64/CUDA property")
         from pystatistics.timeseries import arima_batch
         Y, _ = _ar1_batch(K=50, n=2000, seed=2)
-        r = arima_batch(Y, order=(1, 0, 0), method="Whittle",
+        r = arima_batch(Y, order=(1, 0, 0), method="whittle",
                         backend="gpu_fp64")
         assert r.converged.sum() >= 48  # allow at most two stragglers
         assert np.all(np.isfinite(r.sigma2))
@@ -1017,8 +1020,8 @@ class TestArimaBatchGPU:
         from pystatistics.timeseries import arima_batch
         Y_np, _ = _ar1_batch(K=10, n=1000, seed=3)
         Y_t = torch.as_tensor(Y_np, device=self._gpu_device(), dtype=torch.float32)
-        r = arima_batch(Y_t, order=(1, 0, 0), method="Whittle")
-        assert "GPU" in r.method
+        r = arima_batch(Y_t, order=(1, 0, 0), method="whittle")
+        assert "gpu" in r.method
         assert r.ar.shape == (10, 1)
 
     def test_tensor_input_with_cpu_backend_raises(self):
@@ -1030,5 +1033,5 @@ class TestArimaBatchGPU:
         Y_np, _ = _ar1_batch(K=5, n=500)
         Y_t = torch.as_tensor(Y_np, device=self._gpu_device(), dtype=torch.float32)
         with pytest.raises(ValidationError, match="torch.Tensor"):
-            arima_batch(Y_t, order=(1, 0, 0), method="Whittle",
+            arima_batch(Y_t, order=(1, 0, 0), method="whittle",
                         backend="cpu")

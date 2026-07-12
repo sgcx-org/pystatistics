@@ -11,7 +11,7 @@ failure semantics:
   an AR estimate whose polynomial has a root inside the unit circle
   (checked host-side in float64, independent of the torch build).
 - If **every** series fails, the batch call raises ``ConvergenceError``
-  — the same behavior a single-series ``arima(method='Whittle')`` call
+  — the same behavior a single-series ``arima(method='whittle')`` call
   has on the same input.
 - If **some** series fail, the failed rows' estimates (``ar``, ``ma``,
   ``sigma2``, ``mean``) are set to NaN and their ``converged`` flag is
@@ -101,7 +101,7 @@ def enforce_batch_failure_contract(
         Iterations used (for the all-failed ``ConvergenceError``).
     backend_label : str
         Human-readable backend name for messages, e.g.
-        ``'Whittle-loop-CPU'``.
+        ``'whittle-loop-cpu'``.
 
     Returns
     -------

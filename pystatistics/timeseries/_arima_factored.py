@@ -295,7 +295,7 @@ def normalize_to_invertible(
         cand_params[p_eff:p_eff + q_eff] = ma_norm
 
     nll_norm = arima_negloglik(
-        cand_params, y_diff, (p_eff, q_eff), include_mean, "ML",
+        cand_params, y_diff, (p_eff, q_eff), include_mean, "ml",
     )
     if abs(nll_norm - nll) <= 1e-6 * (1.0 + abs(nll)):
         return cand_params, cand_factored, nll_norm
@@ -394,11 +394,11 @@ def optimize_arima_factored(
     )
     opts = {"maxiter": max_iter, "ftol": tol}
 
-    if method in ("CSS", "CSS-ML"):
+    if method in ("css", "css-ml"):
         result_css = minimize_quiet(
             arima_negloglik_factored,
             start_factored,
-            args=ll_args + ("CSS", multiply_ar_polynomials, multiply_ma_polynomials),
+            args=ll_args + ("css", multiply_ar_polynomials, multiply_ma_polynomials),
             method="L-BFGS-B",
             options=opts,
         )
@@ -406,15 +406,15 @@ def optimize_arima_factored(
         nll = result_css.fun
         converged = result_css.success
         n_iter = result_css.nit
-        method_used = "CSS"
+        method_used = "css"
 
-        if method == "CSS-ML":
+        if method == "css-ml":
             css_factored = opt_factored.copy()
             try:
                 result_ml = minimize_quiet(
                     arima_negloglik_factored,
                     css_factored,
-                    args=ll_args + ("ML", multiply_ar_polynomials, multiply_ma_polynomials),
+                    args=ll_args + ("ml", multiply_ar_polynomials, multiply_ma_polynomials),
                     method="L-BFGS-B",
                     options=opts,
                 )
@@ -448,7 +448,7 @@ def optimize_arima_factored(
                     result_ml2 = minimize_quiet(
                         arima_negloglik_factored,
                         start_factored,
-                        args=ll_args + ("ML", multiply_ar_polynomials,
+                        args=ll_args + ("ml", multiply_ar_polynomials,
                                         multiply_ma_polynomials),
                         method="L-BFGS-B",
                         options=opts,
@@ -468,17 +468,17 @@ def optimize_arima_factored(
                         best_nll = result_ml2.fun
                         best_success = True
 
-            return best_x, best_nll, best_success, total_nit, "CSS-ML"
+            return best_x, best_nll, best_success, total_nit, "css-ml"
         return opt_factored, nll, converged, n_iter, method_used
 
-    # method == "ML"
+    # method == "ml"
     result_ml = minimize_quiet(
         arima_negloglik_factored,
         start_factored,
-        args=ll_args + ("ML", multiply_ar_polynomials, multiply_ma_polynomials),
+        args=ll_args + ("ml", multiply_ar_polynomials, multiply_ma_polynomials),
         method="L-BFGS-B",
         options=opts,
     )
     return (
-        result_ml.x, result_ml.fun, result_ml.success, result_ml.nit, "ML",
+        result_ml.x, result_ml.fun, result_ml.success, result_ml.nit, "ml",
     )

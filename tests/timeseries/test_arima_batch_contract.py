@@ -198,7 +198,7 @@ class TestArimaBatchContractCPU:
         # single-series arima to 1e-8 — exact equality needs the same
         # stopping rule (same convention as the existing batch tests).
         with pytest.warns(UserWarning, match="2 of 4 series"):
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="cpu", tol=1e-8)
         np.testing.assert_array_equal(
             np.isnan(r.sigma2), [True, True, False, False],
@@ -210,7 +210,7 @@ class TestArimaBatchContractCPU:
         )
         assert len(r.warnings) == 1 and CONTRACT_MSG in r.warnings[0]
         for k in (2, 3):
-            rs = arima(Y[k], order=(1, 0, 1), method="Whittle", tol=1e-8)
+            rs = arima(Y[k], order=(1, 0, 1), method="whittle", tol=1e-8)
             np.testing.assert_array_equal(r.ar[k], rs.ar)
             np.testing.assert_array_equal(r.ma[k], rs.ma)
             assert r.sigma2[k] == rs.sigma2
@@ -219,21 +219,21 @@ class TestArimaBatchContractCPU:
         from pystatistics.timeseries import arima_batch
         Y = _failing_rows([0, 1, 5])
         with pytest.raises(ConvergenceError, match="all 3 series failed"):
-            arima_batch(Y, order=(1, 0, 1), method="Whittle", backend="cpu")
+            arima_batch(Y, order=(1, 0, 1), method="whittle", backend="cpu")
 
     def test_all_good_unchanged_no_warning(self):
         from pystatistics.timeseries import arima, arima_batch
         Y = _healthy_rows(4)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="cpu", tol=1e-8)
         assert _no_contract_warning(rec)
         assert r.warnings == ()
         assert np.isfinite(r.ar).all() and np.isfinite(r.sigma2).all()
         assert r.converged.all()
         for k in range(4):
-            rs = arima(Y[k], order=(1, 0, 1), method="Whittle", tol=1e-8)
+            rs = arima(Y[k], order=(1, 0, 1), method="whittle", tol=1e-8)
             np.testing.assert_array_equal(r.ar[k], rs.ar)
             assert r.sigma2[k] == rs.sigma2
 
@@ -243,13 +243,13 @@ class TestArimaBatchContractCPU:
         from pystatistics.timeseries import arima
         y = _failing_rows([0])[0]
         with pytest.raises(ConvergenceError, match="non-stationary"):
-            arima(y, order=(1, 0, 1), method="Whittle")
+            arima(y, order=(1, 0, 1), method="whittle")
 
     def test_summary_reports_failed_count(self):
         from pystatistics.timeseries import arima_batch
         Y = np.vstack([_failing_rows([0]), _healthy_rows(2)])
         with pytest.warns(UserWarning):
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="cpu")
         s = r.summary()
         assert "Failed: 1/3" in s
@@ -269,7 +269,7 @@ class TestArimaBatchContractGPU:
         from pystatistics.timeseries import arima_batch
         Y = np.vstack([_failing_rows([0, 1]), _healthy_rows(2)])
         with pytest.warns(UserWarning, match="2 of 4 series"):
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="gpu")
         failed = np.isnan(r.sigma2)
         np.testing.assert_array_equal(failed, [True, True, False, False])
@@ -292,7 +292,7 @@ class TestArimaBatchContractGPU:
             [_arma_dgp(1500, 5000 + i, 0.97, 0.3) for i in range(16)]
         )
         with pytest.warns(UserWarning, match=CONTRACT_MSG):
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="gpu")
         finite = ~np.isnan(r.sigma2)
         assert finite.any()             # measured: >= 3 of these survive
@@ -302,14 +302,14 @@ class TestArimaBatchContractGPU:
         from pystatistics.timeseries import arima_batch
         Y = _failing_rows([0, 1, 5])
         with pytest.raises(ConvergenceError, match="all 3 series failed"):
-            arima_batch(Y, order=(1, 0, 1), method="Whittle", backend="gpu")
+            arima_batch(Y, order=(1, 0, 1), method="whittle", backend="gpu")
 
     def test_all_good_no_warning(self):
         from pystatistics.timeseries import arima_batch
         Y = _healthy_rows(8)
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
-            r = arima_batch(Y, order=(1, 0, 1), method="Whittle",
+            r = arima_batch(Y, order=(1, 0, 1), method="whittle",
                             backend="gpu")
         assert _no_contract_warning(rec)
         assert r.warnings == ()
@@ -326,8 +326,8 @@ class TestArimaBatchContractGPU:
         for backend in ("cpu", "gpu"):
             with pytest.warns(UserWarning, match="2 of 4 series"):
                 r = arima_batch(Y_partial, order=(1, 0, 1),
-                                method="Whittle", backend=backend)
+                                method="whittle", backend=backend)
             assert np.isnan(r.sigma2).sum() == 2
             with pytest.raises(ConvergenceError, match="all 3 series"):
                 arima_batch(Y_allfail, order=(1, 0, 1),
-                            method="Whittle", backend=backend)
+                            method="whittle", backend=backend)

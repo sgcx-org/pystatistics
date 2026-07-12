@@ -38,7 +38,7 @@ class DecompositionParams:
         Remainder after removing trend and seasonal.
     period : int
         Seasonal period used.
-    type : str
+    kind : str
         ``'additive'`` or ``'multiplicative'``.
     method : str
         ``'classical'`` or ``'stl'``.
@@ -49,7 +49,7 @@ class DecompositionParams:
     seasonal: NDArray
     residual: NDArray
     period: int
-    type: str
+    kind: str
     method: str
 
 
@@ -74,7 +74,7 @@ class DecompositionSolution(SolutionReprMixin):
         Remainder after removing trend and seasonal.
     period : int
         Seasonal period used.
-    type : str
+    kind : str
         ``'additive'`` or ``'multiplicative'``.
     method : str
         ``'classical'`` or ``'stl'``.
@@ -103,8 +103,8 @@ class DecompositionSolution(SolutionReprMixin):
         return self._result.params.period
 
     @property
-    def type(self) -> str:
-        return self._result.params.type
+    def kind(self) -> str:
+        return self._result.params.kind
 
     @property
     def method(self) -> str:
@@ -139,7 +139,7 @@ class DecompositionSolution(SolutionReprMixin):
         n_trend_nan = int(np.sum(np.isnan(self.trend)))
         lines = [
             f"Time Series Decomposition ({self.method})",
-            f"  Type:           {self.type}",
+            f"  Type:           {self.kind}",
             f"  Period:         {self.period}",
             f"  Observations:   {n}",
             f"  Trend NaNs:     {n_trend_nan}",
@@ -205,7 +205,7 @@ def _validate_decompose_inputs(
         raise ValidationError(f"period: must be >= 2, got {period}")
     if decomp_type not in ("additive", "multiplicative"):
         raise ValidationError(
-            f"type: must be 'additive' or 'multiplicative', got {decomp_type!r}"
+            f"kind: must be 'additive' or 'multiplicative', got {decomp_type!r}"
         )
     n = len(x)
     if n < 2 * period:
@@ -273,7 +273,7 @@ def decompose(
     x: ArrayLike,
     period: int,
     *,
-    type: str = "additive",
+    kind: str = "additive",
 ) -> DecompositionSolution:
     """
     Classical time series decomposition.
@@ -296,7 +296,7 @@ def decompose(
         Time series (1-D). Length must be >= 2 * *period*.
     period : int
         Seasonal period (>= 2).
-    type : str
+    kind : str
         ``'additive'`` or ``'multiplicative'``.
 
     Returns
@@ -309,13 +309,13 @@ def decompose(
         On invalid inputs.
     """
     arr = _validate_series(x)
-    _validate_decompose_inputs(arr, period, type)
+    _validate_decompose_inputs(arr, period, kind)
 
     n = len(arr)
     trend = _centered_ma(arr, period)
 
     # De-trend
-    if type == "additive":
+    if kind == "additive":
         detrended = arr - trend
     else:
         detrended = arr / trend
@@ -330,7 +330,7 @@ def decompose(
             seasonal_means[pos] = np.mean(vals[valid])
 
     # Center seasonal component
-    if type == "additive":
+    if kind == "additive":
         seasonal_means -= np.mean(seasonal_means)
     else:
         seasonal_means /= np.mean(seasonal_means)
@@ -339,7 +339,7 @@ def decompose(
     seasonal = np.tile(seasonal_means, n // period + 1)[:n]
 
     # Residual
-    if type == "additive":
+    if kind == "additive":
         residual = arr - trend - seasonal
     else:
         residual = arr / (trend * seasonal)
@@ -352,10 +352,10 @@ def decompose(
                 seasonal=seasonal,
                 residual=residual,
                 period=period,
-                type=type,
+                kind=kind,
                 method="classical",
             ),
-            info={"method": "classical", "type": type},
+            info={"method": "classical", "kind": kind},
             timing=None,
             backend_name="cpu",
             warnings=(),

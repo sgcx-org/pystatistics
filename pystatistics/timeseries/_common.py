@@ -39,7 +39,7 @@ class ACFParams:
         Upper confidence bound per lag.
     ci_lower : NDArray
         Lower confidence bound per lag.
-    type : str
+    kind : str
         'correlation' for ACF or 'partial' for PACF.
     """
 
@@ -49,7 +49,7 @@ class ACFParams:
     conf_level: float
     ci_upper: NDArray
     ci_lower: NDArray
-    type: str
+    kind: str
 
 
 @dataclass
@@ -76,7 +76,7 @@ class ACFSolution(SolutionReprMixin):
         Upper confidence bound per lag.
     ci_lower : NDArray
         Lower confidence bound per lag.
-    type : str
+    kind : str
         'correlation' for ACF or 'partial' for PACF.
     """
 
@@ -107,8 +107,8 @@ class ACFSolution(SolutionReprMixin):
         return self._result.params.ci_lower
 
     @property
-    def type(self) -> str:
-        return self._result.params.type
+    def kind(self) -> str:
+        return self._result.params.kind
 
     @property
     def info(self) -> dict:
@@ -135,7 +135,7 @@ class ACFSolution(SolutionReprMixin):
         str
             Multi-line summary string.
         """
-        label = "Autocorrelation" if self.type == "correlation" else "Partial Autocorrelation"
+        label = "Autocorrelation" if self.kind == "correlation" else "Partial Autocorrelation"
         lines = [
             f"{label} Function",
             f"  Observations: {self.n_obs}",

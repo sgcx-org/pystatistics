@@ -3,7 +3,7 @@ Tests for regression with ARIMA errors: ``xreg``, drift, and ``fixed=``
 (VA-4 / VA-4b).
 
 Validates ``arima(..., xreg=)`` / ``include_drift`` / ``fixed`` and
-``forecast_arima(..., newxreg=)`` against R ``stats::arima`` +
+``forecast_arima(..., new_xreg=)`` against R ``stats::arima`` +
 ``predict.Arima`` — the exact-ML reference pystatistics targets (MLE
 ``sigma2``; ``predict.Arima`` prediction SEs use that ``sigma2``). Covers
 the RIGOR R10 hard cases: xreg under differencing, near-collinear xreg,
@@ -141,25 +141,25 @@ def test_fixed_coefficient_pinned_exactly(label, ref, fits):
 
 
 # ---------------------------------------------------------------------------
-# Forecasting with newxreg / drift continuation
+# Forecasting with new_xreg / drift continuation
 # ---------------------------------------------------------------------------
 
 def test_forecast_xreg_matches_predict_arima(ref, series, fits):
-    """Point + SE forecasts with newxreg match predict.Arima (Case A)."""
+    """Point + SE forecasts with new_xreg match predict.Arima (Case A)."""
     m = ref["models"]["A"]
     fit = fits["A"]
     newx = np.asarray(series["newxA"], dtype=np.float64).reshape(6, 2)
-    fc = forecast_arima(fit, series["yA"], h=m["h"], levels=[95], newxreg=newx)
+    fc = forecast_arima(fit, series["yA"], n_ahead=m["h"], conf_level=0.95, new_xreg=newx)
     assert_allclose(fc.mean, np.asarray(m["fc"]), atol=FC_ATOL)
     z = 1.959963984540054
-    py_se = (fc.upper[95] - fc.mean) / z
+    py_se = (fc.upper[0.95] - fc.mean) / z
     assert_allclose(py_se, np.asarray(m["fcse"]), atol=FC_ATOL)
 
 
 def test_forecast_drift_continues_linearly(ref, series, fits):
-    """Drift forecasts continue the trend and need no newxreg (Case D)."""
+    """Drift forecasts continue the trend and need no new_xreg (Case D)."""
     m = ref["models"]["D"]
-    fc = forecast_arima(fits["D"], series["yD"], h=m["h"], levels=[95])
+    fc = forecast_arima(fits["D"], series["yD"], n_ahead=m["h"], conf_level=0.95)
     assert_allclose(fc.mean, np.asarray(m["fc"]), atol=FC_ATOL)
 
 
@@ -167,8 +167,8 @@ def test_forecast_xreg_under_differencing(ref, series, fits):
     """Forecasts for an xreg model with d=1 (Case Xd)."""
     m = ref["models"]["Xd"]
     newx = np.asarray(series["newxXd"], dtype=np.float64).reshape(6, 1)
-    fc = forecast_arima(fits["Xd"], series["yXd"], h=m["h"], levels=[95],
-                        newxreg=newx)
+    fc = forecast_arima(fits["Xd"], series["yXd"], n_ahead=m["h"], conf_level=0.95,
+                        new_xreg=newx)
     assert_allclose(fc.mean, np.asarray(m["fc"]), atol=1e-2)
 
 
@@ -194,8 +194,8 @@ def test_auto_arima_selects_drift():
 
 
 def test_auto_arima_allowdrift_false_disables():
-    """allowdrift=False never selects a drift term."""
-    res = auto_arima(_drift_series(), period=1, stepwise=True, allowdrift=False)
+    """allow_drift=False never selects a drift term."""
+    res = auto_arima(_drift_series(), period=1, stepwise=True, allow_drift=False)
     assert not res.best_model.include_drift
 
 
@@ -236,18 +236,18 @@ def test_drift_with_double_differencing_raises(series):
 
 def test_newxreg_required_when_missing(series, fits):
     with pytest.raises(ValidationError, match="future regressor values"):
-        forecast_arima(fits["A"], series["yA"], h=6)
+        forecast_arima(fits["A"], series["yA"], n_ahead=6)
 
 
 def test_newxreg_wrong_shape_raises(series, fits):
     with pytest.raises(ValidationError, match="expected shape"):
-        forecast_arima(fits["A"], series["yA"], h=6,
-                       newxreg=np.zeros((6, 1)))
+        forecast_arima(fits["A"], series["yA"], n_ahead=6,
+                       new_xreg=np.zeros((6, 1)))
 
 
 def test_whittle_with_xreg_raises(series):
-    with pytest.raises(ValidationError, match="not supported with method='Whittle'"):
-        arima(series["yA"], order=(1, 0, 0), xreg=series["x1"], method="Whittle")
+    with pytest.raises(ValidationError, match="not supported with method='whittle'"):
+        arima(series["yA"], order=(1, 0, 0), xreg=series["x1"], method="whittle")
 
 
 def test_init_with_xreg_raises(series):
@@ -268,6 +268,6 @@ def test_positional_fixed_vector_accepted(series):
 def test_xreg_forecast_roundtrip_no_regression_unaffected(series):
     """A plain (no-xreg) fit still forecasts identically (no regression path)."""
     fit = arima(series["yA"], order=(1, 0, 0))
-    fc = forecast_arima(fit, series["yA"], h=5)
+    fc = forecast_arima(fit, series["yA"], n_ahead=5)
     assert fc.mean.shape == (5,)
     assert len(fit.xreg_coef) == 0

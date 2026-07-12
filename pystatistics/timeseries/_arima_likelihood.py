@@ -199,7 +199,7 @@ def arima_negloglik(
     include_mean : bool
         Whether *params* includes a mean term.
     method : str
-        ``'CSS'`` or ``'ML'``.
+        ``'css'`` or ``'ml'``.
 
     Returns
     -------
@@ -209,13 +209,13 @@ def arima_negloglik(
     Raises
     ------
     ValueError
-        If *method* is not ``'CSS'`` or ``'ML'``.
+        If *method* is not ``'css'`` or ``'ml'``.
     """
-    if method == "CSS":
+    if method == "css":
         return css_loglik(params, y, order, include_mean)
-    if method == "ML":
+    if method == "ml":
         return exact_loglik(params, y, order, include_mean)
-    raise ValidationError(f"method must be 'CSS' or 'ML', got '{method}'")
+    raise ValidationError(f"method must be 'css' or 'ml', got '{method}'")
 
 
 def minimize_quiet(*args, **kwargs):
@@ -258,7 +258,7 @@ def arima_gradient(
     include_mean : bool
         Whether *params* includes a mean term.
     method : str
-        ``'CSS'`` or ``'ML'``.
+        ``'css'`` or ``'ml'``.
     step : float
         Finite difference step size. Default ``1e-5``.
 

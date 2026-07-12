@@ -135,7 +135,7 @@ def _validate_arima_inputs(
         if not isinstance(m, (int, np.integer)) or m < 2:
             raise ValidationError(f"seasonal.m: must be an integer >= 2, got {m}")
 
-    valid_methods = ("CSS", "ML", "CSS-ML", "Whittle")
+    valid_methods = ("css", "ml", "css-ml", "whittle")
     if method not in valid_methods:
         raise ValidationError(f"method: must be one of {valid_methods}, got '{method}'")
 
@@ -152,7 +152,7 @@ def _validate_arima_inputs(
     return arr
 
 
-# Public ``backend=`` tokens that request GPU execution. Only ``method='Whittle'``
+# Public ``backend=`` tokens that request GPU execution. Only ``method='whittle'``
 # has a GPU implementation (``backends/whittle_gpu.py``); the exact-ML / CSS-ML /
 # CSS path is CPU-only. An explicit GPU request on any other method must fail loud
 # rather than compute on the CPU and report ``backend_name='cpu'`` — silently
@@ -166,14 +166,14 @@ _GPU_BACKEND_TOKENS = frozenset({"gpu", "gpu_fp64", "mps", "cuda"})
 def _reject_gpu_backend_without_whittle(backend: str | None, method: str) -> None:
     """Fail loud on an explicit GPU ``backend=`` for a method with no GPU path.
 
-    The exact-ML/CSS ARIMA path has no GPU kernel; only ``method='Whittle'`` does.
+    The exact-ML/CSS ARIMA path has no GPU kernel; only ``method='whittle'`` does.
     Honoring ``backend='gpu'`` by silently running on the CPU would be an A6/A7
     Fidelity violation, so raise with the real remedies instead.
     """
-    if backend in _GPU_BACKEND_TOKENS and method != "Whittle":
+    if backend in _GPU_BACKEND_TOKENS and method != "whittle":
         raise ValidationError(
             f"arima()'s exact-ML/CSS path has no GPU backend "
-            f"(backend={backend!r}, method={method!r}). Use method='Whittle' with "
+            f"(backend={backend!r}, method={method!r}). Use method='whittle' with "
             f"backend='gpu' for the frequency-domain GPU path, arima_batch(...) for "
             f"batched GPU fits, or backend='cpu' (the default reference path)."
         )
@@ -207,7 +207,7 @@ def _optimize_arima(
     include_mean : bool
         Whether to include a mean parameter.
     method : str
-        ``'CSS'``, ``'ML'``, or ``'CSS-ML'``.
+        ``'css'``, ``'ml'``, or ``'css-ml'``.
     tol : float
         Convergence tolerance.
     max_iter : int
@@ -238,30 +238,30 @@ def _optimize_arima(
         else:
             opt_params = np.array([])
         nll_css = float(arima_negloglik(
-            opt_params, y_diff, order_pq, include_mean, "CSS",
+            opt_params, y_diff, order_pq, include_mean, "css",
         ))
-        if method == "CSS":
-            return opt_params, nll_css, True, 0, "CSS"
+        if method == "css":
+            return opt_params, nll_css, True, 0, "css"
         nll_ml = float(arima_negloglik(
-            opt_params, y_diff, order_pq, include_mean, "ML",
+            opt_params, y_diff, order_pq, include_mean, "ml",
         ))
         if not np.isfinite(nll_ml):
             raise ConvergenceError(
                 "ARIMA ML likelihood is not finite for the closed-form "
                 "case (p=q=0); the differenced series is degenerate "
-                "(e.g. all identical values). Use method='CSS' or "
+                "(e.g. all identical values). Use method='css' or "
                 "check the input series.",
                 iterations=0,
                 reason="degenerate_likelihood",
             )
-        method_used = "ML" if method == "ML" else "CSS-ML"
+        method_used = "ml" if method == "ml" else "css-ml"
         return opt_params, nll_ml, True, 0, method_used
 
-    if method == "CSS" or method == "CSS-ML":
+    if method == "css" or method == "css-ml":
         result_css = minimize_quiet(
             arima_negloglik,
             start_params,
-            args=(y_diff, order_pq, include_mean, "CSS"),
+            args=(y_diff, order_pq, include_mean, "css"),
             method="L-BFGS-B",
             options={"maxiter": max_iter, "ftol": tol},
         )
@@ -269,9 +269,9 @@ def _optimize_arima(
         nll = result_css.fun
         converged = result_css.success
         n_iter = result_css.nit
-        method_used = "CSS"
+        method_used = "css"
 
-        if method == "CSS-ML":
+        if method == "css-ml":
             # Refine with exact ML starting from CSS solution.
             # Fail loud if ML refinement fails — user asked for CSS-ML and
             # silently returning CSS estimates would mask the failure.
@@ -282,7 +282,7 @@ def _optimize_arima(
                 result_ml = minimize_quiet(
                     arima_negloglik,
                     css_params,
-                    args=(y_diff, order_pq, include_mean, "ML"),
+                    args=(y_diff, order_pq, include_mean, "ml"),
                     method="L-BFGS-B",
                     options={"maxiter": max_iter, "ftol": tol},
                 )
@@ -290,7 +290,7 @@ def _optimize_arima(
                 raise ConvergenceError(
                     "ARIMA CSS-ML: ML refinement failed numerically "
                     f"({type(exc).__name__}: {exc}). "
-                    "Use method='CSS' if you want CSS estimates, or "
+                    "Use method='css' if you want CSS estimates, or "
                     "adjust tol / max_iter / starting values.",
                     iterations=n_iter,
                     reason="ml_numerical_failure",
@@ -302,7 +302,7 @@ def _optimize_arima(
                     "ARIMA CSS-ML: ML refinement did not converge after "
                     f"{result_ml.nit} iterations (scipy message: "
                     f"{result_ml.message}). "
-                    "Use method='CSS' if you want CSS estimates, or "
+                    "Use method='css' if you want CSS estimates, or "
                     "increase max_iter / relax tol.",
                     iterations=n_iter,
                     reason="ml_max_iter_or_infeasible",
@@ -311,7 +311,7 @@ def _optimize_arima(
 
             opt_params = result_ml.x
             nll = result_ml.fun
-            method_used = "CSS-ML"
+            method_used = "css-ml"
             # The ML refinement succeeded (the raise above guards it):
             # a failed CSS warm-start (e.g. a NaN objective step) must
             # not shadow a converged ML optimum. Previously `converged`
@@ -337,7 +337,7 @@ def _optimize_arima(
                     result_ml2 = minimize_quiet(
                         arima_negloglik,
                         start_params,
-                        args=(y_diff, order_pq, include_mean, "ML"),
+                        args=(y_diff, order_pq, include_mean, "ml"),
                         method="L-BFGS-B",
                         options={"maxiter": max_iter, "ftol": tol},
                     )
@@ -355,7 +355,7 @@ def _optimize_arima(
         result_ml = minimize_quiet(
             arima_negloglik,
             start_params,
-            args=(y_diff, order_pq, include_mean, "ML"),
+            args=(y_diff, order_pq, include_mean, "ml"),
             method="L-BFGS-B",
             options={"maxiter": max_iter, "ftol": tol},
         )
@@ -363,7 +363,7 @@ def _optimize_arima(
         nll = result_ml.fun
         converged = result_ml.success
         n_iter = result_ml.nit
-        method_used = "ML"
+        method_used = "ml"
 
     return opt_params, nll, converged, n_iter, method_used
 
@@ -381,7 +381,7 @@ def arima(
     xreg: ArrayLike | None = None,
     include_drift: bool = False,
     fixed: dict | ArrayLike | None = None,
-    method: str = "CSS-ML",
+    method: str = "css-ml",
     init: ArrayLike | None = None,
     tol: float = 1e-8,
     max_iter: int = 1000,
@@ -408,9 +408,9 @@ def arima(
            to form effective ARMA coefficients.
 
     Methods:
-        - ``'CSS'``: Conditional sum of squares (fast, approximate).
-        - ``'ML'``: Exact maximum likelihood via the Kalman filter.
-        - ``'CSS-ML'``: CSS for initialization, then ML refinement (default).
+        - ``'css'``: Conditional sum of squares (fast, approximate).
+        - ``'ml'``: Exact maximum likelihood via the Kalman filter.
+        - ``'css-ml'``: CSS for initialization, then ML refinement (default).
 
     Starting values:
         - AR: Yule-Walker estimates from autocorrelations.
@@ -440,7 +440,7 @@ def arima(
         regression coefficients appear on the solution as ``xreg_coef``
         (named ``xreg1..xregk``), with joint standard errors in ``vcov``.
         Forecasting a model with ``xreg`` requires future regressor values
-        (``forecast_arima(..., newxreg=)``). Default ``None``.
+        (``forecast_arima(..., new_xreg=)``). Default ``None``.
     include_drift : bool
         Include a linear time-trend (drift) regressor — the models R
         reports "with drift" (``forecast::Arima(include.drift=TRUE)``).
@@ -458,7 +458,7 @@ def arima(
         Fixed coefficients carry zero variance in ``vcov`` and do not
         count toward the information criteria. Default ``None``.
     method : str
-        ``'CSS'``, ``'ML'``, or ``'CSS-ML'``. Default ``'CSS-ML'``.
+        ``'css'``, ``'ml'``, or ``'css-ml'``. Default ``'css-ml'``.
     init : ArrayLike or None
         Initial parameter values for the optimizer, in R ``coef()``
         order: ``[ar_1..ar_p, ma_1..ma_q, sar_1..sar_P, sma_1..sma_Q,
@@ -469,7 +469,7 @@ def arima(
         stationary (as in R); non-invertible MA parts are normalized
         to the invertible representative before optimization (R's
         documented ``maInvert`` intent — R's own implementation errors
-        on such inits). Not supported with ``method='Whittle'``.
+        on such inits). Not supported with ``method='whittle'``.
         Default ``None`` (internal starting values).
     tol : float
         Convergence tolerance for the optimizer. Default ``1e-8``.
@@ -493,7 +493,7 @@ def arima(
     **R interface coverage.** Supported R parameters: ``order``,
     ``seasonal``, ``include.mean`` (``include_mean``), ``xreg``
     (regression with ARIMA errors), ``include.drift`` (``include_drift``),
-    ``fixed`` (parameter masking), ``method`` ('CSS-ML'/'ML'/'CSS'), and
+    ``fixed`` (parameter masking), ``method`` ('css-ml'/'ml'/'css'), and
     ``init``. Not exposed, by design: ``transform.pars``, ``SSinit``,
     ``kappa``,
     ``n.cond``, and ``optim.method``/``optim.control`` are knobs over
@@ -505,13 +505,13 @@ def arima(
     strategy verified to reach equal-or-better optima than R on every
     reference model.
 
-    **CSS convention.** ``method='CSS'`` uses a zero-initialized
+    **CSS convention.** ``method='css'`` uses a zero-initialized
     conditional recursion over ALL observations, whereas R conditions
     on (and excludes) the first ``n.cond``. Pure-CSS estimates can
     therefore differ slightly from R's (coefficients typically ~1e-3,
     sigma2 ~1% on reference fits; weakly identified fits may reach
     different local optima) and are NOT covered by the parity
-    guarantee. ``'CSS-ML'`` and ``'ML'`` results are — CSS supplies
+    guarantee. ``'css-ml'`` and ``'ml'`` results are — CSS supplies
     starting values only.
     """
     arr = _validate_arima_inputs(y, order, seasonal, include_mean, method)
@@ -525,11 +525,11 @@ def arima(
     else:
         xreg_arr = None
     use_xreg = xreg_arr is not None or include_drift or fixed is not None
-    if use_xreg and method == "Whittle":
+    if use_xreg and method == "whittle":
         raise ValidationError(
             "xreg / include_drift / fixed are not supported with "
-            "method='Whittle' (the frequency-domain path has no regression "
-            "term). Use method='CSS-ML' (default), 'ML', or 'CSS'."
+            "method='whittle' (the frequency-domain path has no regression "
+            "term). Use method='css-ml' (default), 'ml', or 'css'."
         )
     if use_xreg and init is not None:
         raise ValidationError(
@@ -582,16 +582,16 @@ def arima(
     # default; Whittle is for long series (n ≳ 10⁴) where FFT wins over
     # O(n) Kalman recursion. GPU version lives in
     # ``backends/whittle_gpu.py`` and is selected via ``backend=``.
-    if method == "Whittle":
+    if method == "whittle":
         if seasonal is not None and (seasonal[0] > 0 or seasonal[2] > 0
                                      or seasonal[1] > 0):
             raise ValidationError(
-                "method='Whittle' supports non-seasonal ARMA(p, d, q) "
-                "only. For seasonal models use method='CSS-ML' (default)."
+                "method='whittle' supports non-seasonal ARMA(p, d, q) "
+                "only. For seasonal models use method='css-ml' (default)."
             )
         if init is not None:
             raise ValidationError(
-                "init: not supported with method='Whittle' (the "
+                "init: not supported with method='whittle' (the "
                 "frequency-domain path has its own starting values)"
             )
         from pystatistics.timeseries._whittle import fit_arima_whittle
@@ -746,7 +746,7 @@ def arima(
     # below R). Not applied to pure-CSS fits — the CSS criterion is not
     # reflection-invariant. See normalize_to_invertible for the full
     # rationale and the likelihood-invariance guard.
-    if method_used in ("ML", "CSS-ML"):
+    if method_used in ("ml", "css-ml"):
         opt_params, opt_factored, nll = normalize_to_invertible(
             opt_params, opt_factored, nll, y_diff,
             p, q, sp, sq, m, include_mean,
@@ -771,7 +771,7 @@ def arima(
     # kalman_arma_innovations raises loudly if the filter fails at the
     # fitted parameters (Rule 1). Pure-CSS fits keep the CSS recursion
     # and SSE/n — R's CSS convention.
-    if method_used in ("ML", "CSS-ML"):
+    if method_used in ("ml", "css-ml"):
         from pystatistics.timeseries._arima_kalman import (
             kalman_arma_innovations,
         )
@@ -810,7 +810,7 @@ def arima(
         # dimension is small (p+q+P+Q), so the exact-ML Hessian via the
         # O(n r^2) Kalman filter is affordable — and it is what R's
         # optim Hessian approximates.
-        method_for_hessian = "CSS" if method_used == "CSS" else "ML"
+        method_for_hessian = "css" if method_used == "css" else "ml"
 
         def _nll_for_hessian(theta: NDArray) -> float:
             eff = _factored_to_effective(
@@ -827,7 +827,7 @@ def arima(
         # Non-seasonal path unchanged: CSS Hessian even for CSS-ML (a
         # reasonable approximation to the information matrix; validated
         # against R on the non-seasonal reference fits).
-        method_for_hessian = "ML" if method_used == "ML" else "CSS"
+        method_for_hessian = "ml" if method_used == "ml" else "css"
 
         def _nll_for_hessian(theta: NDArray) -> float:
             return arima_negloglik(

@@ -189,7 +189,7 @@ def _try_fit(
     ic: str,
     tol: float,
     max_iter: int,
-    method: str = "CSS-ML",
+    method: str = "css-ml",
     backend: str | None = None,
     include_drift: bool = False,
 ) -> tuple[object | None, float]:
@@ -250,7 +250,7 @@ def _fit_best_constant(
     max_iter: int,
     method: str,
     backend: str | None,
-    allowdrift: bool,
+    allow_drift: bool,
 ) -> tuple[object | None, float]:
     """Fit a candidate order, choosing the better of with/without drift.
 
@@ -262,7 +262,7 @@ def _fit_best_constant(
     selections are unaffected. Returns the winning ``(result, ic)``.
     """
     d_tot = order[1] + (s_order[1] if s_order is not None else 0)
-    drift_opts = (False, True) if (allowdrift and d_tot == 1) else (False,)
+    drift_opts = (False, True) if (allow_drift and d_tot == 1) else (False,)
     best_result: object | None = None
     best_ic = math.inf
     for drift in drift_opts:
@@ -403,11 +403,11 @@ def _stepwise_search(
     ic: str,
     tol: float,
     max_iter: int,
-    method: str = "CSS-ML",
+    method: str = "css-ml",
     backend: str | None = None,
     max_P: int = 2,
     max_Q: int = 2,
-    allowdrift: bool = True,
+    allow_drift: bool = True,
 ) -> tuple[
     object,
     tuple[int, int, int],
@@ -491,7 +491,7 @@ def _stepwise_search(
         visited.add(key)
         order, s_order = _orders(key)
         result, ic_val = _fit_best_constant(
-            y, order, s_order, ic, tol, max_iter, method, backend, allowdrift,
+            y, order, s_order, ic, tol, max_iter, method, backend, allow_drift,
         )
         search_results.append(
             ((order, s_order) if seasonal else order, ic_val)
@@ -566,11 +566,11 @@ def _grid_search(
     ic: str,
     tol: float,
     max_iter: int,
-    method: str = "CSS-ML",
+    method: str = "css-ml",
     backend: str | None = None,
     max_P: int = 2,
     max_Q: int = 2,
-    allowdrift: bool = True,
+    allow_drift: bool = True,
 ) -> tuple[
     object,
     tuple[int, int, int],
@@ -633,7 +633,7 @@ def _grid_search(
         order = (p, d, q)
         s_order = (P, D, Q, m) if seasonal else None
         result, ic_val = _fit_best_constant(
-            y, order, s_order, ic, tol, max_iter, method, backend, allowdrift,
+            y, order, s_order, ic, tol, max_iter, method, backend, allow_drift,
         )
         search_results.append(
             ((order, s_order) if seasonal else order, ic_val)
@@ -670,10 +670,10 @@ def auto_arima(
     period: int = 1,
     ic: str = "aicc",
     stepwise: bool = True,
-    allowdrift: bool = True,
+    allow_drift: bool = True,
     tol: float = 1e-8,
     max_iter: int = 1000,
-    method: str = "CSS-ML",
+    method: str = "css-ml",
     backend: str | None = None,
 ) -> AutoARIMASolution:
     """Automatic ARIMA model selection.
@@ -706,10 +706,11 @@ def auto_arima(
         Information criterion: ``'aic'``, ``'aicc'``, or ``'bic'``.
     stepwise : bool
         Use stepwise search (default) or grid search.
-    allowdrift : bool
+    allow_drift : bool
         Allow a drift (linear-trend) term to be selected when the total
         differencing order ``d + D == 1`` — the models R reports "with
-        drift" (``forecast::auto.arima``'s ``allowdrift``). Each visited
+        drift" (the drift-allowance option of ``forecast::auto.arima``).
+        Each visited
         order is fit with and without drift and the better information
         criterion wins; the chosen model exposes ``include_drift`` and a
         ``'drift'`` entry in ``best_model.xreg_coef``. Default ``True``.
@@ -719,13 +720,13 @@ def auto_arima(
         Maximum iterations passed to :func:`arima`.
     method : str
         Estimation method forwarded to every candidate fit. Default
-        ``'CSS-ML'`` matches R. Use ``'Whittle'`` with ``backend='gpu'``
+        ``'css-ml'`` matches R. Use ``'whittle'`` with ``backend='gpu'``
         to route each candidate through the frequency-domain GPU path.
     backend : str or None
         Backend forwarded to every candidate fit. Default ``None`` →
         CPU (R-reference path). Pass ``'gpu'`` or ``'auto'`` to
         opt into the GPU path; only meaningful when the candidate
-        fits actually support it (e.g. ``method='Whittle'``).
+        fits actually support it (e.g. ``method='whittle'``).
 
     Returns
     -------
@@ -789,14 +790,14 @@ def auto_arima(
         best_result, best_order, best_seasonal, best_ic_val, search_results = (
             _stepwise_search(
                 arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
-                method, backend, max_P, max_Q, allowdrift,
+                method, backend, max_P, max_Q, allow_drift,
             )
         )
     else:
         best_result, best_order, best_seasonal, best_ic_val, search_results = (
             _grid_search(
                 arr, d, max_p, max_q, seasonal_start, ic, tol, max_iter,
-                method, backend, max_P, max_Q, allowdrift,
+                method, backend, max_P, max_Q, allow_drift,
             )
         )
 

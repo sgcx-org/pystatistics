@@ -218,9 +218,9 @@ def acf(
                 conf_level=conf_level,
                 ci_upper=ci_upper,
                 ci_lower=ci_lower,
-                type="correlation",
+                kind="correlation",
             ),
-            info={"type": "correlation"},
+            info={"kind": "correlation"},
             timing=None,
             backend_name="cpu",
             warnings=(),
@@ -263,7 +263,7 @@ def pacf(
     Returns
     -------
     ACFSolution
-        Result with type='partial'. Lags start at 1 (no lag 0).
+        Result with kind='partial'. Lags start at 1 (no lag 0).
 
     Raises
     ------
@@ -344,9 +344,9 @@ def pacf(
                 conf_level=conf_level,
                 ci_upper=ci_upper,
                 ci_lower=ci_lower,
-                type="partial",
+                kind="partial",
             ),
-            info={"type": "partial"},
+            info={"kind": "partial"},
             timing=None,
             backend_name="cpu",
             warnings=(),

@@ -82,7 +82,7 @@ def ndiffs(
     x: ArrayLike,
     *,
     test: str = "kpss",
-    alpha: float = 0.05,
+    significance_level: float = 0.05,
     max_d: int = 2,
 ) -> int:
     """
@@ -101,7 +101,7 @@ def ndiffs(
         forecast::ndiffs) or 'adf'. The two tests have opposite null
         hypotheses (KPSS: stationary; ADF: unit root) and can recommend
         different d on borderline series.
-    alpha : float
+    significance_level : float
         Significance level for the test.
     max_d : int
         Maximum number of differences to try.
@@ -129,9 +129,9 @@ def ndiffs(
         raise ValidationError(
             f"test: must be one of {valid_tests}, got '{test}'"
         )
-    if not (0.0 < alpha < 1.0):
+    if not (0.0 < significance_level < 1.0):
         raise ValidationError(
-            f"alpha: must be in (0, 1), got {alpha}"
+            f"significance_level: must be in (0, 1), got {significance_level}"
         )
     if not isinstance(max_d, (int, np.integer)) or max_d < 0:
         raise ValidationError(
@@ -149,8 +149,8 @@ def ndiffs(
             # default is 'ct' (tseries::adf.test parity) and must not
             # leak into ndiffs semantics.
             result = adf_test(current, regression="c")
-            # ADF: H0 = unit root. Reject H0 (p < alpha) means stationary.
-            if result.p_value < alpha:
+            # ADF: H0 = unit root. Reject H0 (p < significance_level) means stationary.
+            if result.p_value < significance_level:
                 return d
         else:
             # Pinned to forecast::ndiffs's bandwidth: it calls
@@ -161,8 +161,8 @@ def ndiffs(
             # to d=0.
             use_lag = int(np.trunc(3.0 * np.sqrt(len(current)) / 13.0))
             result = kpss_test(current, n_lags=use_lag)
-            # KPSS: H0 = stationary. Fail to reject (p > alpha) means stationary.
-            if result.p_value > alpha:
+            # KPSS: H0 = stationary. Fail to reject (p > significance_level) means stationary.
+            if result.p_value > significance_level:
                 return d
 
         # Difference once more

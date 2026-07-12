@@ -89,3 +89,18 @@ commits; this section accumulates them.
   `NotImplementedError` on public paths now raise the corresponding
   `core.exceptions` types (`ValidationError` / `DimensionError` /
   `NotImplementedFeatureError`).
+
+**`timeseries` — descriptive names and the forecast confidence convention:**
+
+- `decompose(type=)` → `decompose(kind=)` (and the `DecompositionSolution.type`
+  / `ACFSolution.type` result attributes → `.kind`); `type` shadowed a builtin.
+- `forecast_ets(h=)` / `forecast_arima(h=)` → `n_ahead=` (the forecast horizon).
+- `ndiffs(alpha=)` → `ndiffs(significance_level=)` (the ETS `alpha=` smoothing
+  coefficient is a different concept and keeps its name).
+- `auto_arima(allowdrift=)` → `allow_drift`; `arima`/`forecast_arima`
+  `newxreg=` → `new_xreg` (`xreg` itself is unchanged).
+- `arima`/`auto_arima` `method=` values are lowercase: `'css-ml'`/`'ml'`/`'css'`/
+  `'whittle'` (were `'CSS-ML'`/`'ML'`/`'CSS'`/`'Whittle'`).
+- `forecast_ets`/`forecast_arima` `levels=[95]` (whole percents) →
+  `conf_level=0.95` (fractions), accepting a float or a sequence; a value `>= 1`
+  now fails loud. Interval bounds are unchanged for the equivalent request.

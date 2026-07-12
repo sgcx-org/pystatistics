@@ -8,6 +8,7 @@ Generates point forecasts and prediction intervals on the original
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,7 @@ from numpy.typing import ArrayLike, NDArray
 from scipy import stats as sp_stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.timeseries._forecast_common import _normalize_conf_levels
 from pystatistics.timeseries._arima_factored import (
     _multiply_ma_polynomials,
     _multiply_polynomials,
@@ -35,14 +37,15 @@ class ARIMAForecast:
     ----------
     mean : NDArray
         Point forecasts on the **original** (un-differenced) scale,
-        length *h*.
+        length *n_ahead*.
     se : NDArray
-        Standard errors of forecasts, length *h*.
-    lower : dict[int, NDArray]
-        Lower prediction-interval bounds keyed by level (e.g. 80, 95).
-    upper : dict[int, NDArray]
-        Upper prediction-interval bounds keyed by level.
-    h : int
+        Standard errors of forecasts, length *n_ahead*.
+    lower : dict[float, NDArray]
+        Lower prediction-interval bounds keyed by confidence level as a
+        fraction (e.g. 0.80, 0.95).
+    upper : dict[float, NDArray]
+        Upper prediction-interval bounds keyed by confidence level.
+    n_ahead : int
         Forecast horizon.
     order : tuple[int, int, int]
         The (p, d, q) order of the model.
@@ -50,9 +53,9 @@ class ARIMAForecast:
 
     mean: NDArray
     se: NDArray
-    lower: dict[int, NDArray]
-    upper: dict[int, NDArray]
-    h: int
+    lower: dict[float, NDArray]
+    upper: dict[float, NDArray]
+    n_ahead: int
     order: tuple[int, int, int]
 
     def summary(self) -> str:
@@ -66,8 +69,9 @@ class ARIMAForecast:
         levels = sorted(self.lower.keys())
         header_parts = ["  h", "    Forecast", "        SE"]
         for lv in levels:
-            header_parts.append(f"  Lo {lv}")
-            header_parts.append(f"  Hi {lv}")
+            pct = round(lv * 100)
+            header_parts.append(f"  Lo {pct}")
+            header_parts.append(f"  Hi {pct}")
         header = "".join(header_parts)
 
         lines = [
@@ -76,7 +80,7 @@ class ARIMAForecast:
             header,
             "  " + "-" * (len(header) - 2),
         ]
-        for i in range(self.h):
+        for i in range(self.n_ahead):
             parts = [
                 f"  {i + 1:>3}",
                 f"  {self.mean[i]:>10.4f}",
@@ -237,7 +241,7 @@ def _future_design(
     fitted: 'ARIMASolution',  # noqa: F821
     n: int,
     h: int,
-    newxreg: NDArray | None,
+    new_xreg: NDArray | None,
 ) -> NDArray:
     """Build the ``(h, k)`` design matrix for horizons ``n+1 .. n+h``."""
     cols: list[NDArray] = []
@@ -247,18 +251,18 @@ def _future_design(
         cols.append(np.arange(n + 1, n + h + 1, dtype=np.float64))
     if fitted.xreg is not None:
         n_user = np.asarray(fitted.xreg).reshape(n, -1).shape[1]
-        if newxreg is None:
+        if new_xreg is None:
             raise ValidationError(
-                "newxreg: this model was fit with xreg, so future "
+                "new_xreg: this model was fit with xreg, so future "
                 f"regressor values are required to forecast ({n_user} "
                 f"column(s), {h} row(s))."
             )
-        nx = np.asarray(newxreg, dtype=np.float64)
+        nx = np.asarray(new_xreg, dtype=np.float64)
         if nx.ndim == 1:
             nx = nx.reshape(-1, 1)
         if nx.shape != (h, n_user):
             raise ValidationError(
-                f"newxreg: expected shape ({h}, {n_user}) to match h and "
+                f"new_xreg: expected shape ({h}, {n_user}) to match h and "
                 f"the fitted xreg columns, got {nx.shape}."
             )
         for j in range(n_user):
@@ -270,9 +274,9 @@ def forecast_arima(
     fitted: 'ARIMASolution',  # noqa: F821  forward reference
     y_original: ArrayLike,
     *,
-    h: int = 10,
-    levels: list[int] | None = None,
-    newxreg: ArrayLike | None = None,
+    n_ahead: int = 10,
+    conf_level: float | Sequence[float] = (0.80, 0.95),
+    new_xreg: ArrayLike | None = None,
 ) -> ARIMAForecast:
     """Generate forecasts from a fitted ARIMA model.
 
@@ -285,16 +289,19 @@ def forecast_arima(
     y_original : ArrayLike
         The **original** (un-differenced) time series that was passed
         to :func:`arima`.  Needed to reverse the differencing.
-    h : int
+    n_ahead : int
         Forecast horizon (number of steps ahead).  Default 10.
-    levels : list of int, optional
-        Prediction-interval levels in percent (default ``[80, 95]``).
-    newxreg : ArrayLike, optional
-        Future values of the external regressors, shape ``(h, k)`` (or
-        ``(h,)`` for a single regressor), required when the model was fit
-        with ``xreg``. Not needed for drift-only / intercept-only models
-        (those future columns are synthesized). Ignored for models with
-        no regressors.
+    conf_level : float or sequence of float
+        Prediction-interval confidence level(s) as fractions in ``(0, 1)``
+        (default ``(0.80, 0.95)``). A single float requests one interval;
+        a sequence requests several. Whole-percent values (e.g. ``95``)
+        are rejected.
+    new_xreg : ArrayLike, optional
+        Future values of the external regressors, shape ``(n_ahead, k)``
+        (or ``(n_ahead,)`` for a single regressor), required when the model
+        was fit with ``xreg``. Not needed for drift-only / intercept-only
+        models (those future columns are synthesized). Ignored for models
+        with no regressors.
 
     Returns
     -------
@@ -304,7 +311,8 @@ def forecast_arima(
     Raises
     ------
     ValidationError
-        If *h* < 1, *levels* are invalid, or *newxreg* is missing/misshaped.
+        If *n_ahead* < 1, *conf_level* is invalid, or *new_xreg* is
+        missing/misshaped.
     """
     from pystatistics.timeseries._arima_fit import ARIMASolution  # noqa: F811
 
@@ -317,14 +325,10 @@ def forecast_arima(
     if y_orig.size == 0:
         raise ValidationError("y_original: must be non-empty")
 
-    if h < 1:
-        raise ValidationError(f"h: must be >= 1, got {h}")
+    if n_ahead < 1:
+        raise ValidationError(f"n_ahead: must be >= 1, got {n_ahead}")
 
-    if levels is None:
-        levels = [80, 95]
-    for lv in levels:
-        if lv < 1 or lv > 99:
-            raise ValidationError(f"levels: each must be in [1, 99], got {lv}")
+    levels = _normalize_conf_levels(conf_level)
 
     # Regression with ARIMA errors: forecast the ARIMA-error series
     # u = y - X @ beta (which is what the ARMA part was fit on), then add
@@ -337,10 +341,10 @@ def forecast_arima(
         n = y_orig.size
         beta = np.asarray(fitted.xreg_coef, dtype=np.float64)
         base = y_orig - _reconstruct_design(fitted, n) @ beta
-        reg_future = _future_design(fitted, n, h, newxreg) @ beta
+        reg_future = _future_design(fitted, n, n_ahead, new_xreg) @ beta
     else:
         base = y_orig
-        reg_future = np.zeros(h)
+        reg_future = np.zeros(n_ahead)
 
     p, d, q = fitted.order
 
@@ -378,7 +382,7 @@ def forecast_arima(
     # sample when an MA root is near the unit circle: on AirPassengers
     # (2,1,1)(0,1,0)[12] (ma1 = -0.98) it was ~1.4 off R's forecasts.
     # err_cov is the h x h forecast-error covariance under sigma2 = 1.
-    fc_z, err_cov = kalman_arma_forecast(y_diff - mean_val, ar_eff, ma_eff, h)
+    fc_z, err_cov = kalman_arma_forecast(y_diff - mean_val, ar_eff, ma_eff, n_ahead)
     fc_diff = fc_z + mean_val
 
     # Forecast standard errors on the ORIGINAL scale. Un-differencing is
@@ -401,10 +405,10 @@ def forecast_arima(
         sdiff[-1] = -1.0
         delta = np.convolve(delta, sdiff)
     # c_i = psi weights of the pure integration operator (AR side only).
-    c = _psi_weights(-delta[1:], np.array([]), h)
+    c = _psi_weights(-delta[1:], np.array([]), n_ahead)
 
-    var = np.empty(h, dtype=np.float64)
-    for k in range(h):
+    var = np.empty(n_ahead, dtype=np.float64)
+    for k in range(n_ahead):
         w = c[k::-1]  # w[j] = c_{k-j} for j = 0..k
         var[k] = w @ err_cov[: k + 1, : k + 1] @ w
     se = np.sqrt(var * fitted.sigma2)
@@ -415,10 +419,10 @@ def forecast_arima(
     fc_orig = fc_orig + reg_future
 
     # Prediction intervals
-    lower: dict[int, NDArray] = {}
-    upper: dict[int, NDArray] = {}
+    lower: dict[float, NDArray] = {}
+    upper: dict[float, NDArray] = {}
     for lv in levels:
-        z = sp_stats.norm.ppf(0.5 + lv / 200.0)
+        z = sp_stats.norm.ppf(0.5 + lv / 2.0)
         lower[lv] = fc_orig - z * se
         upper[lv] = fc_orig + z * se
 
@@ -427,6 +431,6 @@ def forecast_arima(
         se=se,
         lower=lower,
         upper=upper,
-        h=h,
+        n_ahead=n_ahead,
         order=fitted.order,
     )

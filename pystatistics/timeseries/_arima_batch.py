@@ -7,7 +7,7 @@ for 1.9.0 — the Kalman / CSS paths are not yet batched.
 On GPU, one batched rFFT + one batched Adam loop fits all K series
 together (see :mod:`backends/whittle_batch_gpu`). On CPU the
 default backend falls back to a Python loop over the existing
-single-series :func:`arima` with ``method='Whittle'``. The GPU path
+single-series :func:`arima` with ``method='whittle'``. The GPU path
 is the one that makes this worth shipping — expected 10-100×
 speedups for K ≳ 50.
 
@@ -67,7 +67,7 @@ class ARMABatchParams:
     n_used : int
         Length of each (post-differencing) series.
     method : str
-        Which fitter ran: ``'Whittle-batch-GPU'``, ``'Whittle-loop-CPU'``.
+        Which fitter ran: ``'whittle-batch-gpu'``, ``'whittle-loop-cpu'``.
     """
 
     order: tuple[int, int, int]
@@ -115,7 +115,7 @@ class ARMABatchSolution(SolutionReprMixin):
     n_used : int
         Length of each (post-differencing) series.
     method : str
-        Which fitter ran: ``'Whittle-batch-GPU'``, ``'Whittle-loop-CPU'``.
+        Which fitter ran: ``'whittle-batch-gpu'``, ``'whittle-loop-cpu'``.
     """
 
     _result: Result[ARMABatchParams]
@@ -264,7 +264,7 @@ def arima_batch(
     *,
     order: tuple[int, int, int] = (0, 0, 0),
     include_mean: bool = True,
-    method: str = "Whittle",
+    method: str = "whittle",
     tol: float = 1e-5,
     max_iter: int = 300,
     lr: float = 0.05,
@@ -284,7 +284,7 @@ def arima_batch(
         differenced series. Default ``True``. Whittle is centred
         internally regardless.
     method : str
-        Only ``'Whittle'`` is supported for batch fitting in 1.9.0.
+        Only ``'whittle'`` is supported for batch fitting in 1.9.0.
     tol : float
         Per-series gradient-norm (L∞) convergence tolerance.
     max_iter : int
@@ -297,7 +297,7 @@ def arima_batch(
         wall time on easy problems.
     backend : str or None
         Compute backend = (device, precision). ``'cpu'`` (default — loop over
-        :func:`arima` with ``method='Whittle'``, float64), ``'gpu'`` (float32,
+        :func:`arima` with ``method='whittle'``, float64), ``'gpu'`` (float32,
         require GPU), ``'gpu_fp64'`` (float64, CUDA only — raises on MPS),
         ``'auto'`` (GPU-float32 if CUDA present, else CPU loop). A torch.Tensor
         input routes to its own device automatically (see CONVENTIONS.md).
@@ -320,9 +320,9 @@ def arima_batch(
     ValidationError
         On invalid method / order / shape / backend.
     """
-    if method != "Whittle":
+    if method != "whittle":
         raise ValidationError(
-            f"arima_batch: only method='Whittle' is supported in 1.9.0, "
+            f"arima_batch: only method='whittle' is supported in 1.9.0, "
             f"got {method!r}. Use arima() in a Python loop for other methods."
         )
     p, d, q = order
@@ -411,10 +411,10 @@ def arima_batch(
         # build or the device's fp32 behavior. The single-series path
         # enforces the same criterion by raising.
         failed = nonstationary_rows(ar)
-        method_str = f"Whittle-batch-GPU ({device_type}, " \
+        method_str = f"whittle-batch-gpu ({device_type}, " \
                      f"{'fp64' if use_fp64 else 'fp32'})"
     else:
-        # CPU path: loop over arima() with method='Whittle'. Exactly
+        # CPU path: loop over arima() with method='whittle'. Exactly
         # the same per-series result as the standalone call, just
         # packaged for the batch API. For K ≫ 1 users on CPU this
         # doesn't speed anything up — they should use this API on GPU.
@@ -432,7 +432,7 @@ def arima_batch(
             try:
                 res = _arima(
                     Y_np[k], order=order, include_mean=include_mean,
-                    method="Whittle", tol=tol, max_iter=max_iter,
+                    method="whittle", tol=tol, max_iter=max_iter,
                 )
             except ConvergenceError:
                 failed[k] = True
@@ -444,7 +444,7 @@ def arima_batch(
             sigma2[k] = res.sigma2
             converged[k] = res.converged
             n_iter = max(n_iter, res.n_iter)
-        method_str = "Whittle-loop-CPU"
+        method_str = "whittle-loop-cpu"
 
     # Shared failure contract — identical semantics on every backend:
     # all-failed raises; partially-failed rows are NaN'd, flagged

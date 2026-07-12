@@ -8,6 +8,7 @@ a ``sigma * sqrt(h)`` approximation is used as a fallback.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,6 +18,7 @@ from scipy import stats as sp_stats
 from pystatistics.core.exceptions import ValidationError
 from pystatistics.timeseries._ets_fit import ETSSolution
 from pystatistics.timeseries._ets_models import ETSSpec
+from pystatistics.timeseries._forecast_common import _normalize_conf_levels
 
 
 @dataclass(frozen=True)
@@ -27,12 +29,13 @@ class ETSForecast:
     Attributes
     ----------
     mean : NDArray
-        Point forecasts of length *h*.
-    lower : dict[int, NDArray]
-        Lower prediction-interval bounds keyed by level (e.g. ``{80: ..., 95: ...}``).
-    upper : dict[int, NDArray]
-        Upper prediction-interval bounds keyed by level.
-    h : int
+        Point forecasts of length *n_ahead*.
+    lower : dict[float, NDArray]
+        Lower prediction-interval bounds keyed by confidence level as a
+        fraction (e.g. ``{0.8: ..., 0.95: ...}``).
+    upper : dict[float, NDArray]
+        Upper prediction-interval bounds keyed by confidence level.
+    n_ahead : int
         Forecast horizon.
     model : ETSSpec
         Model specification used.
@@ -41,9 +44,9 @@ class ETSForecast:
     """
 
     mean: NDArray
-    lower: dict[int, NDArray]
-    upper: dict[int, NDArray]
-    h: int
+    lower: dict[float, NDArray]
+    upper: dict[float, NDArray]
+    n_ahead: int
     model: ETSSpec
     fitted: ETSSolution
 
@@ -59,8 +62,9 @@ class ETSForecast:
         levels = sorted(self.lower.keys())
         header_parts = ["  h", "    Forecast"]
         for lv in levels:
-            header_parts.append(f"  Lo {lv}")
-            header_parts.append(f"  Hi {lv}")
+            pct = round(lv * 100)
+            header_parts.append(f"  Lo {pct}")
+            header_parts.append(f"  Hi {pct}")
         header = "".join(header_parts)
 
         lines = [
@@ -69,7 +73,7 @@ class ETSForecast:
             header,
             "  " + "-" * (len(header) - 2),
         ]
-        for i in range(self.h):
+        for i in range(self.n_ahead):
             parts = [f"  {i + 1:>3}", f"  {self.mean[i]:>10.4f}"]
             for lv in levels:
                 parts.append(f"  {self.lower[lv][i]:>8.4f}")
@@ -248,9 +252,9 @@ def _variance_additive_nonseasonal(
 
 def forecast_ets(
     fitted: ETSSolution,
-    h: int = 10,
+    n_ahead: int = 10,
     *,
-    levels: list[int] | None = None,
+    conf_level: float | Sequence[float] = (0.80, 0.95),
 ) -> ETSForecast:
     """
     Generate forecasts from a fitted ETS model.
@@ -259,10 +263,13 @@ def forecast_ets(
     ----------
     fitted : ETSSolution
         A fitted ETS model (from :func:`ets`).
-    h : int
+    n_ahead : int
         Forecast horizon (number of steps ahead).
-    levels : list of int, optional
-        Prediction interval levels in percent (default ``[80, 95]``).
+    conf_level : float or sequence of float
+        Prediction-interval confidence level(s) as fractions in ``(0, 1)``
+        (default ``(0.80, 0.95)``). A single float requests one interval;
+        a sequence requests several. Whole-percent values (e.g. ``95``)
+        are rejected.
 
     Returns
     -------
@@ -272,16 +279,12 @@ def forecast_ets(
     Raises
     ------
     ValidationError
-        If *h* < 1 or *levels* are invalid.
+        If *n_ahead* < 1 or *conf_level* is invalid.
     """
-    if levels is None:
-        levels = [80, 95]
+    levels = _normalize_conf_levels(conf_level)
 
-    if h < 1:
-        raise ValidationError(f"h: must be >= 1, got {h}")
-    for lv in levels:
-        if lv < 1 or lv > 99:
-            raise ValidationError(f"levels: each must be in [1, 99], got {lv}")
+    if n_ahead < 1:
+        raise ValidationError(f"n_ahead: must be >= 1, got {n_ahead}")
 
     spec = fitted.spec
     n = fitted.n_obs
@@ -300,19 +303,19 @@ def forecast_ets(
         season = final_states[idx : idx + spec.period].copy()
 
     # Point forecasts
-    mean = _point_forecast(spec, level, trend, season, fitted.phi, h)
+    mean = _point_forecast(spec, level, trend, season, fitted.phi, n_ahead)
 
     # Variance and intervals
     sigma2 = fitted.mse
     var = _forecast_variance(
-        spec, sigma2, fitted.alpha, fitted.beta, fitted.gamma, fitted.phi, h
+        spec, sigma2, fitted.alpha, fitted.beta, fitted.gamma, fitted.phi, n_ahead
     )
     sd = np.sqrt(np.maximum(var, 0.0))
 
-    lower: dict[int, NDArray] = {}
-    upper: dict[int, NDArray] = {}
+    lower: dict[float, NDArray] = {}
+    upper: dict[float, NDArray] = {}
     for lv in levels:
-        z = sp_stats.norm.ppf(0.5 + lv / 200.0)
+        z = sp_stats.norm.ppf(0.5 + lv / 2.0)
         lower[lv] = mean - z * sd
         upper[lv] = mean + z * sd
 
@@ -320,7 +323,7 @@ def forecast_ets(
         mean=mean,
         lower=lower,
         upper=upper,
-        h=h,
+        n_ahead=n_ahead,
         model=spec,
         fitted=fitted,
     )

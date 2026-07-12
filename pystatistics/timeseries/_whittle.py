@@ -330,7 +330,7 @@ def fit_arima_whittle(
 ):
     """Assemble an :class:`ARIMASolution` for a Whittle-method ARIMA fit.
 
-    Called by :func:`arima` when ``method='Whittle'``. Kept here (and
+    Called by :func:`arima` when ``method='whittle'``. Kept here (and
     not in ``_arima_fit.py``) so the Whittle implementation stays
     self-contained and the main arima-fit module stays under the
     500-LOC limit.
@@ -339,7 +339,7 @@ def fit_arima_whittle(
     log-likelihood, AIC/BIC) are reconstructed from the Whittle-fitted
     coefficients via the shared CSS residual evaluator. vcov is not
     computed — Whittle users who need coefficient SEs should fall back
-    to method='ML' or 'CSS-ML'.
+    to method='ml' or 'css-ml'.
     """
     from scipy.optimize import minimize as _minimize
 
@@ -452,7 +452,7 @@ def fit_arima_whittle(
     )
     vcov = np.full((n_coef, n_coef), np.nan)
 
-    method_str = "Whittle" + ("-GPU" if gpu_like is not None else "")
+    method_str = "whittle" + ("-gpu" if gpu_like is not None else "")
     if gpu_like is not None:
         backend_name = f"whittle_gpu ({gpu_device_type}, " \
                        f"{'fp64' if use_fp64 else 'fp32'})"

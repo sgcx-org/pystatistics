@@ -78,7 +78,7 @@ class ARIMAParams:
     n_used : int
         Number of observations used in estimation (after differencing).
     method : str
-        Estimation method: ``'CSS'``, ``'ML'``, or ``'CSS-ML'``.
+        Estimation method: ``'css'``, ``'ml'``, or ``'css-ml'``.
     converged : bool
         Whether the optimizer converged.
     n_iter : int
@@ -180,7 +180,7 @@ class ARIMASolution(SolutionReprMixin):
     n_used : int
         Number of observations used in estimation (after differencing).
     method : str
-        Estimation method: ``'CSS'``, ``'ML'``, or ``'CSS-ML'``.
+        Estimation method: ``'css'``, ``'ml'``, or ``'css-ml'``.
     converged : bool
         Whether the optimizer converged.
     n_iter : int

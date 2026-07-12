@@ -363,26 +363,26 @@ def _optimize(
             obj, x0, args=(m,), method="L-BFGS-B", options=opts,
         )
 
-    if method == "CSS":
-        res = run("CSS", start_free)
-        return obj.full(res.x), res.fun, res.success, res.nit, "CSS"
+    if method == "css":
+        res = run("css", start_free)
+        return obj.full(res.x), res.fun, res.success, res.nit, "css"
 
-    if method == "ML":
-        res = run("ML", start_free)
-        return obj.full(res.x), res.fun, res.success, res.nit, "ML"
+    if method == "ml":
+        res = run("ml", start_free)
+        return obj.full(res.x), res.fun, res.success, res.nit, "ml"
 
     # CSS-ML: CSS warm-start, then ML refinement (with a second ML start
     # from the original point kept only if strictly better — the same
     # flat-canyon guard the plain-ARIMA path uses when a mean/intercept
     # is estimated).
-    res_css = run("CSS", start_free)
+    res_css = run("css", start_free)
     n_iter = res_css.nit
     try:
-        res_ml = run("ML", res_css.x)
+        res_ml = run("ml", res_css.x)
     except (ValueError, np.linalg.LinAlgError) as exc:
         raise ConvergenceError(
             "ARIMA (xreg) CSS-ML: ML refinement failed numerically "
-            f"({type(exc).__name__}: {exc}). Use method='CSS' for CSS "
+            f"({type(exc).__name__}: {exc}). Use method='css' for CSS "
             "estimates, or adjust tol / max_iter / starting values.",
             iterations=n_iter, reason="ml_numerical_failure",
         ) from exc
@@ -390,7 +390,7 @@ def _optimize(
     if not (res_ml.success and np.isfinite(res_ml.fun)):
         raise ConvergenceError(
             "ARIMA (xreg) CSS-ML: ML refinement did not converge after "
-            f"{res_ml.nit} iterations ({res_ml.message}). Use method='CSS' "
+            f"{res_ml.nit} iterations ({res_ml.message}). Use method='css' "
             "for CSS estimates, or increase max_iter / relax tol.",
             iterations=n_iter, reason="ml_max_iter_or_infeasible",
             threshold=tol,
@@ -399,7 +399,7 @@ def _optimize(
 
     if intercept_free:
         try:
-            res_ml2 = run("ML", start_free)
+            res_ml2 = run("ml", start_free)
         except (ValueError, np.linalg.LinAlgError):
             res_ml2 = None
         if res_ml2 is not None:
@@ -408,7 +408,7 @@ def _optimize(
                     and res_ml2.fun < best_nll):
                 best_x, best_nll = res_ml2.x, res_ml2.fun
 
-    return obj.full(best_x), best_nll, True, n_iter, "CSS-ML"
+    return obj.full(best_x), best_nll, True, n_iter, "css-ml"
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +497,7 @@ def fit_arima_xreg(
         )
 
     # ----- Canonical invertible MA representation (ML-family only) -----
-    if method_used in ("ML", "CSS-ML"):
+    if method_used in ("ml", "css-ml"):
         arma = theta[:obj.narma]
         eff = obj.effective_arma(theta)
         r = obj.eta(theta)
@@ -520,7 +520,7 @@ def fit_arima_xreg(
     r = obj.eta(theta)
 
     # ----- Residuals / sigma2 (same convention as the plain path) -----
-    if method_used in ("ML", "CSS-ML"):
+    if method_used in ("ml", "css-ml"):
         from pystatistics.timeseries._arima_kalman import kalman_arma_innovations
         residuals = kalman_arma_innovations(r, ar_eff, ma_eff)
         sigma2 = float(np.mean(residuals * residuals))
@@ -601,9 +601,9 @@ def _joint_vcov(
     so the matrix stays aligned with the reported coefficient vector.
     """
     k_total = obj.narma + obj.k_reg
-    hess_method = "ML" if method_used == "ML" else "CSS"
-    if method_used == "CSS-ML":
-        hess_method = "ML"
+    hess_method = "ml" if method_used == "ml" else "css"
+    if method_used == "css-ml":
+        hess_method = "ml"
     free_theta = theta[obj.free]
 
     def nll_free(fp: NDArray) -> float:

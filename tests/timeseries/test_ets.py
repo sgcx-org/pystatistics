@@ -240,7 +240,7 @@ class TestDampedTrend:
 
     def test_forecasts_flatten(self, linear_series):
         result = ets(linear_series, model="AAdN")
-        fc = forecast_ets(result, h=50)
+        fc = forecast_ets(result, n_ahead=50)
         # Damped trend: forecasts should converge (differences shrink)
         diffs = np.diff(fc.mean)
         assert abs(diffs[-1]) < abs(diffs[0])
@@ -299,63 +299,71 @@ class TestForecast:
 
     def test_ses_flat_forecast(self, constant_series):
         result = ets(constant_series, model="ANN")
-        fc = forecast_ets(result, h=10)
+        fc = forecast_ets(result, n_ahead=10)
         assert len(fc.mean) == 10
         # SES forecast should be flat (constant = last level)
         assert_allclose(fc.mean, fc.mean[0] * np.ones(10), atol=1e-10)
 
     def test_linear_trend_increasing(self, linear_series):
         result = ets(linear_series, model="AAN")
-        fc = forecast_ets(result, h=10)
+        fc = forecast_ets(result, n_ahead=10)
         # Forecasts should be monotonically increasing
         assert np.all(np.diff(fc.mean) > 0)
 
     def test_pi_widen_with_horizon(self, linear_series):
         result = ets(linear_series, model="AAN")
-        fc = forecast_ets(result, h=20)
-        widths_95 = fc.upper[95] - fc.lower[95]
+        fc = forecast_ets(result, n_ahead=20)
+        widths_95 = fc.upper[0.95] - fc.lower[0.95]
         # Width should be non-decreasing
         assert np.all(np.diff(widths_95) >= -1e-10)
 
     def test_lower_lt_mean_lt_upper(self, linear_series):
         result = ets(linear_series, model="AAN")
-        fc = forecast_ets(result, h=10)
-        for lv in [80, 95]:
+        fc = forecast_ets(result, n_ahead=10)
+        for lv in [0.80, 0.95]:
             assert np.all(fc.lower[lv] < fc.mean)
             assert np.all(fc.mean < fc.upper[lv])
 
     def test_95_wider_than_80(self, linear_series):
         result = ets(linear_series, model="AAN")
-        fc = forecast_ets(result, h=10)
-        width_80 = fc.upper[80] - fc.lower[80]
-        width_95 = fc.upper[95] - fc.lower[95]
+        fc = forecast_ets(result, n_ahead=10)
+        width_80 = fc.upper[0.80] - fc.lower[0.80]
+        width_95 = fc.upper[0.95] - fc.lower[0.95]
         assert np.all(width_95 > width_80)
 
     def test_forecast_horizon(self, constant_series):
         result = ets(constant_series, model="ANN")
-        fc = forecast_ets(result, h=5)
-        assert fc.h == 5
+        fc = forecast_ets(result, n_ahead=5)
+        assert fc.n_ahead == 5
         assert len(fc.mean) == 5
 
     def test_invalid_h(self, constant_series):
         result = ets(constant_series, model="ANN")
         with pytest.raises(ValidationError, match="must be >= 1"):
-            forecast_ets(result, h=0)
+            forecast_ets(result, n_ahead=0)
 
     def test_invalid_level(self, constant_series):
         result = ets(constant_series, model="ANN")
-        with pytest.raises(ValidationError, match="\\[1, 99\\]"):
-            forecast_ets(result, h=5, levels=[0])
+        # A fractional level outside (0, 1) is rejected.
+        with pytest.raises(ValidationError, match="fraction in .0, 1."):
+            forecast_ets(result, n_ahead=5, conf_level=0.0)
+
+    def test_whole_percent_level_rejected(self, constant_series):
+        result = ets(constant_series, model="ANN")
+        # The old whole-percent convention (e.g. 95) must fail loud rather
+        # than silently produce a 9500% interval.
+        with pytest.raises(ValidationError, match="fractions"):
+            forecast_ets(result, n_ahead=5, conf_level=95)
 
     def test_seasonal_forecast_cycles(self, seasonal_quarterly):
         result = ets(seasonal_quarterly, model="AAA", period=4)
-        fc = forecast_ets(result, h=12)
+        fc = forecast_ets(result, n_ahead=12)
         # Three full cycles: seasonal pattern should repeat
         assert len(fc.mean) == 12
 
     def test_summary_string(self, constant_series):
         result = ets(constant_series, model="ANN")
-        fc = forecast_ets(result, h=3)
+        fc = forecast_ets(result, n_ahead=3)
         s = fc.summary()
         assert "ETS(A,N,N)" in s
         assert "Forecast" in s
@@ -512,9 +520,9 @@ class TestEdgeCases:
 
     def test_frozen_forecast(self, constant_series):
         result = ets(constant_series, model="ANN")
-        fc = forecast_ets(result, h=5)
+        fc = forecast_ets(result, n_ahead=5)
         with pytest.raises(AttributeError):
-            fc.h = 10  # type: ignore[misc]
+            fc.n_ahead = 10  # type: ignore[misc]
 
     def test_states_shape_ann(self, constant_series):
         result = ets(constant_series, model="ANN")

@@ -313,7 +313,7 @@ def stl(
 
     info = {
         "method": "stl",
-        "type": "additive",
+        "kind": "additive",
         "robust": robust,
         "windows": {
             "seasonal": cfg["seasonal_window"],
@@ -343,7 +343,7 @@ def stl(
                 seasonal=seasonal,
                 residual=residual,
                 period=int(period),
-                type="additive",
+                kind="additive",
                 method="stl",
             ),
             info=info,

@@ -55,7 +55,7 @@ def fits(ref, airpassengers):
             airpassengers,
             order=tuple(m["order"]),
             seasonal=seasonal,
-            method="CSS-ML",
+            method="css-ml",
         )
         out[label] = (fit, m)
     return out
@@ -242,7 +242,7 @@ class TestWhittlePathMeanHandling:
     free-parameter IC convention."""
 
     def test_mean_dropped_and_ic_consistent(self, airpassengers):
-        fit = arima(airpassengers, order=(1, 1, 0), method="Whittle")
+        fit = arima(airpassengers, order=(1, 1, 0), method="whittle")
         assert fit.mean is None
         expected = -2.0 * fit.log_likelihood + 2.0 * fit.n_params
         assert_allclose(fit.aic, expected, atol=1e-8)

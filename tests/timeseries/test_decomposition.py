@@ -70,7 +70,7 @@ class TestDecomposeAdditive:
     def test_identity_holds(self, additive_series):
         """trend + seasonal + residual = observed (where trend is not NaN)."""
         y, period, _, _ = additive_series
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         valid = ~np.isnan(result.trend)
         reconstructed = result.trend[valid] + result.seasonal[valid] + result.residual[valid]
         np.testing.assert_allclose(reconstructed, result.observed[valid], atol=1e-10)
@@ -78,7 +78,7 @@ class TestDecomposeAdditive:
     def test_seasonal_repeats(self, additive_series):
         """Seasonal component repeats with period m."""
         y, period, _, _ = additive_series
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         first_cycle = result.seasonal[:period]
         for start in range(period, len(y), period):
             end = min(start + period, len(y))
@@ -89,14 +89,14 @@ class TestDecomposeAdditive:
     def test_seasonal_sums_to_zero(self, additive_series):
         """Additive seasonal component sums to approximately zero over one period."""
         y, period, _, _ = additive_series
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         cycle_sum = np.sum(result.seasonal[:period])
         assert abs(cycle_sum) < 1e-10
 
     def test_nan_at_edges(self, additive_series):
         """Trend has NaN at first and last period/2 values for even period."""
         y, period, _, _ = additive_series
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         k = period // 2
         assert np.all(np.isnan(result.trend[:k]))
         assert np.all(np.isnan(result.trend[-k:]))
@@ -104,7 +104,7 @@ class TestDecomposeAdditive:
     def test_trend_is_smooth(self, additive_series):
         """Trend component has low high-frequency content."""
         y, period, _, _ = additive_series
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         valid = ~np.isnan(result.trend)
         trend_valid = result.trend[valid]
         # Second differences should be small (smooth)
@@ -114,7 +114,7 @@ class TestDecomposeAdditive:
     def test_known_recovery(self, clean_additive):
         """Known constant-slope trend + fixed seasonal recovered correctly."""
         y, period, true_trend, true_seasonal = clean_additive
-        result = decompose(y, period, type="additive")
+        result = decompose(y, period, kind="additive")
         valid = ~np.isnan(result.trend)
         # Trend should closely match the linear trend in the interior
         np.testing.assert_allclose(
@@ -132,7 +132,7 @@ class TestDecomposeMultiplicative:
     def test_identity_holds(self, multiplicative_series):
         """trend * seasonal * residual = observed (where trend is not NaN)."""
         y, period = multiplicative_series
-        result = decompose(y, period, type="multiplicative")
+        result = decompose(y, period, kind="multiplicative")
         valid = ~np.isnan(result.trend)
         reconstructed = result.trend[valid] * result.seasonal[valid] * result.residual[valid]
         np.testing.assert_allclose(reconstructed, result.observed[valid], rtol=1e-10)
@@ -140,14 +140,14 @@ class TestDecomposeMultiplicative:
     def test_seasonal_averages_to_one(self, multiplicative_series):
         """Multiplicative seasonal component averages to 1 over one period."""
         y, period = multiplicative_series
-        result = decompose(y, period, type="multiplicative")
+        result = decompose(y, period, kind="multiplicative")
         cycle_mean = np.mean(result.seasonal[:period])
         np.testing.assert_allclose(cycle_mean, 1.0, atol=1e-10)
 
     def test_nan_at_edges(self, multiplicative_series):
         """Trend has NaN at edges for even period."""
         y, period = multiplicative_series
-        result = decompose(y, period, type="multiplicative")
+        result = decompose(y, period, kind="multiplicative")
         k = period // 2
         assert np.all(np.isnan(result.trend[:k]))
         assert np.all(np.isnan(result.trend[-k:]))
@@ -169,12 +169,12 @@ class TestDecomposeValidation:
     def test_non_positive_multiplicative(self):
         y = np.array([1.0, 2.0, -1.0, 3.0, 1.0, 2.0, -1.0, 3.0])
         with pytest.raises(ValidationError, match="all values > 0"):
-            decompose(y, period=4, type="multiplicative")
+            decompose(y, period=4, kind="multiplicative")
 
     def test_invalid_type(self):
         y = np.ones(20)
-        with pytest.raises(ValidationError, match="type"):
-            decompose(y, period=4, type="invalid")
+        with pytest.raises(ValidationError, match="kind"):
+            decompose(y, period=4, kind="invalid")
 
     def test_nan_input(self):
         y = np.ones(20)
@@ -279,7 +279,7 @@ class TestSTL:
         y, period, _, _ = additive_series
         result = stl(y, period)
         assert result.method == "stl"
-        assert result.type == "additive"
+        assert result.kind == "additive"
         assert result.period == period
 
     def test_robust_handles_outliers(self):
