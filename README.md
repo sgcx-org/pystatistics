@@ -371,6 +371,17 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.8.1 — GAM negative-binomial dispersion + factor `by=` smooths
+
+- **`GAMSolution.theta`** exposes the estimated negative-binomial dispersion from
+  a `gam(…, family='nb')` fit (mgcv's `getTheta`) — previously computed but not
+  readable off the result.
+- **Factor `by=` smooths:** `s(x, by=g, by_type='factor')` fits a separate smooth
+  per level of a grouping variable, matching mgcv's `s(x, by=factor(g))`.
+- **Safer `by=`:** a categorical-looking `by` column now raises (asking you to
+  pick `by_type='factor'` or `'continuous'`) instead of being silently fit as a
+  continuous varying coefficient. Continuous-`by` fits are numerically unchanged.
+
 ### 4.8.0 — survival feature cluster, ARIMA regressors, GAM tensor smooths
 
 Three major feature areas, all validated against R:

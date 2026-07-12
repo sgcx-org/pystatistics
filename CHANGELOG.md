@@ -1,5 +1,40 @@
 # Changelog
 
+## 4.8.1
+
+A focused GAM follow-up: the negative-binomial dispersion is now readable off a
+fitted model, and factor `by=` smooths are supported — with a guard against a
+common silent mistake. All additions are validated against R (mgcv).
+
+### Added
+
+- **`GAMSolution.theta` — the estimated negative-binomial dispersion.** A
+  `gam(…, family='nb')` fit estimates the dispersion θ (mgcv's `getTheta`); it is
+  now exposed on the fitted result (and on `GAMParams.theta`). It returns the
+  estimated θ for an auto-fit `family='nb'`, the value you supplied for a fixed
+  `NegativeBinomial(theta=…)`, and `None` for every other family. Previously the
+  estimate was computed internally but not surfaced anywhere, so you could not
+  read the model's dispersion.
+- **Factor `by=` smooths — `s(x, by=g, by_type='factor')`.** Fits a separate
+  smooth per level of an integer-coded grouping variable (mgcv's
+  `s(x, by=factor(g))`), adding the per-level group means automatically. Total
+  effective degrees of freedom and fitted values match `mgcv::gam`. A factor `by`
+  defaults to a thin-plate basis (matching `mgcv::s()`), and each level gets its
+  own smoothing parameter.
+
+### Changed
+
+- **`s(x, by=…)` now rejects a categorical `by` column instead of silently
+  misfitting it.** A `by` variable that looks categorical — integer-valued,
+  low-cardinality, coded as a contiguous run such as `0,1,2` — now raises with a
+  message asking you to choose `by_type='factor'` (a smooth per group) or
+  `by_type='continuous'` (a single varying-coefficient smooth). Previously such a
+  column was silently treated as a continuous varying coefficient, i.e. one smooth
+  scaled by the level codes, which is almost never what was intended. A binary
+  `0/1` indicator and any genuinely continuous `by` are unaffected, and existing
+  continuous-`by` fits are numerically unchanged; pass `by_type='continuous'` to
+  keep the old behaviour on a low-cardinality integer column.
+
 ## 4.8.0
 
 Adds three major feature areas — a full survival-analysis feature cluster
