@@ -371,6 +371,29 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 5.0.0 — pre-launch consistency release (breaking)
+
+A one-time, API-only cleanup that makes parameter names, option values, and
+result accessors uniform across the whole library before the 1.x launch.
+**No statistical results change** — every number is identical to 4.8.1; this
+release only renames things.
+
+Highlights of what moved (see the [changelog](CHANGELOG.md) for the full list):
+
+- Single-letter and cryptic parameters are gone: `chisq_test(B=)` →
+  `n_resamples=`, `prop_test(n=)` → `n_trials=`, `grm_lmm(W=)` →
+  `random_factor=`, `ridge(lam=)` → `l2=`, `forecast_arima(h=)` → `n_ahead=`.
+- Option values are lowercase and hyphenated: `family='negative-binomial'`,
+  link `'inverse-squared'`, `arima(method='css-ml')`, `anova_rm(correction=`
+  `'greenhouse-geisser')`; the logit link is `'logit'` everywhere.
+- Result accessors are consistent: bootstrap and pooled results expose
+  `.standard_errors` / `.conf_int` / `.n_resamples` like the rest of the library.
+- Confidence is always a fraction: `forecast_*(conf_level=0.95)` and
+  `pool(conf_level=0.95)` replace the old whole-percent / significance-level
+  spellings.
+- `predict(type=)` → `predict(kind=)`; `regression.anova()` → `deviance_table()`;
+  the removed `backend='cpu-reference'` becomes `solver='reference'`.
+
 ### 4.8.1 — GAM negative-binomial dispersion + factor `by=` smooths
 
 - **`GAMSolution.theta`** exposes the estimated negative-binomial dispersion from

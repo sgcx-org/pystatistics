@@ -1,5 +1,91 @@
 # Changelog
 
+## 5.0.0
+
+The pre-launch consistency release. This is a **breaking, API-only** cut:
+parameter names, option values, and result-object accessors are made uniform
+across the whole library before the 1.x public launch, while there are still no
+downstream users pinned to the old spellings. **No statistical results change** —
+every number a fit produces is identical to 4.8.1. If your code runs on 4.8.1
+without deprecation warnings and doesn't use any of the names below, it needs no
+changes.
+
+### Removed
+
+- **`mvnmle.mlest(backend='cpu-reference')`** — use `solver='reference'`
+  (the reference numpy optimizer is a solver choice, not a backend).
+- **`gam` `SmoothInfo.lambda_` / `.s_scale`** — use `.lambdas` / `.s_scales`
+  (a tensor smooth carries one smoothing parameter per margin, so these are
+  tuples).
+- The internal `*Params` payload classes (e.g. `GLMParams`, `MVNParams`,
+  `HTestParams`) are no longer exported from the package namespace — they were an
+  implementation detail behind each `*Solution`. The `*Solution` objects are the
+  public result surface.
+
+### Changed — parameter names
+
+- **hypothesis:** `chisq_test(p=, rescale_p=, B=)` → `(expected_probs=,
+  rescale_probs=, n_resamples=)`; `prop_test(p=, n=)` → `(null_value=,
+  n_trials=)`; `fisher_test(B=)` → `n_resamples=`; `var_test(ratio=)` →
+  `null_value=`; `p_adjust(p=, n=)` → `(p_values=, n_comparisons=)`.
+- **mice:** `pool(dfcom=)` → `df_complete=`; `pool(alpha=0.05)` →
+  `conf_level=0.95` (now a confidence level, not a significance level — the
+  intervals are unchanged); `MICESolution.completed(i)` → `completed(index)`.
+- **regression:** `ridge(lam=)` → `l2=`; the analysis-of-deviance function
+  `regression.anova(...)` → `regression.deviance_table(...)` (it collided with
+  the `anova` module's `anova()`).
+- **timeseries:** `decompose(type=)` → `kind=`; `forecast_ets(h=)` /
+  `forecast_arima(h=)` → `n_ahead=`; `ndiffs(alpha=)` → `significance_level=`;
+  `auto_arima(allowdrift=)` → `allow_drift=`; `newxreg=` → `new_xreg=`;
+  `forecast_ets`/`forecast_arima` `levels=[95]` → `conf_level=0.95` (fractions —
+  a whole-percent value now raises).
+- **mixed:** `grm_lmm(W=)` → `random_factor=`.
+
+### Changed — option values
+
+- GLM `family='negative.binomial'` / `'inverse.gaussian'` →
+  `'negative-binomial'` / `'inverse-gaussian'` (the `'nb'` shorthand still works).
+- The Gamma family class is `Gamma` (was `GammaFamily`) and `family_name` reports
+  `'gamma'`.
+- Inverse-squared link value `'1/mu^2'` → `'inverse-squared'`.
+- ordinal `polr(link='logistic')` → `link='logit'` (matching the GLM/GAM spelling
+  of the same link).
+- ordinal / multinomial `predict(type=)` → `predict(kind=)`.
+- `deviance_table(test=)` values `'Chisq'`/`'LRT'`/`'F'` → `'chisq'`/`'lrt'`/`'f'`.
+- `arima` / `auto_arima` `method=` values `'CSS-ML'`/`'ML'`/`'CSS'`/`'Whittle'`
+  → lowercase `'css-ml'`/`'ml'`/`'css'`/`'whittle'`.
+- `anova_rm(correction=)` values `'gg'`/`'hf'` → `'greenhouse-geisser'`/
+  `'huynh-feldt'`.
+- `boot_ci(ci_type=)` values `'perc'`/`'stud'` → `'percentile'`/`'studentized'`.
+
+### Changed — result accessors
+
+- **montecarlo** `BootstrapSolution` / `PermutationSolution`: `.R` →
+  `.n_resamples`; `.se` → `.standard_errors`; `.ci` → `.conf_int`; `.sim` →
+  `.method`; `.ci_conf_level` → `.conf_level`.
+- **mice** `PooledSolution`: `.se` → `.standard_errors`; `.ci_low` / `.ci_high`
+  → `.ci_lower` / `.ci_upper`.
+- **gam** `GAMSolution.se` → `.standard_errors`.
+- The `AnovaTable` result class → `DevianceTable`.
+- `ACFSolution.type` / `DecompositionSolution.type` → `.kind`.
+
+### Added
+
+- Uniform result accessors are now present everywhere they are meaningful:
+  `.backend_name` / `.timing` / `.warnings` on the mixed and multinomial
+  solutions; `.coef` on the mixed LMM/GLMM solutions; `.category_names` on
+  `OrdinalSolution`; `.coefficients` on `MultinomialSolution`; `.coef` /
+  `.conf_int` / `.backend_name` on `GAMSolution`; `.conf_int` (a pooled-interval
+  array) on mice `PooledSolution`.
+
+### Fixed
+
+- `boot_ci` now raises on a multi-level `conf_level` sequence instead of silently
+  using only the first level.
+- Several input-validation failures that raised generic Python exceptions now
+  raise the library's typed errors (`ValidationError` / `DimensionError` /
+  `NotImplementedFeatureError`).
+
 ## 4.8.1
 
 A focused GAM follow-up: the negative-binomial dispersion is now readable off a
