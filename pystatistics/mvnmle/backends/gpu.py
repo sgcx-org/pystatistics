@@ -44,7 +44,8 @@ class DirectMLEBackend:
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 self._device = 'mps'
             else:
-                raise RuntimeError("No GPU available (need CUDA or MPS)")
+                from pystatistics.core.compute.backend import NO_GPU_MSG
+                raise RuntimeError(NO_GPU_MSG)
         else:
             self._device = device
 

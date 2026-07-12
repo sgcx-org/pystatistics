@@ -104,3 +104,11 @@ commits; this section accumulates them.
 - `forecast_ets`/`forecast_arima` `levels=[95]` (whole percents) →
   `conf_level=0.95` (fractions), accepting a float or a sequence; a value `>= 1`
   now fails loud. Interval bounds are unchanged for the equivalent request.
+
+**`mvnmle` — error taxonomy:**
+
+- `little_mcar_test()` now raises `ConvergenceError` (carrying `iterations`/
+  `reason`) on non-convergence and `NumericalError` on a failed ML computation,
+  instead of a bare `RuntimeError` (which is now reserved for GPU-unavailable /
+  environment failures). The GPU-unavailable error uses the canonical shared
+  message (with the "use `backend='cpu'`" remedy).

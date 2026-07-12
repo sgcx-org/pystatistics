@@ -14,7 +14,12 @@ from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 import warnings
 
-from pystatistics.core.exceptions import PyStatisticsError, ValidationError
+from pystatistics.core.exceptions import (
+    PyStatisticsError,
+    ValidationError,
+    ConvergenceError,
+    NumericalError,
+)
 from pystatistics.core.result import SolutionReprMixin
 from pystatistics.mvnmle.patterns import PatternInfo, identify_missingness_patterns
 
@@ -255,7 +260,7 @@ def little_mcar_test(data,
         # actually catch MLE failures here.
         raise
     except Exception as e:
-        raise RuntimeError(f"ML estimation failed: {e}") from e
+        raise NumericalError(f"ML estimation failed: {e}") from e
 
     # Rule 1: do not quietly hand the caller a statistic built on top
     # of unconverged ML estimates. If BFGS ran out of iterations (the
@@ -266,7 +271,7 @@ def little_mcar_test(data,
     # them is not the Little's statistic — it is noise.
     if not ml_result.converged:
         n_patterns_hint = len(identify_missingness_patterns(data_array))
-        raise RuntimeError(
+        raise ConvergenceError(
             f"ML estimation did not converge (method={method!r}, "
             f"n_iter={ml_result.n_iter}, loglik={ml_result.loglik:.4f}). "
             f"The chi-square statistic built on non-MLE estimates is "
@@ -280,7 +285,9 @@ def little_mcar_test(data,
             f"  - Raise max_iter if you specifically need BFGS "
             f"(method='direct').\n"
             f"  - Inspect ml_result manually by calling mlest(...) "
-            f"directly to see intermediate state."
+            f"directly to see intermediate state.",
+            iterations=ml_result.n_iter,
+            reason='max_iterations',
         )
 
     # Step 2: Identify missingness patterns
