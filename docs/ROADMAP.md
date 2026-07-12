@@ -213,6 +213,7 @@ they all die together in one clean break, not in a trickle of small majors.
 | Deprecated | Replacement | Deprecated in | **Remove in** | Notes |
 |---|---|---|---|---|
 | `mvnmle.mlest(backend='cpu-reference')` | `mvnmle.mlest(solver='reference')` | 4.6.13 | **5.0** | `backend=` is reserved for device+precision; the reference numpy inverse-Cholesky path is a `solver` (numerical-routine) choice. The alias warns and forwards; delete the alias branch in `mvnmle/solvers.mlest` and drop `'cpu-reference'` from `BackendChoice`. |
+| `gam` `SmoothInfo.lambda_` / `.s_scale` | `SmoothInfo.lambdas` / `.s_scales` | 4.8.0 | **5.0** | A tensor `te()`/`ti()` smooth carries one smoothing parameter *per margin*, so the per-term accessors became tuples; the scalar aliases warn and return the first entry. Delete the two `@property` shims on `gam._common.SmoothInfo`. |
 
 ## Contributing
 

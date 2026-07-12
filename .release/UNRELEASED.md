@@ -186,8 +186,11 @@
     over each smooth's margins, so ordinary smooths are numerically unchanged).
   - `solution.smooth_terms[i].lambdas` / `.s_scales` are now tuples (one entry
     per margin for a tensor smooth; length 1 for an ordinary smooth), and
-    `sp=` takes one value per smoothing parameter (per margin). Tensor /
-    multivariate smooths are CPU-only, like the rest of the gam module.
+    `sp=` takes one value per smoothing parameter (per margin). The scalar
+    `SmoothInfo.lambda_` / `.s_scale` accessors shipped in 4.7.0 remain as
+    deprecated aliases returning the first entry (they warn; scheduled for
+    removal in 5.0 — see `docs/ROADMAP.md`), so 4.8.0 stays non-breaking.
+    Tensor / multivariate smooths are CPU-only, like the rest of the gam module.
   - New modules `pystatistics/gam/_tensor_smooth.py` (the `te`/`ti` spec),
     `_basis_te.py` (tensor basis assembly), `_basis_md.py` (multivariate
     thin-plate basis) and `_penalty_group.py` (the joint penalty determinant).

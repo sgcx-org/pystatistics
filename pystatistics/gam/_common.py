@@ -150,3 +150,34 @@ class SmoothInfo:
     coef_indices: tuple[int, int]
     lambdas: tuple[float, ...]
     s_scales: tuple[float, ...]
+
+    @property
+    def lambda_(self) -> float:
+        """Deprecated: the smooth's first smoothing parameter.
+
+        Renamed to :attr:`lambdas` (a tuple, so a tensor smooth can carry one
+        per margin) in 4.8.0. This scalar alias returns the first (for an
+        ordinary smooth, the only) smoothing parameter and will be removed in
+        5.0.
+        """
+        import warnings
+        warnings.warn(
+            "SmoothInfo.lambda_ is deprecated; use SmoothInfo.lambdas (a tuple, "
+            "one entry per margin). Removed in 5.0.",
+            DeprecationWarning, stacklevel=2,
+        )
+        return self.lambdas[0]
+
+    @property
+    def s_scale(self) -> float:
+        """Deprecated: the smooth's first penalty-normalisation factor.
+
+        Renamed to :attr:`s_scales` in 4.8.0; removed in 5.0.
+        """
+        import warnings
+        warnings.warn(
+            "SmoothInfo.s_scale is deprecated; use SmoothInfo.s_scales (a tuple). "
+            "Removed in 5.0.",
+            DeprecationWarning, stacklevel=2,
+        )
+        return self.s_scales[0]
