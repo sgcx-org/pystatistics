@@ -25,12 +25,12 @@ if TYPE_CHECKING:
 class MICEParams:
     """Immutable imputation payload computed by a backend."""
 
-    completed: NDArray[np.floating[Any]]   # (m, n, p) — no NaN
-    chain_mean: NDArray[np.floating[Any]]  # (m, maxit, n_incomplete)
-    chain_var: NDArray[np.floating[Any]]   # (m, maxit, n_incomplete)
+    completed: NDArray[np.floating[Any]]   # (n_imputations, n, p) — no NaN
+    chain_mean: NDArray[np.floating[Any]]  # (n_imputations, max_iter, n_incomplete)
+    chain_var: NDArray[np.floating[Any]]   # (n_imputations, max_iter, n_incomplete)
     incomplete_columns: tuple[int, ...]
-    m: int
-    maxit: int
+    n_imputations: int
+    max_iter: int
     visit_sequence: tuple[int, ...]
 
 
@@ -45,12 +45,12 @@ class MICESolution(SolutionReprMixin):
     @property
     def n_imputations(self) -> int:
         """Number of imputations (completed datasets)."""
-        return self._result.params.m
+        return self._result.params.n_imputations
 
     @property
     def max_iter(self) -> int:
         """Iterations per chain."""
-        return self._result.params.maxit
+        return self._result.params.max_iter
 
     @property
     def incomplete_columns(self) -> tuple[int, ...]:
@@ -63,13 +63,13 @@ class MICESolution(SolutionReprMixin):
         return self._result.params.visit_sequence
 
     # ------------------------------------------------------ completed datasets
-    def completed(self, i: int) -> NDArray[np.floating[Any]]:
-        """The ``i``-th completed dataset (n x p), 0-based."""
-        if not (0 <= i < self.n_imputations):
+    def completed(self, index: int) -> NDArray[np.floating[Any]]:
+        """The ``index``-th completed dataset (n x p), 0-based."""
+        if not (0 <= index < self.n_imputations):
             raise ValidationError(
-                f"imputation index {i} out of range [0, {self.n_imputations})"
+                f"imputation index {index} out of range [0, {self.n_imputations})"
             )
-        return self._result.params.completed[i]
+        return self._result.params.completed[index]
 
     def completed_datasets(self) -> list[NDArray[np.floating[Any]]]:
         """All ``m`` completed datasets as a list of (n x p) arrays."""
@@ -97,12 +97,12 @@ class MICESolution(SolutionReprMixin):
     # ----------------------------------------------------------- diagnostics
     @property
     def chain_mean(self) -> NDArray[np.floating[Any]]:
-        """Per-iteration mean of imputed cells, shape (m, maxit, n_incomplete)."""
+        """Per-iteration mean of imputed cells, (n_imputations, max_iter, n_incomplete)."""
         return self._result.params.chain_mean
 
     @property
     def chain_var(self) -> NDArray[np.floating[Any]]:
-        """Per-iteration variance of imputed cells, (m, maxit, n_incomplete)."""
+        """Per-iteration variance of imputed cells, (n_imputations, max_iter, n_incomplete)."""
         return self._result.params.chain_var
 
     # ------------------------------------------------------------- metadata

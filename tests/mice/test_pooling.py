@@ -18,7 +18,7 @@ class TestRubinHandComputed:
         assert res.within == pytest.approx(0.5)
         assert res.between == pytest.approx(2.0)
         assert res.total == pytest.approx(3.5)
-        assert res.se == pytest.approx(np.sqrt(3.5))
+        assert res.standard_errors == pytest.approx(np.sqrt(3.5))
         assert res.riv == pytest.approx(6.0)
         assert res.lambda_ == pytest.approx(3.0 / 3.5)
         # df_old = (m-1)/lambda^2 = 1 / (3/3.5)^2
@@ -40,12 +40,34 @@ class TestRubinHandComputed:
 class TestCI:
     def test_ci_brackets_estimate(self):
         res = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6])
-        assert res.ci_low < res.estimate < res.ci_high
+        assert res.ci_lower < res.estimate < res.ci_upper
 
-    def test_alpha_widens_ci(self):
-        narrow = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6], alpha=0.10)
-        wide = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6], alpha=0.01)
-        assert (wide.ci_high - wide.ci_low) > (narrow.ci_high - narrow.ci_low)
+    def test_higher_conf_level_widens_ci(self):
+        narrow = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6], conf_level=0.90)
+        wide = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6], conf_level=0.99)
+        assert (wide.ci_upper - wide.ci_lower) > (narrow.ci_upper - narrow.ci_lower)
+
+    def test_conf_int_property_shape_and_values(self):
+        # Scalar pooling -> (1, 2); rows are [lower, upper].
+        res = pool([1.0, 2.0, 3.0], [0.4, 0.5, 0.6])
+        ci = res.conf_int
+        assert ci.shape == (1, 2)
+        assert ci[0, 0] == pytest.approx(res.ci_lower)
+        assert ci[0, 1] == pytest.approx(res.ci_upper)
+
+    def test_conf_level_095_matches_old_alpha_005(self):
+        # The conf_level convention (0.95) must reproduce the CI bounds the old
+        # alpha=0.05 significance-level convention produced: both are 95% CIs.
+        from scipy import stats
+
+        q, u = [1.0, 2.0, 3.0], [0.4, 0.5, 0.6]
+        res = pool(q, u, conf_level=0.95)
+        # Recompute the old alpha=0.05 bounds directly: tcrit = t.ppf(1 - 0.05/2, df).
+        tcrit = stats.t.ppf(1.0 - 0.05 / 2.0, res.df)
+        expected_lo = res.estimate - tcrit * res.standard_errors
+        expected_hi = res.estimate + tcrit * res.standard_errors
+        assert res.ci_lower == pytest.approx(expected_lo)
+        assert res.ci_upper == pytest.approx(expected_hi)
 
 
 class TestBarnardRubinDf:
@@ -54,14 +76,14 @@ class TestBarnardRubinDf:
         # is smaller than the dfcom->inf (classic Rubin) value.
         q, u = [1.0, 3.0, 2.0], [0.5, 0.5, 0.5]
         inf_df = pool(q, u).df
-        finite = pool(q, u, dfcom=10.0)
+        finite = pool(q, u, df_complete=10.0)
         assert finite.df < inf_df
         assert finite.df <= 10.0
 
     def test_large_dfcom_approaches_classic(self):
         q, u = [1.0, 3.0, 2.0], [0.5, 0.5, 0.5]
         classic = pool(q, u).df
-        big = pool(q, u, dfcom=1e8).df
+        big = pool(q, u, df_complete=1e8).df
         assert big == pytest.approx(classic, rel=1e-3)
 
 
@@ -81,7 +103,9 @@ class TestVectorPooling:
         vec = pool(Q, U)
         s0 = pool(Q[:, 0], U[:, 0])
         s1 = pool(Q[:, 1], U[:, 1])
-        np.testing.assert_allclose(vec.se, [s0.se, s1.se])
+        np.testing.assert_allclose(
+            vec.standard_errors, [s0.standard_errors, s1.standard_errors]
+        )
         np.testing.assert_allclose(vec.df, [s0.df, s1.df])
 
 
@@ -103,14 +127,14 @@ class TestPoolingValidation:
         with pytest.raises(ValidationError):
             pool([1.0, 2.0], [0.5, -0.1])
 
-    @pytest.mark.parametrize("bad_alpha", [0.0, 1.0, -0.1, 2.0])
-    def test_bad_alpha_rejected(self, bad_alpha):
+    @pytest.mark.parametrize("bad_conf_level", [0.0, 1.0, -0.1, 2.0])
+    def test_bad_conf_level_rejected(self, bad_conf_level):
         with pytest.raises(ValidationError):
-            pool([1.0, 2.0], [0.5, 0.5], alpha=bad_alpha)
+            pool([1.0, 2.0], [0.5, 0.5], conf_level=bad_conf_level)
 
-    def test_bad_dfcom_rejected(self):
+    def test_bad_df_complete_rejected(self):
         with pytest.raises(ValidationError):
-            pool([1.0, 2.0], [0.5, 0.5], dfcom=-5.0)
+            pool([1.0, 2.0], [0.5, 0.5], df_complete=-5.0)
 
     def test_3d_rejected(self):
         with pytest.raises(ValidationError):
@@ -135,8 +159,8 @@ class TestEndToEndWithMice:
             slopes.append(beta[1])
             variances.append(cov[1, 1])
 
-        res = pool(slopes, variances, dfcom=120 - 2)
+        res = pool(slopes, variances, df_complete=120 - 2)
         # True slope = cov(0,1)/var(1) = 0.6 / 1.0 = 0.6 for the default cov.
-        assert res.ci_low < 0.6 < res.ci_high
+        assert res.ci_lower < 0.6 < res.ci_upper
         assert 0.0 <= res.fmi <= 1.0
         assert res.n_imputations == 8

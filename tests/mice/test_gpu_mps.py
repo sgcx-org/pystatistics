@@ -126,7 +126,7 @@ class TestMpsMatchesCpu:
                 s2 = resid @ resid / (len(d) - 3)
                 est.append(beta)
                 var.append(np.diag(s2 * np.linalg.inv(X.T @ X)))
-            return pool(np.array(est), np.array(var), dfcom=len(miss) - 3)
+            return pool(np.array(est), np.array(var), df_complete=len(miss) - 3)
 
         m = 30
         cpu = pooled(mice(miss, n_imputations=m, max_iter=10, method=method, seed=7, backend="cpu"))

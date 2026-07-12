@@ -183,16 +183,16 @@ class GPUMiceBackend:
             chain_mean=chain_mean_host,
             chain_var=chain_var_host,
             incomplete_columns=incomplete,
-            m=m,
-            maxit=maxit,
+            n_imputations=m,
+            max_iter=maxit,
             visit_sequence=visit_sequence,
         )
         return Result(
             params=params,
             info={
                 "method": "chained_equations",
-                "m": m,
-                "maxit": maxit,
+                "n_imputations": m,
+                "max_iter": maxit,
                 "device": self.device,
                 "precision": "fp64" if self.use_fp64 else "fp32",
                 "visit_sequence": list(visit_sequence),

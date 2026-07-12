@@ -110,7 +110,7 @@ class TestPmmDonorProperty:
                 assert round(float(v), 8) in observed
 
 
-def _pooled_lm(sol, dfcom):
+def _pooled_lm(sol, df_complete):
     """Pool lm(x0 ~ x1 + x2) across completed datasets with Rubin's rules."""
     estimates, variances = [], []
     for d in sol.completed_datasets():
@@ -122,7 +122,7 @@ def _pooled_lm(sol, dfcom):
         cov = sigma2 * np.linalg.inv(X.T @ X)
         estimates.append(beta)
         variances.append(np.diag(cov))
-    return pool(np.array(estimates), np.array(variances), dfcom=dfcom)
+    return pool(np.array(estimates), np.array(variances), df_complete=df_complete)
 
 
 @pytest.mark.parametrize("method", ["pmm", "norm"])
@@ -130,7 +130,7 @@ class TestPooledRegression:
     def test_pooled_estimates_match_r(self, method, reference, incomplete_matrix):
         sol = _our_solution(incomplete_matrix, method, reference)
         n = incomplete_matrix.shape[0]
-        res = _pooled_lm(sol, dfcom=n - 3)
+        res = _pooled_lm(sol, df_complete=n - 3)
 
         r_pool = reference[method]["pooled_lm_x0"]
         r_est = np.asarray(r_pool["estimate"], dtype=float)
@@ -143,10 +143,10 @@ class TestPooledRegression:
     def test_pooled_std_errors_comparable(self, method, reference, incomplete_matrix):
         sol = _our_solution(incomplete_matrix, method, reference)
         n = incomplete_matrix.shape[0]
-        res = _pooled_lm(sol, dfcom=n - 3)
+        res = _pooled_lm(sol, df_complete=n - 3)
         r_se = np.asarray(reference[method]["pooled_lm_x0"]["std.error"], dtype=float)
         # SEs include between-imputation variance, so looser tolerance.
         np.testing.assert_allclose(
-            np.asarray(res.se), r_se, rtol=0.5,
-            err_msg=f"{method}: pooled SEs ours={res.se} R={r_se}",
+            np.asarray(res.standard_errors), r_se, rtol=0.5,
+            err_msg=f"{method}: pooled SEs ours={res.standard_errors} R={r_se}",
         )

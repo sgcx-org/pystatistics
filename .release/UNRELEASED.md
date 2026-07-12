@@ -39,3 +39,16 @@ commits; this section accumulates them.
   Resolves the previous collision where the bare name `p` meant three different
   things (expected proportions, a null proportion, and a p-value vector) and the
   bare `n`/`B` were single-letter public parameters.
+
+**`mice` — uniform accessors and confidence-level convention:**
+
+- `pool(dfcom=)` → `pool(df_complete=)`.
+- `pool(alpha=)` → `pool(conf_level=)`. The value convention is now the
+  library-wide confidence level (default `0.95`), not a significance level
+  (was `0.05`); pooled interval bounds are unchanged for the equivalent request.
+- `MICESolution.completed(i)` → `completed(index)`.
+- `PooledSolution.se` → `.standard_errors`; `.ci_low`/`.ci_high` →
+  `.ci_lower`/`.ci_upper`, and a new `.conf_int` accessor returns a `(k, 2)`
+  array of `[lower, upper]` per pooled estimate.
+- The metadata `.info` dict keys `"m"`/`"maxit"` are now `"n_imputations"`/
+  `"max_iter"`, matching the public parameter names.

@@ -76,16 +76,16 @@ class CPUMiceBackend:
             chain_mean=chain_means,
             chain_var=chain_vars,
             incomplete_columns=design.incomplete_columns,
-            m=m,
-            maxit=maxit,
+            n_imputations=m,
+            max_iter=maxit,
             visit_sequence=visit_sequence,
         )
         return Result(
             params=params,
             info={
                 "method": "chained_equations",
-                "m": m,
-                "maxit": maxit,
+                "n_imputations": m,
+                "max_iter": maxit,
                 "device": "cpu",
                 "visit_sequence": list(visit_sequence),
             },

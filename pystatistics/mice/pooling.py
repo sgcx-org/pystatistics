@@ -42,11 +42,11 @@ class PooledSolution(SolutionReprMixin):
     (one entry per quantity) when several were pooled together.
     """
 
-    estimate: NDArray[np.floating[Any]] | float   # Qbar
-    se: NDArray[np.floating[Any]] | float          # sqrt(T)
-    df: NDArray[np.floating[Any]] | float          # Barnard-Rubin df
-    ci_low: NDArray[np.floating[Any]] | float
-    ci_high: NDArray[np.floating[Any]] | float
+    estimate: NDArray[np.floating[Any]] | float             # Qbar
+    standard_errors: NDArray[np.floating[Any]] | float       # sqrt(T)
+    df: NDArray[np.floating[Any]] | float                    # Barnard-Rubin df
+    ci_lower: NDArray[np.floating[Any]] | float
+    ci_upper: NDArray[np.floating[Any]] | float
     within: NDArray[np.floating[Any]] | float      # Ubar
     between: NDArray[np.floating[Any]] | float      # B
     total: NDArray[np.floating[Any]] | float        # T
@@ -54,22 +54,33 @@ class PooledSolution(SolutionReprMixin):
     lambda_: NDArray[np.floating[Any]] | float      # proportion of variance from missingness
     fmi: NDArray[np.floating[Any]] | float          # fraction of missing information
     n_imputations: int
-    alpha: float
+    conf_level: float
+
+    @property
+    def conf_int(self) -> NDArray[np.floating[Any]]:
+        """Confidence intervals as a ``(k, 2)`` array of ``[lower, upper]`` rows.
+
+        One row per pooled estimate (``k`` rows), even for a single scalar
+        estimate (which yields a ``(1, 2)`` array).
+        """
+        lo = np.atleast_1d(self.ci_lower)
+        hi = np.atleast_1d(self.ci_upper)
+        return np.column_stack([lo, hi])
 
     def summary(self) -> str:
         """R-style summary of the pooled inference (mirrors ``mice::summary.mipo``).
 
         One row per pooled quantity: estimate, standard error, Barnard-Rubin
-        df, the confidence interval at level ``1 - alpha``, and the fraction of
+        df, the confidence interval at level ``conf_level``, and the fraction of
         missing information.
         """
         est = np.atleast_1d(self.estimate)
-        se = np.atleast_1d(self.se)
+        se = np.atleast_1d(self.standard_errors)
         df = np.atleast_1d(self.df)
-        lo = np.atleast_1d(self.ci_low)
-        hi = np.atleast_1d(self.ci_high)
+        lo = np.atleast_1d(self.ci_lower)
+        hi = np.atleast_1d(self.ci_upper)
         fmi = np.atleast_1d(self.fmi)
-        conf = round((1.0 - self.alpha) * 100)
+        conf = round(self.conf_level * 100)
 
         lines = [
             "Pooled estimates (Rubin's rules)",
@@ -92,8 +103,8 @@ def pool(
     estimates,
     variances,
     *,
-    dfcom: float | None = None,
-    alpha: float = 0.05,
+    df_complete: float | None = None,
+    conf_level: float = 0.95,
 ) -> PooledSolution:
     """Pool ``m`` estimates and their variances with Rubin's rules.
 
@@ -105,12 +116,12 @@ def pool(
     variances : array-like
         Within-imputation variances ``U_i`` — the *squared* standard errors of
         the corresponding estimates. Same shape as ``estimates``.
-    dfcom : float, optional
+    df_complete : float, optional
         Complete-data degrees of freedom (e.g. ``n - p`` for a linear model).
         Used for the Barnard-Rubin df adjustment. If None, treated as infinite
         (no small-sample adjustment), which reduces to the classic Rubin df.
-    alpha : float
-        Significance level for the confidence interval (default 0.05 -> 95% CI).
+    conf_level : float
+        Confidence level for the confidence interval (default 0.95 -> 95% CI).
 
     Returns
     -------
@@ -137,12 +148,12 @@ def pool(
         raise ValidationError("need at least one imputation to pool")
     if np.any(U < 0):
         raise ValidationError("variances must be non-negative (they are squared SEs)")
-    if not (0.0 < alpha < 1.0):
-        raise ValidationError(f"alpha must be in (0, 1), got {alpha}")
+    if not (0.0 < conf_level < 1.0):
+        raise ValidationError(f"conf_level must be in (0, 1), got {conf_level}")
 
-    dfcom_val = np.inf if dfcom is None else float(dfcom)
-    if dfcom_val <= 0:
-        raise ValidationError(f"dfcom must be positive, got {dfcom}")
+    df_complete_val = np.inf if df_complete is None else float(df_complete)
+    if df_complete_val <= 0:
+        raise ValidationError(f"df_complete must be positive, got {df_complete}")
 
     qbar = Q.mean(axis=0)
     ubar = U.mean(axis=0)
@@ -157,11 +168,12 @@ def pool(
         riv = np.where(ubar > 0, (1.0 + 1.0 / m) * between / ubar, 0.0)
         lam = np.where(total > 0, (1.0 + 1.0 / m) * between / total, 0.0)
 
-    df = _barnard_rubin_df(m, lam, dfcom_val)
+    df = _barnard_rubin_df(m, lam, df_complete_val)
     fmi = (riv + 2.0 / (df + 3.0)) / (riv + 1.0)
 
     # t-based CI; scipy handles df = inf as the normal limit.
-    tcrit = stats.t.ppf(1.0 - alpha / 2.0, df)
+    tail = (1.0 + conf_level) / 2.0
+    tcrit = stats.t.ppf(tail, df)
     ci_low = qbar - tcrit * se
     ci_high = qbar + tcrit * se
 
@@ -170,10 +182,10 @@ def pool(
 
     return PooledSolution(
         estimate=out(qbar),
-        se=out(se),
+        standard_errors=out(se),
         df=out(df),
-        ci_low=out(ci_low),
-        ci_high=out(ci_high),
+        ci_lower=out(ci_low),
+        ci_upper=out(ci_high),
         within=out(ubar),
         between=out(between),
         total=out(total),
@@ -181,29 +193,29 @@ def pool(
         lambda_=out(lam),
         fmi=out(fmi),
         n_imputations=m,
-        alpha=alpha,
+        conf_level=conf_level,
     )
 
 
-def _barnard_rubin_df(m: int, lam: NDArray, dfcom: float) -> NDArray:
+def _barnard_rubin_df(m: int, lam: NDArray, df_complete: float) -> NDArray:
     """Barnard & Rubin (1999) degrees of freedom.
 
-    Reduces to the classic Rubin df ``(m-1)/lambda^2`` as ``dfcom -> inf``.
+    Reduces to the classic Rubin df ``(m-1)/lambda^2`` as ``df_complete -> inf``.
     Handles ``lambda == 0`` (no between-imputation variance) by returning
-    ``dfcom`` — the complete-data df — which is the correct limit.
+    ``df_complete`` — the complete-data df — which is the correct limit.
     """
     lam = np.asarray(lam, dtype=np.float64)
     if m <= 1:
-        return np.full_like(lam, dfcom)
+        return np.full_like(lam, df_complete)
 
     # Where lambda == 0, df_old is infinite; guard the division.
     with np.errstate(divide="ignore", invalid="ignore"):
         df_old = np.where(lam > 0, (m - 1) / np.square(lam), np.inf)
 
-    if np.isinf(dfcom):
+    if np.isinf(df_complete):
         return df_old
 
-    df_obs = (dfcom + 1.0) / (dfcom + 3.0) * dfcom * (1.0 - lam)
+    df_obs = (df_complete + 1.0) / (df_complete + 3.0) * df_complete * (1.0 - lam)
     with np.errstate(divide="ignore", invalid="ignore"):
         df = np.where(
             np.isinf(df_old),
