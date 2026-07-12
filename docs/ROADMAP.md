@@ -212,8 +212,51 @@ they all die together in one clean break, not in a trickle of small majors.
 
 | Deprecated | Replacement | Deprecated in | **Remove in** | Notes |
 |---|---|---|---|---|
-| `mvnmle.mlest(backend='cpu-reference')` | `mvnmle.mlest(solver='reference')` | 4.6.13 | **5.0** | `backend=` is reserved for device+precision; the reference numpy inverse-Cholesky path is a `solver` (numerical-routine) choice. The alias warns and forwards; delete the alias branch in `mvnmle/solvers.mlest` and drop `'cpu-reference'` from `BackendChoice`. |
-| `gam` `SmoothInfo.lambda_` / `.s_scale` | `SmoothInfo.lambdas` / `.s_scales` | 4.8.0 | **5.0** | A tensor `te()`/`ti()` smooth carries one smoothing parameter *per margin*, so the per-term accessors became tuples; the scalar aliases warn and return the first entry. Delete the two `@property` shims on `gam._common.SmoothInfo`. |
+| _(none currently scheduled)_ | | | | The two 5.0-scheduled shims (`mvnmle` `backend='cpu-reference'` and `gam` `SmoothInfo.lambda_`/`.s_scale`) were removed in the 5.0 cut. |
+
+### 5.0 consistency-sweep findings (parked, preliminary)
+
+The two rows above are genuinely shimmed (live `DeprecationWarning`). The items
+below are v1-regret API smells surfaced by the pre-launch consistency sweep
+(v4.8.0, whole public surface). They are **not shimmed yet** — they are hard
+naming-law violations queued for the single 5.0 break. Full rationale, exact
+source locations, and the deferred/accepted items live in the sweep report:
+`pystatistics-validation/handoffs/v5.0-consistency-sweep.md`. This list is
+preliminary; in-depth adjudication happens during the 5.0 procedure.
+
+**Tier A — breaking renames to apply at the 5.0 cut** (no shim; library default
+hard-rename policy):
+
+| Module | Current | → 5.0 | Law |
+|---|---|---|---|
+| regression / anova | `anova()` (two unrelated callables) | regression's → `deviance_table` | S0 |
+| hypothesis | `chisq_test(p=)` / `prop_test(p=)` / `p_adjust(p=)` (bare `p`, 3 meanings) | `expected_probs` / `null_value` / `p_values` | S0 + S1 |
+| hypothesis | `chisq_test(B=)`, `fisher_test(B=)` | `n_resamples` | S1 + reserved |
+| hypothesis | `prop_test(n=)` / `p_adjust(n=)` | `n_trials` / `n_comparisons` | S1 |
+| timeseries | `decompose(type=)` | `kind` | S3 builtin |
+| timeseries | `forecast_ets(h)` / `forecast_arima(h)` | `n_ahead` | S1 |
+| timeseries | `ndiffs(alpha=)` (vs `ets(alpha=)`) | `significance` | S0 |
+| timeseries | `auto_arima(allowdrift=)` | `allow_drift` | S1 |
+| regression | `family='negative.binomial'` / `'inverse.gaussian'` (+ emitted `.family_name`) | `'negative-binomial'` / `'inverse-gaussian'` | S2 / A1 |
+| regression | `ridge(lam=)` | `l2` | reserved drift |
+| regression | `family='Gamma'` / class `GammaFamily` (odd casing/suffix) | `.name→'gamma'`; class `Gamma` (+ alias) | S0 consistency |
+| mixed | `grm_lmm(W=)` | `random_factor` | S1 |
+| mice | `pool(dfcom=)` / `MICESolution.completed(i)` | `df_complete` / `index` | S1 |
+| montecarlo | `BootstrapSolution.R` / `PermutationSolution.R` | `.n_resamples` | S1 (accessor leftover) |
+| montecarlo | `BootstrapSolution.se` / `.ci` / `.sim` | `.standard_errors` / `.conf_int` / `.method` | uniform accessor |
+| montecarlo | `boot_ci` values `"perc"` / `"stud"` | `"percentile"` / `"studentized"` | A1 |
+| mice | `PooledSolution.se` | `.standard_errors` | uniform accessor |
+
+**Tier B — pure additions (4.x-minor eligible, not gated on the major):** add
+missing envelope/uniform accessors and fix one warning string — see the sweep
+report (B1–B10). Notably `mvnmle/solvers.py:480` currently recommends the
+*deprecated* `backend='cpu-reference'` in a fallback warning; it should say
+`solver='reference'`.
+
+**Accepted (no 5.0 action), preliminary defaults:** keep `data`/`data_or_design`
+on mvnmle/mice (amendment candidate, not a rename); keep single-letter `k` in gam
+`s()/te()/ti()` as a documented mgcv-canonical S1 exemption; keep
+`ETSForecast`/`ARIMAForecast` as bare forecast dataclasses.
 
 ## Contributing
 

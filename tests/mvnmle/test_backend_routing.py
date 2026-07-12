@@ -4,11 +4,11 @@ Routing/API tests for the direct MVN MLE CPU backends.
 Covers the dispatch contract that ``mlest(method='direct')`` exposes:
 - the default / ``backend='cpu'`` path is the fast PyTorch forward-Cholesky
   FP64 estimator,
-- ``backend='cpu-reference'`` forces the numpy inverse-Cholesky reference
+- ``solver='reference'`` forces the numpy inverse-Cholesky reference
   (the R-exact validation anchor, and the only direct path needing no PyTorch),
 - when PyTorch is unavailable the default path falls back to the reference
   *loudly* (Rule 1), while the explicit reference request stays silent,
-- ``backend='cpu-reference'`` is rejected for non-direct algorithms.
+- ``solver='reference'`` is rejected for non-direct algorithms.
 
 These are dispatch tests; numerical R-agreement lives in test_mlest.py.
 """
@@ -54,8 +54,7 @@ class TestDefaultPath:
 
 
 class TestReferencePath:
-    """``solver='reference'`` selects the numpy inverse-Cholesky path;
-    ``backend='cpu-reference'`` is the deprecated alias."""
+    """``solver='reference'`` selects the numpy inverse-Cholesky path."""
 
     def test_reference_solver_uses_numpy_inverse_cholesky(self):
         result = mlest(datasets.apple, solver='reference')
@@ -71,13 +70,6 @@ class TestReferencePath:
         with warnings.catch_warnings():
             warnings.simplefilter('error')  # any warning fails the test
             result = mlest(datasets.apple, solver='reference')
-        assert _info(result)['parameterization'] == 'inverse_cholesky'
-
-    def test_deprecated_cpu_reference_alias_warns_but_works(self):
-        """backend='cpu-reference' still selects the reference path but emits a
-        DeprecationWarning redirecting to solver='reference'."""
-        with pytest.warns(DeprecationWarning, match="solver='reference'"):
-            result = mlest(datasets.apple, backend='cpu-reference')
         assert _info(result)['parameterization'] == 'inverse_cholesky'
 
     @pytest.mark.parametrize('algorithm', ['em', 'monotone'])
@@ -107,7 +99,7 @@ class TestFastReferenceAgreement:
         with open(REFERENCES / "apple_reference.json") as f:
             ref = json.load(f)
         fast = mlest(datasets.apple, backend='cpu')
-        reference = mlest(datasets.apple, backend='cpu-reference')
+        reference = mlest(datasets.apple, solver='reference')
         # Both match R...
         assert abs(fast.loglik - ref['loglik']) < 1e-7
         assert abs(reference.loglik - ref['loglik']) < 1e-7

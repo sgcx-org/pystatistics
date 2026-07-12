@@ -219,7 +219,7 @@ class TestMlestDegeneracyGuard:
         # platform-sensitive — so the relaxation window there is not a stable
         # thing to assert on. The default path's *raise* on collinear input is
         # covered by test_direct_collinear_raises.)
-        res = mlest(X, backend="cpu-reference", method="direct",
+        res = mlest(X, solver="reference", method="direct",
                     collinearity_tol=1e-9)
         assert res is not None  # no SingularMatrixError
 

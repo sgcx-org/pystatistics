@@ -16,9 +16,7 @@ from pystatistics.mvnmle.solution import MVNSolution
 from pystatistics.mvnmle.backends.cpu import CPUMLEBackend
 
 
-# 'cpu-reference' is an mvnmle-specific solver selection (the R-exact numpy
-# reference), handled before the canonical (device, precision) resolver.
-BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64', 'cpu-reference']
+BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64']
 AlgorithmChoice = Literal['direct', 'em', 'monotone']
 
 
@@ -51,7 +49,7 @@ def mlest(
         - 'direct' (default): gradient-based optimization on the
           log-likelihood. The parameterization depends on the backend (see
           ``backend``): the default CPU path uses a forward-Cholesky
-          factorization; ``backend='cpu-reference'`` uses the R-exact inverse
+          factorization; ``solver='reference'`` uses the R-exact inverse
           Cholesky parameterization.
         - 'em': Expectation-Maximization algorithm. Typically slower to
           converge but guaranteed monotone likelihood increase.
@@ -71,9 +69,6 @@ def mlest(
         - 'gpu_fp64': require CUDA, float64 (raises on MPS, which has no
           float64) — CPU-matching precision on the GPU.
         - 'auto': prefer CUDA (float32) when present, else the fast CPU path.
-        - 'cpu-reference': DEPRECATED alias for ``solver='reference'`` (removed
-          in a future major release). It overloaded ``backend=``, which encodes
-          only device+precision; the reference routine is a ``solver`` choice.
     solver : str or None
         Numerical routine for the direct method. If None, auto-selected by
         backend. ``'reference'`` selects the R-exact numpy inverse-Cholesky
@@ -115,25 +110,10 @@ def mlest(
     if backend is None:
         backend = 'cpu'
 
-    # The R-exact numpy inverse-Cholesky reference is selected canonically by
-    # ``solver='reference'`` (a numerical-routine choice, per CONVENTIONS).
-    # ``backend='cpu-reference'`` is the DEPRECATED alias — it overloaded the
-    # ``backend=`` axis, which the constitution reserves for device+precision.
-    if backend == 'cpu-reference':
-        warnings.warn(
-            "backend='cpu-reference' is deprecated and will be removed in a "
-            "future major release. Use solver='reference' instead (with the "
-            "default 'cpu' backend): mlest(X, solver='reference').",
-            DeprecationWarning, stacklevel=2,
-        )
-        if solver is not None and solver != 'reference':
-            raise ValidationError(
-                f"backend='cpu-reference' conflicts with solver={solver!r}. "
-                f"Request the reference path with solver='reference' alone."
-            )
-        backend = 'cpu'
-        solver = 'reference'
-
+    # The R-exact numpy inverse-Cholesky reference is selected by
+    # ``solver='reference'`` (a numerical-routine choice, per CONVENTIONS) — a
+    # ``solver`` axis choice, never a ``backend`` (device+precision) one.
+    #
     # The numpy inverse-Cholesky reference is a direct-method routine; it has no
     # meaning for EM or the closed-form monotone solver. Fail loud (Rule 1)
     # rather than silently ignoring the request.
@@ -465,8 +445,8 @@ def _fast_cpu_backend(implicit: bool):
 
     Per Rule 1 (no silent fallbacks), an *implicit* fallback — the user asked
     for the default/'cpu'/'auto' and got the reference because PyTorch is
-    missing — is surfaced via ``UserWarning``. An explicit ``backend=
-    'cpu-reference'`` request is silent (handled by the caller).
+    missing — is surfaced via ``UserWarning``. An explicit ``solver='reference'``
+    request is silent (handled by the caller).
     """
     try:
         import torch  # noqa: F401
@@ -477,7 +457,7 @@ def _fast_cpu_backend(implicit: bool):
                 "numpy inverse-Cholesky reference. This path is correct and "
                 "R-validated but substantially slower than the PyTorch "
                 "forward-Cholesky path. Install 'pystatistics[gpu]' for the "
-                "fast path, or pass backend='cpu-reference' to select the "
+                "fast path, or pass solver='reference' to select the "
                 "reference explicitly and silence this warning.",
                 UserWarning, stacklevel=4,
             )
@@ -489,16 +469,12 @@ def _fast_cpu_backend(implicit: bool):
 def _get_backend(choice: BackendChoice, verbose: bool = False):
     """Select the direct-MLE backend from the resolved (device, precision) target.
 
-    ``'cpu-reference'`` is an mvnmle-specific *solver* selection (the R-exact
-    numpy reference path), not a device/precision request, so it is handled
-    before the canonical resolver. Everything else goes through
-    :func:`resolve_backend`: 'cpu'/None -> the fast forward-Cholesky CPU path,
-    'gpu' -> float32, 'gpu_fp64' -> CUDA float64, 'auto' -> CUDA-float32 or CPU.
+    The reference numpy path is not selected here — it is a ``solver``
+    ('reference') choice handled in :func:`_solve_direct`. This resolver only
+    maps the (device, precision) ``backend`` axis via :func:`resolve_backend`:
+    'cpu'/None -> the fast forward-Cholesky CPU path, 'gpu' -> float32,
+    'gpu_fp64' -> CUDA float64, 'auto' -> CUDA-float32 or CPU.
     """
-    if choice == 'cpu-reference':
-        # Explicit opt-in to the R-exact numpy reference; no PyTorch needed.
-        return CPUMLEBackend()
-
     target = resolve_backend(choice, supports_fp64=True)
     if target.device_type == 'cpu':
         return _fast_cpu_backend(implicit=True)
