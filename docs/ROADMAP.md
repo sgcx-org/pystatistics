@@ -1,10 +1,13 @@
 # PyStatistics Roadmap
 
-**Software Version:** 4.0
-**Last Updated:** June 2026
+**Software Version:** 5.0
+**Last Updated:** July 2026
 
-> 4.0 is the API-consistency release; the binding API rules (naming, backends,
-> result objects, errors) live in `pystatistics/CONVENTIONS.md`.
+> 5.0 is the pre-launch consistency release: the mainstream corpus is
+> feature-complete and validated against R, and the public API has had its
+> one-time breaking cleanup. The binding API rules (naming, backends, result
+> objects, errors) live in `pystatistics/CONVENTIONS.md`; the full list of 5.0
+> renames is the "5.0 migration table" there.
 
 ---
 
@@ -49,7 +52,7 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **GPU backends**: PyTorch for both direct and EM
 - **Validated**: Against R `mvnmle` + `norm` packages
 - **Includes**: Little's MCAR test, missingness pattern analysis
-- **API**: `mlest(data) → MVNSolution`, `mlest(data, algorithm='em') → MVNSolution`
+- **API**: `mlest(data) → MVNSolution`, `mlest(data, method='em') → MVNSolution`
 
 #### `regression/` — Generalized Linear Models (GLM)
 - **Families**: Gaussian (identity), Binomial (logit), Poisson (log)
@@ -69,17 +72,17 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 #### `hypothesis/` — Hypothesis Testing
 - **CPU backend**: t-test (one-sample, two-sample Welch/pooled, paired), Pearson's chi-squared (independence with Yates, GOF), Fisher's exact test (2×2 with conditional MLE OR + CI, r×c Monte Carlo), Wilcoxon signed-rank and rank-sum (exact + normal approximation, Hodges-Lehmann CI), Kolmogorov-Smirnov (one-sample against distributions, two-sample), proportion test (chi-squared based with Wilson score CI), F-test for variances, p.adjust (8 methods: none, bonferroni, holm, hochberg, hommel, BH, BY, fdr)
 - **GPU backend**: Monte Carlo simulation only (chi-squared independence/GOF, Fisher r×c). Hybrid approach: Patefield's algorithm on CPU for table generation, batched statistic computation on GPU. All scalar tests (t, Wilcoxon, KS, prop, var) are CPU-only by design — GPU overhead would dominate O(n) operations.
-- **R `htest` structure**: All tests return `HTestParams` matching R's `htest` class (statistic, parameter, p.value, conf.int, estimate, null.value, alternative, method, data.name)
+- **R `htest` structure**: All tests return an `HTestSolution` whose accessors mirror R's `htest` class (statistic, parameter, `.p_value`, `.conf_int`, estimate, `.null_value`, alternative, method, data name)
 - **Validated**: 18 fixture scenarios against R 4.5.2 — 71 parametrized R validation tests; t-test/chi-squared/prop/KS/var at rtol=1e-10, Fisher OR/CI at rtol=2e-2 (Brent solver vs R exact), Wilcoxon CI algorithmically different (Walsh averages vs R's uniroot)
-- **API**: `t_test(x, y)`, `chisq_test(x)`, `fisher_test(x)`, `wilcox_test(x, y)`, `ks_test(x, y)`, `prop_test(x, n)`, `var_test(x, y)`, `p_adjust(p)`
+- **API**: `t_test(x, y)`, `chisq_test(x)`, `fisher_test(x)`, `wilcox_test(x, y)`, `ks_test(x, y)`, `prop_test(x, n_trials)`, `var_test(x, y)`, `p_adjust(p_values)`
 
 #### `montecarlo/` — Monte Carlo Methods
 - **CPU backend**: Bootstrap resampling (ordinary, balanced, parametric with ran_gen/mle), permutation testing (two-sample, Phipson-Smyth corrected p-values), five bootstrap CI methods (normal, basic, percentile, BCa, studentized), jackknife influence values for BCa acceleration
 - **GPU backend**: Falls back to CPU for arbitrary user statistics (Python functions cannot run on GPU). GPU acceleration is via the batched multi-problem OLS solver in `core/compute/linalg/batched.py` — one Cholesky factorization for X'X, then k triangular solves for k bootstrap replicates. 10,000 bootstrap regression replicates ≈ time of 2 sequential regressions.
 - **Batched solver**: `batched_ols_solve(X, Y, device)` in `core/compute/linalg/batched.py`. CPU: Cholesky + triangular solve via scipy. GPU: PyTorch Cholesky + torch.linalg.solve_triangular in FP32. Validated against individual `np.linalg.lstsq` to rtol=1e-10 (CPU) and rtol=1e-4 (GPU FP32).
-- **R `boot` API match**: `boot(data, statistic, R)` where statistic receives `(data, indices)` and returns a 1D array. Three stype modes: "i" (indices), "f" (frequencies), "w" (weights). Stratified resampling. `boot_ci()` with all 5 CI types matching R's `boot.ci()`.
+- **R `boot` API match**: `boot(data, statistic, n_resamples)` where statistic receives `(data, indices)` and returns a 1D array. Three `statistic_type` modes: `'index'`, `'frequency'`, `'weight'`. Stratified resampling. `boot_ci()` with all 5 CI types matching R's `boot.ci()`.
 - **Validated**: 10 fixture scenarios against R's `boot` package — 37 parametrized R validation tests; t0 (observed statistic) at rtol=1e-10 (deterministic), bias/SE at moderate tolerance (stochastic — different RNGs), CI endpoints at abs=0.5 (stochastic), permutation p-values at abs=0.05 (stochastic). 133 total tests including unit tests.
-- **API**: `boot(data, statistic, R)`, `boot_ci(boot_out, type='all')`, `permutation_test(x, y, statistic, R)`
+- **API**: `boot(data, statistic, n_resamples)`, `boot_ci(boot_out, ci_type='all')`, `permutation_test(x, y, statistic, n_resamples)`
 
 #### `survival/` — Survival Analysis
 - **Kaplan-Meier estimator**: Product-limit S(t) = ∏(1 - d_j/n_j), Greenwood standard errors, three CI transformations (plain, log, log-log). Matches R `survival::survfit()` to rtol=1e-10.
@@ -110,13 +113,33 @@ Shared infrastructure lives in `core/`: DataSource, Result[P], device detection,
 - **Validated**: 7 fixture scenarios against R (lme4 + lmerTest) — 77 parametrized R validation tests + 74 unit tests = 151 total tests.
 - **API**: `lmm(y, X, groups)`, `glmm(y, X, groups, family='binomial')`, `LMMSolution`, `GLMMSolution`
 
-### Planned
-
 #### `timeseries/` — Time Series Analysis
-- **Priority**: LOW
-- **Scope**: TBD — likely ARIMA, state space models, spectral analysis, autocorrelation/partial autocorrelation
-- **GPU applicability**: MODERATE — depends on specific methods; Kalman filtering has sequential dependencies but spectral analysis parallelizes well
-- **R validation**: `arima()`, `forecast` package
+- **Scope**: autocorrelation (`acf`, `pacf`), differencing (`diff`, `ndiffs`), stationarity tests (`adf_test`, `kpss_test`), exponential smoothing (`ets`, `forecast_ets`) across the full Holt-Winters taxonomy, ARIMA / seasonal ARIMA with exogenous regressors (`arima`, `auto_arima`, `forecast_arima`), and decomposition (`decompose`, `stl`).
+- **GPU backend**: batched ARIMA fitting via the Whittle likelihood; the sequential Kalman/ETS paths are CPU.
+- **Validated**: against R `stats::arima` / `forecast`. Blessed at 4.6.6 (STL, seasonal AIC, ETS); xreg/drift/fixed coefficients added and validated at 4.8.0.
+- **API**: `acf`, `pacf`, `ets`, `forecast_ets`, `arima`, `auto_arima`, `forecast_arima`, `decompose`, `stl`
+
+#### `gam/` — Generalized Additive Models
+- **Smooths**: penalized regression splines (thin-plate `tp`, cubic `cr`, cyclic `cc`, P-splines `ps`), tensor-product `te()`/`ti()`, isotropic `s(x, z)`, and factor/continuous `by=` smooths.
+- **Selection**: GCV / REML smoothing-parameter selection via an analytic gradient; matches R `mgcv` to machine precision at fixed smoothing parameters and to tight tolerance under free selection.
+- **Families**: the standard exponential family plus negative-binomial with θ estimation.
+- **CPU only** — measured to have no GPU win at typical scale (documented).
+- **Validated**: against R `mgcv`. Blessed at 4.6.0; tensor smooths at 4.8.0; `by=` / `nb()` closed at 4.8.1.
+- **API**: `gam(y, terms=[s('x'), te('u', 'v'), …]) → GAMSolution`
+
+#### `ordinal/` — Ordinal Regression (proportional odds)
+- **Model**: cumulative-link models (logit, probit, loglog, cloglog, cauchit), matching R `MASS::polr`.
+- **GPU backend**: accelerated fit with an fp64 variance-covariance gate; `predict(kind='class'|'probs')`.
+- **Validated**: against `MASS::polr`. Blessed at 4.6.10.
+- **API**: `polr(y, X, link='logit') → OrdinalSolution`
+
+#### `multinomial/` — Multinomial Logistic Regression
+- **Model**: baseline-category (softmax) logit, matching R `nnet::multinom`.
+- **GPU backend**: accelerated fit; `predict(kind='class'|'probs')`.
+- **Validated**: against `nnet::multinom`. Blessed at 4.6.10.
+- **API**: `multinom(y, X) → MultinomialSolution`
+
+### Planned
 
 #### Demand-driven primitives (pulled in when a domain vertical needs them)
 
@@ -150,7 +173,13 @@ list as candidates, not commitments.
 | ~~5~~ | ~~`survival/`~~ | ~~Independent, high demand in biostatistics and clinical trials~~ ✅ |
 | ~~6~~ | ~~`anova/`~~ | ~~Thin wrapper on `regression/`; straightforward once GLM exists~~ ✅ |
 | ~~7~~ | ~~`mixed/` LMM/GLMM~~ | ~~Core primitive — any clustered/nested/longitudinal data. Own module, imports `regression.families`~~ ✅ |
-| 8 | `timeseries/` | Lowest priority for v1 |
+| ~~8~~ | ~~`timeseries/`~~ | ~~ARIMA/ETS/decomposition/stationarity; xreg at 4.8.0~~ ✅ |
+| ~~9~~ | ~~`ordinal/` + `multinomial/`~~ | ~~Cumulative-link and baseline-category logit; GPU-accelerated~~ ✅ |
+| ~~10~~ | ~~`gam/`~~ | ~~Penalized splines + tensor smooths vs `mgcv`~~ ✅ |
+
+The mainstream corpus is complete and blessed. Remaining work is the
+demand-driven primitives above, pulled in when a `pystats[domain]` vertical needs
+them.
 
 ---
 
@@ -205,58 +234,18 @@ release, and every such shim MUST appear here with its removal version so
 "deprecated" does not silently become "eternal". The major-release checklist
 (`.release/CHECKLIST.md`) requires clearing everything scheduled for that major.
 
-**This table is the `5.0` punch-list.** Per the `CONVENTIONS.md` versioning
-policy, `5.0` is the single pre-launch consistency sweep cut once the library is
-feature-complete — so keep *adding* v1-regret API smells here as they are noticed;
-they all die together in one clean break, not in a trickle of small majors.
+The pre-launch consistency sweep was cut as **5.0** — every v1-regret API smell
+it surfaced was applied there (the full list is the "5.0 migration table" in
+`CONVENTIONS.md`), and both previously-scheduled shims were removed. Nothing is
+currently scheduled for removal.
 
 | Deprecated | Replacement | Deprecated in | **Remove in** | Notes |
 |---|---|---|---|---|
-| _(none currently scheduled)_ | | | | The two 5.0-scheduled shims (`mvnmle` `backend='cpu-reference'` and `gam` `SmoothInfo.lambda_`/`.s_scale`) were removed in the 5.0 cut. |
+| _(none currently scheduled)_ | | | | |
 
-### 5.0 consistency-sweep findings (parked, preliminary)
-
-The two rows above are genuinely shimmed (live `DeprecationWarning`). The items
-below are v1-regret API smells surfaced by the pre-launch consistency sweep
-(v4.8.0, whole public surface). They are **not shimmed yet** — they are hard
-naming-law violations queued for the single 5.0 break. Full rationale, exact
-source locations, and the deferred/accepted items live in the sweep report:
-`pystatistics-validation/handoffs/v5.0-consistency-sweep.md`. This list is
-preliminary; in-depth adjudication happens during the 5.0 procedure.
-
-**Tier A — breaking renames to apply at the 5.0 cut** (no shim; library default
-hard-rename policy):
-
-| Module | Current | → 5.0 | Law |
-|---|---|---|---|
-| regression / anova | `anova()` (two unrelated callables) | regression's → `deviance_table` | S0 |
-| hypothesis | `chisq_test(p=)` / `prop_test(p=)` / `p_adjust(p=)` (bare `p`, 3 meanings) | `expected_probs` / `null_value` / `p_values` | S0 + S1 |
-| hypothesis | `chisq_test(B=)`, `fisher_test(B=)` | `n_resamples` | S1 + reserved |
-| hypothesis | `prop_test(n=)` / `p_adjust(n=)` | `n_trials` / `n_comparisons` | S1 |
-| timeseries | `decompose(type=)` | `kind` | S3 builtin |
-| timeseries | `forecast_ets(h)` / `forecast_arima(h)` | `n_ahead` | S1 |
-| timeseries | `ndiffs(alpha=)` (vs `ets(alpha=)`) | `significance` | S0 |
-| timeseries | `auto_arima(allowdrift=)` | `allow_drift` | S1 |
-| regression | `family='negative.binomial'` / `'inverse.gaussian'` (+ emitted `.family_name`) | `'negative-binomial'` / `'inverse-gaussian'` | S2 / A1 |
-| regression | `ridge(lam=)` | `l2` | reserved drift |
-| regression | `family='Gamma'` / class `GammaFamily` (odd casing/suffix) | `.name→'gamma'`; class `Gamma` (+ alias) | S0 consistency |
-| mixed | `grm_lmm(W=)` | `random_factor` | S1 |
-| mice | `pool(dfcom=)` / `MICESolution.completed(i)` | `df_complete` / `index` | S1 |
-| montecarlo | `BootstrapSolution.R` / `PermutationSolution.R` | `.n_resamples` | S1 (accessor leftover) |
-| montecarlo | `BootstrapSolution.se` / `.ci` / `.sim` | `.standard_errors` / `.conf_int` / `.method` | uniform accessor |
-| montecarlo | `boot_ci` values `"perc"` / `"stud"` | `"percentile"` / `"studentized"` | A1 |
-| mice | `PooledSolution.se` | `.standard_errors` | uniform accessor |
-
-**Tier B — pure additions (4.x-minor eligible, not gated on the major):** add
-missing envelope/uniform accessors and fix one warning string — see the sweep
-report (B1–B10). Notably `mvnmle/solvers.py:480` currently recommends the
-*deprecated* `backend='cpu-reference'` in a fallback warning; it should say
-`solver='reference'`.
-
-**Accepted (no 5.0 action), preliminary defaults:** keep `data`/`data_or_design`
-on mvnmle/mice (amendment candidate, not a rename); keep single-letter `k` in gam
-`s()/te()/ti()` as a documented mgcv-canonical S1 exemption; keep
-`ETSForecast`/`ARIMAForecast` as bare forecast dataclasses.
+Post-launch, any new deprecation is added here with its removal version so
+"deprecated" never silently becomes "eternal" — real semver, a major whenever
+something breaks.
 
 ## Contributing
 
