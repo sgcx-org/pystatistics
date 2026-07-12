@@ -1,5 +1,100 @@
 # Changelog
 
+## 4.8.0
+
+Adds three major feature areas — a full survival-analysis feature cluster
+(stratified and time-varying Cox, robust standard errors, the proportional-hazards
+test), regression with ARIMA errors and drift in the time-series models, and
+tensor-product / multivariate smooths in GAMs — along with substantial Cox
+performance and robustness improvements. All additions are validated against R.
+
+### Added
+
+**Survival analysis**
+
+- **Stratified Cox proportional hazards.** `coxph(strata=…)` fits a shared
+  coefficient vector with a separate baseline hazard (separate risk sets) per
+  stratum — the stratified partial likelihood — matching
+  `survival::coxph(Surv(t, e) ~ x + strata(g))`.
+- **Stratified Kaplan-Meier.** `kaplan_meier(strata=…)` returns one survival
+  curve per stratum (a `StratifiedKMSolution`, indexable by label), matching
+  `survfit(Surv(time, event) ~ g)`.
+- **Counting-process / time-varying Cox.** `coxph(start=…)` places each row at
+  risk on `(start, time]`, so a subject may span several rows with time-dependent
+  covariates or enter late — matching `coxph(Surv(start, stop, event) ~ x)`.
+- **Left-truncated Kaplan-Meier.** `kaplan_meier(entry=…)` for delayed-entry risk
+  sets, matching `survfit(Surv(entry, time, event) ~ 1)`.
+- **`cox_zph()` — test of the proportional-hazards assumption.** A score test on
+  scaled Schoenfeld residuals (per-covariate and global), implementing the modern
+  `survival` ≥ 3.0 formulation of `cox.zph`, with `transform=` options. Works on
+  stratified and unstratified fits, Efron or Breslow ties.
+- **Robust / cluster-robust Cox standard errors.** `coxph(robust=True)` reports
+  Huber-White (Lin-Wei sandwich) standard errors; `cluster=id` groups correlated
+  rows of one subject into a single independent unit. The model-based standard
+  errors remain on `.naive_standard_errors`, and `summary()` prints both columns
+  like R. Composes with `strata=` and counting-process `start=`.
+
+**Time series**
+
+- **Regression with ARIMA errors (`xreg`).** `arima(y, order, xreg=X)` and
+  `auto_arima(y, xreg=X)` fit `y = X·β + ARIMA errors`, matching
+  `stats::arima(xreg=)` / `forecast::Arima(xreg=)`. The regression coefficients are
+  reported on the solution (`.xreg_coef` / `.xreg_names`).
+- **Drift.** `include_drift=True` adds a linear time trend (the models R reports
+  "with drift"); `auto_arima` now *selects* drift models when they lower the
+  information criterion, matching `forecast::auto.arima`.
+- **Parameter masking (`fixed=`).** Hold coefficients fixed during estimation, as
+  a `{name: value}` mapping or R's positional NaN-vector, matching
+  `stats::arima(fixed=)`.
+- **Forecasting** of regression-with-ARIMA-errors models via
+  `forecast_arima(…, newxreg=)`.
+
+**Generalized additive models**
+
+- **Tensor-product and multivariate smooths.** `te(x, z, …)` fits a
+  tensor-product smooth (one penalty and smoothing parameter per margin);
+  `ti(x, z, …)` fits the tensor-product interaction, for functional-ANOVA models
+  `te('x') + te('z') + ti('x', 'z')`; and `s(x, z, …)` (two or more variables)
+  fits an isotropic multivariate thin-plate spline. Margins may mix bases and
+  dimensions, e.g. `te('x', 'z', bs=['cc', 'cr'], k=[6, 5])`. Basis matrices and
+  penalties match `mgcv::smoothCon` to ~1e-9, and full fits match `mgcv::gam` on
+  total EDF, scale, fitted values, and per-margin smoothing parameters under both
+  GCV and REML.
+
+### Performance
+
+- **Cox fitting is now at or below R's speed on tied data** (previously ~5–11×
+  slower). The concordance C-statistic count is a compiled Fenwick-tree kernel and
+  the Efron tie correction is fully vectorised; results are bit-identical to the
+  reference implementation. (e.g. n=20000 integer-time ties: ~11× slower → ~0.93×.)
+
+### Changed
+
+- **Cox model hardening** (found while validating the feature cluster; applies to
+  stratified and unstratified fits alike):
+  - Covariates are **mean-centred** before fitting, as R does. On large-magnitude
+    covariates (epoch timestamps, genomic coordinates, large sums) the previous
+    uncentred information matrix could lose precision and report `se=0` / `p=1` for
+    a genuinely significant coefficient; such fits now match R exactly.
+  - A **backtracking line search** lets ill-conditioned fits (covariates on very
+    different scales) converge to R's estimate; well-behaved fits are unchanged.
+  - A **fully-censored (zero-event) fit** now reports `converged=False` and
+    `concordance=NaN` instead of a fabricated `converged=True` / `0.5`.
+  - `coxph` now emits R's **"coefficient may be infinite"** warning under monotone
+    likelihood / separation, instead of silently returning the large value.
+  - **Harrell's concordance** tie handling now matches R exactly (a subject
+    censored at an event time counts as outliving the event).
+  - `KMSolution.median_survival` follows `survfit`'s `minmin` convention.
+  - Non-finite `time`/`event` and missing `strata` labels are now rejected loudly
+    at the input boundary.
+
+### Deprecated
+
+- **`gam` `SmoothInfo.lambda_` / `.s_scale`** (the per-smooth scalar accessors) are
+  deprecated in favour of **`.lambdas` / `.s_scales`** (tuples — a tensor smooth
+  carries one smoothing parameter per margin). The scalar names still work with a
+  deprecation warning and will be removed in 5.0.
+
 ## 4.7.0
 
 A broad feature release that closes a range of mainstream R capabilities across

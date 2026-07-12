@@ -371,6 +371,26 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 4.8.0 — survival feature cluster, ARIMA regressors, GAM tensor smooths
+
+Three major feature areas, all validated against R:
+
+- **Survival:** stratified Cox (`coxph(strata=…)`) and stratified Kaplan-Meier;
+  counting-process / time-varying Cox (`coxph(start=…)`) and left-truncated KM
+  (`kaplan_meier(entry=…)`); the proportional-hazards test `cox_zph()`; and robust
+  / cluster-robust Cox standard errors (`coxph(robust=True, cluster=…)`). Cox
+  fitting is also now at or below R's speed on tied data, with hardening for
+  large-magnitude and ill-conditioned covariates.
+- **Time series:** regression with ARIMA errors (`arima`/`auto_arima` `xreg=`),
+  drift (`include_drift=`, and drift selection in `auto_arima`), and parameter
+  masking (`fixed=`).
+- **GAMs:** tensor-product and multivariate smooths — `te()`, `ti()`, and
+  multivariate `s(x, z, …)` — matching mgcv.
+
+`gam`'s per-smooth `SmoothInfo.lambda_` / `.s_scale` accessors are deprecated in
+favour of the tuple-valued `.lambdas` / `.s_scales` (removed in 5.0). See the
+changelog for details.
+
 ### 4.7.0 — links, families, diagnostics, smooth bases, and more
 
 A broad feature release closing mainstream R capabilities across several modules:
