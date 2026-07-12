@@ -62,7 +62,7 @@ class GAMParams:
         family_name: Name of the exponential family (e.g. 'gaussian').
         link_name: Name of the link function (e.g. 'identity').
         dispersion_fixed: True when the family's dispersion is fixed at 1
-            (binomial, poisson, negative.binomial) — controls z-vs-t and
+            (binomial, poisson, negative-binomial) — controls z-vs-t and
             Chi.sq-vs-F conventions downstream.
         theta: Negative-binomial dispersion parameter for a ``family='nb'``
             fit — the estimated theta (mgcv's ``getTheta``) when it was fit

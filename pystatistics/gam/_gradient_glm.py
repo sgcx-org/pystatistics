@@ -89,7 +89,7 @@ _FD_ETA_STEP2 = 1e-4  # step for the SECOND difference (optimal ~eps^(1/4))
 
 # Canonical (family, link) pairs: there the Newton weights equal the Fisher
 # weights exactly, so the criterion/gradient can stay on the fit's exact
-# QR-stable factors. negative.binomial's canonical link (log(mu/(mu+theta)))
+# QR-stable factors. negative-binomial's canonical link (log(mu/(mu+theta)))
 # is not offered, so nb is always non-canonical.
 _CANONICAL_LINKS = {
     "gaussian": "identity",

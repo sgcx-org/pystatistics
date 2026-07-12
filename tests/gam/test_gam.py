@@ -236,7 +236,7 @@ class TestGaussianFit:
         identical for every coefficient."""
         x, y, _ = sine_data
         sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        se = sol.se
+        se = sol.standard_errors
         assert se.shape == sol.coefficients.shape
         assert np.all(se > 0.0)
         assert np.std(se) > 1e-12  # not all identical
@@ -249,12 +249,12 @@ class TestGaussianFit:
         resid = yy - solp.fitted_values
         sigma2 = float(resid @ resid) / (n - 2)
         se_ols = np.sqrt(np.diag(sigma2 * np.linalg.inv(X.T @ X)))
-        assert np.allclose(solp.se, se_ols, rtol=1e-8)
+        assert np.allclose(solp.standard_errors, se_ols, rtol=1e-8)
 
     def test_covariance_matches_se(self, sine_data):
         x, y, _ = sine_data
         sol = gam(y, smooths=[s("x")], smooth_data={"x": x})
-        assert np.allclose(sol.se ** 2, np.diag(sol.covariance))
+        assert np.allclose(sol.standard_errors ** 2, np.diag(sol.covariance))
 
 
 # ---------------------------------------------------------------------------

@@ -151,11 +151,66 @@ class GAMSolution(SolutionReprMixin):
         return self._result.params.covariance
 
     @property
-    def se(self) -> NDArray:
-        """Standard errors for ALL coefficients (posterior, mgcv-style)."""
+    def standard_errors(self) -> NDArray:
+        """Standard errors for ALL coefficients (posterior, mgcv-style).
+
+        Covers the full coefficient vector (parametric block + smooth-basis
+        coefficients), taken from the diagonal of the Bayesian posterior
+        covariance. For the parametric-only slice see ``coef`` / ``conf_int``.
+        """
         return np.sqrt(np.maximum(
             np.diag(self._result.params.covariance), 0.0,
         ))
+
+    @property
+    def coef(self) -> dict[str, float]:
+        """Parametric coefficients as a name-to-value dict.
+
+        Covers only the parametric block (intercept plus any linear terms)
+        that drives ``summary()``'s parametric-coefficient table; smooth-basis
+        coefficients are excluded. Names come from the model's parametric
+        names, falling back to ``B[i]`` when the block is unnamed.
+        """
+        p = self._result.params
+        n_param = (
+            self._smooth_infos[0].coef_indices[0]
+            if self._smooth_infos else len(p.coefficients)
+        )
+        names = (
+            list(self._names) if self._names
+            else [f"B[{i}]" for i in range(n_param)]
+        )
+        return dict(zip(names, (float(c) for c in p.coefficients[:n_param])))
+
+    @property
+    def conf_int(self) -> NDArray:
+        """95% Wald confidence intervals for the PARAMETRIC coefficients.
+
+        Shape ``(n_param, 2)``: ``beta ± q * SE(beta)`` using the same
+        quantile ``summary()`` uses — the normal quantile for known-scale
+        families and the t quantile (residual df) for estimated-scale
+        families. Smooth-basis coefficients are excluded; smooth terms are
+        reported via ``summary()``'s approximate-significance table.
+        """
+        p = self._result.params
+        n_param = (
+            self._smooth_infos[0].coef_indices[0]
+            if self._smooth_infos else len(p.coefficients)
+        )
+        conf_level = 0.95
+        if p.dispersion_fixed:
+            q = float(sp_stats.norm.ppf((1.0 + conf_level) / 2.0))
+        else:
+            resid_df = max(p.n_obs - p.total_edf, 1.0)
+            q = float(sp_stats.t.ppf((1.0 + conf_level) / 2.0, resid_df))
+        coef = p.coefficients[:n_param]
+        se = np.array([self._param_se(i) for i in range(n_param)])
+        return np.column_stack([coef - q * se, coef + q * se])
+
+    @property
+    def backend_name(self) -> str:
+        """Backend identifier (GAM is CPU-only)."""
+        return self._result.backend_name
 
     @property
     def reml_score(self) -> float | None:

@@ -112,3 +112,11 @@ commits; this section accumulates them.
   instead of a bare `RuntimeError` (which is now reserved for GPU-unavailable /
   environment failures). The GPU-unavailable error uses the canonical shared
   message (with the "use `backend='cpu'`" remedy).
+
+**`gam` — uniform result accessors:**
+
+- `GAMSolution.se` → `.standard_errors` (consistent with the rest of the
+  library). Added `.coef` (labeled dict over the parametric coefficients),
+  `.conf_int` (parametric coefficients), and `.backend_name`. Smooth-term
+  significance stays on `.summary()` (approximate F/Chi-sq, not per-coefficient),
+  so no `.z_values`/`.t_values`/`.p_values` arrays are added.
