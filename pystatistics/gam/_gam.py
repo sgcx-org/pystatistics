@@ -25,6 +25,7 @@ from pystatistics.core.exceptions import ValidationError
 from pystatistics.core.result import Result
 from pystatistics.gam._basis import BuiltSmooth, build_design
 from pystatistics.gam._common import GAMParams, SmoothInfo
+from pystatistics.gam._factor_by import expand_factor_by
 from pystatistics.gam._criteria import (
     estimate_scale,
     gcv_score,
@@ -248,6 +249,24 @@ def gam(
             f"coefficients are not named)"
         )
 
+    # Expand factor by= smooths into per-level centered smooths and inject the
+    # grouping variable's per-level means (treatment contrasts) into the
+    # parametric design -- mgcv's s(x, by=factor(g)). Continuous by= and plain
+    # smooths pass through unchanged; a factor-looking by= with by_type unset
+    # fails loud here rather than being silently fitted as a varying
+    # coefficient. Names are validated against the user's own X above, then
+    # extended for the injected contrast columns.
+    _expansion = expand_factor_by(
+        smooths, smooth_data_np, X_param,
+        list(names) if names is not None else None, _smooth_label,
+    )
+    smooths = _expansion.smooths
+    smooth_data_np = _expansion.smooth_data
+    X_param = _expansion.X_param
+    names = _expansion.param_names
+    smooth_labels = _expansion.smooth_labels
+    parametric_cols = X_param.shape[1]
+
     n_smooths = len(smooths)
     n_penalties = sum(_n_penalties(st) for st in smooths)
     sp_arr: NDArray | None = None
@@ -281,7 +300,7 @@ def gam(
             grp_flat.append(gi)
     roots = make_penalty_roots(S_flat, blk_flat, grp_flat)
     # roots[k] belongs to smooth grp_flat[k]; used to regroup per-smooth sp.
-    smooth_names = [_smooth_label(st) for st in smooths]
+    smooth_names = smooth_labels
 
     # ------------------------------------------------------------------
     # Smoothing-parameter selection (or user-fixed sp) + final fit.
@@ -457,6 +476,11 @@ def gam(
         family_name=fam.name,
         link_name=fam.link.name,
         dispersion_fixed=bool(fam.dispersion_is_fixed),
+        theta=(
+            float(fam.theta)
+            if isinstance(fam, NegativeBinomial) and fam.theta is not None
+            else None
+        ),
         converged=fit.converged,
         outer_converged=outer_converged,
         n_iter=fit.n_iter,

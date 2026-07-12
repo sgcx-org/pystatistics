@@ -10,6 +10,7 @@ from __future__ import annotations
 from pystatistics.core.exceptions import ValidationError
 
 _VALID_BASIS_TYPES = frozenset({"cr", "tp", "cc", "ps"})
+_VALID_BY_TYPES = frozenset({"continuous", "factor"})
 
 _MIN_K = 3
 _MAX_K = 500
@@ -35,7 +36,7 @@ class SmoothTerm:
             (P-spline).
     """
 
-    __slots__ = ("var_name", "k", "bs", "by")
+    __slots__ = ("var_name", "k", "bs", "by", "by_type")
 
     def __init__(
         self,
@@ -43,6 +44,7 @@ class SmoothTerm:
         k: int = 10,
         bs: str = "cr",
         by: str | None = None,
+        by_type: str | None = None,
     ) -> None:
         """Create a smooth term specification.
 
@@ -51,10 +53,17 @@ class SmoothTerm:
             k: Basis dimension (default 10, matching mgcv). Must be >= 3.
             bs: Basis type -- ``'cr'`` for cubic regression spline
                 (default) or ``'tp'`` for thin plate regression spline.
+            by: Optional ``by`` variable name (see :func:`s`).
+            by_type: How to interpret ``by`` -- ``'continuous'`` (varying
+                coefficient ``by * f(x)``), ``'factor'`` (a separate smooth
+                per level of an integer-coded ``by``), or ``None`` to let
+                ``gam`` decide; a factor-looking ``by`` with ``by_type=None``
+                fails loud rather than being silently treated as continuous.
 
         Raises:
             ValidationError: If ``var_name`` is empty, ``k`` is out of
-                range, or ``bs`` is not a recognised basis type.
+                range, ``bs`` is not a recognised basis type, or ``by_type``
+                is invalid / given without ``by``.
         """
         if not isinstance(var_name, str) or not var_name.strip():
             raise ValidationError(
@@ -85,14 +94,27 @@ class SmoothTerm:
                 f"by must be None or a non-empty variable name, got {by!r}"
             )
 
+        if by_type is not None and by_type not in _VALID_BY_TYPES:
+            raise ValidationError(
+                f"by_type must be one of {sorted(_VALID_BY_TYPES)} or None, "
+                f"got {by_type!r}"
+            )
+        if by_type is not None and by is None:
+            raise ValidationError(
+                f"by_type={by_type!r} is only meaningful with a by-variable; "
+                "pass by=... as well"
+            )
+
         self.var_name = var_name.strip()
         self.k = k
         self.bs = bs
         self.by = by.strip() if isinstance(by, str) else None
+        self.by_type = by_type
 
     def __repr__(self) -> str:
         by = "" if self.by is None else f", by={self.by!r}"
-        return f"s({self.var_name!r}, k={self.k}, bs={self.bs!r}{by})"
+        by_type = "" if self.by_type is None else f", by_type={self.by_type!r}"
+        return f"s({self.var_name!r}, k={self.k}, bs={self.bs!r}{by}{by_type})"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SmoothTerm):
@@ -102,10 +124,11 @@ class SmoothTerm:
             and self.k == other.k
             and self.bs == other.bs
             and self.by == other.by
+            and self.by_type == other.by_type
         )
 
     def __hash__(self) -> int:
-        return hash((self.var_name, self.k, self.bs, self.by))
+        return hash((self.var_name, self.k, self.bs, self.by, self.by_type))
 
 
 class IsotropicSmooth:
@@ -152,7 +175,7 @@ class IsotropicSmooth:
 
 
 def s(*var_names: str, k: int = 10, bs: str | None = None,
-      by: str | None = None):
+      by: str | None = None, by_type: str | None = None):
     """Convenience constructor for smooth terms, matching ``mgcv::s()``.
 
     Usage::
@@ -166,10 +189,24 @@ def s(*var_names: str, k: int = 10, bs: str | None = None,
         k: Basis dimension (default 10).
         bs: Basis type. Univariate: ``'cr'`` (default), ``'tp'``, ``'cc'``,
             or ``'ps'``. Multivariate: ``'tp'`` (the default and only choice).
-        by: Optional *continuous* ``by`` variable (univariate smooths only) --
-            fits the varying-coefficient term ``by * f(x)`` (mgcv's
-            ``s(x, by=z)``), keeping the full basis (no centering) since the
-            by-multiplication removes the constant confound.
+            For a factor ``by`` (``by_type='factor'``) the default is ``'tp'``,
+            matching ``mgcv::s()``.
+        by: Optional ``by`` variable (univariate smooths only).
+        by_type: How to interpret ``by``:
+
+            * ``'continuous'`` -- the varying-coefficient term ``by * f(x)``
+              (mgcv's ``s(x, by=z)`` for a numeric ``z``), keeping the full
+              basis (no centering) since the by-multiplication removes the
+              constant confound.
+            * ``'factor'`` -- a separate smooth per level of an integer-coded
+              ``by`` (mgcv's ``s(x, by=factor(g))``); the grouping variable's
+              per-level means are added automatically, so no separate main
+              effect is required.
+            * ``None`` (default) -- treated as continuous, EXCEPT that a
+              factor-looking ``by`` (an integer-valued, low-cardinality
+              contiguous coding) fails loud, asking you to pick ``'factor'``
+              or ``'continuous'`` explicitly rather than silently fitting a
+              meaningless varying coefficient.
 
     Returns:
         A :class:`SmoothTerm` (one variable) or :class:`IsotropicSmooth`
@@ -178,8 +215,13 @@ def s(*var_names: str, k: int = 10, bs: str | None = None,
     if len(var_names) == 0:
         raise ValidationError("s() needs at least one variable name")
     if len(var_names) == 1:
+        # mgcv's s() defaults to a thin-plate basis; we default univariate
+        # smooths to 'cr' for speed EXCEPT for a factor by, where matching
+        # mgcv's default basis keeps a ported s(x, by=group) exact.
+        default_bs = "tp" if by_type == "factor" else "cr"
         return SmoothTerm(
-            var_name=var_names[0], k=k, bs=bs or "cr", by=by,
+            var_name=var_names[0], k=k, bs=bs or default_bs, by=by,
+            by_type=by_type,
         )
     if by is not None:
         raise ValidationError(

@@ -33,8 +33,26 @@ from pystatistics.gam._basis_ps import ps_basis
 from pystatistics.gam._basis_md import md_tp_basis
 from pystatistics.gam._basis_te import te_basis
 from pystatistics.gam._constraints import absorb_sum_to_zero
+from pystatistics.gam._factor_by import FactorLevelSmooth
 from pystatistics.gam._smooth import IsotropicSmooth, SmoothTerm
 from pystatistics.gam._tensor_smooth import TensorSmooth
+
+
+def _pick_basis(
+    bs: str, x: NDArray[np.floating[Any]], k: int,
+) -> tuple[NDArray, NDArray, float]:
+    """Dispatch to a univariate basis constructor by ``bs`` name."""
+    if bs == "cr":
+        return cr_basis(x, k=k)
+    if bs == "tp":
+        return tp_basis(x, k=k)
+    if bs == "cc":
+        return cc_basis(x, k=k)
+    if bs == "ps":
+        return ps_basis(x, k=k)
+    raise ValidationError(
+        f"Unknown basis type {bs!r}; expected 'cr', 'tp', 'cc', or 'ps'"
+    )
 
 
 @dataclass(frozen=True)
@@ -128,19 +146,29 @@ def build_design(
             col += kc
             continue
 
+        if isinstance(st, FactorLevelSmooth):
+            # One level of a factor ``by``: center the smooth of ``var_name``
+            # (sum-to-zero, exactly as an ordinary smooth) and multiply the
+            # centered basis by this level's 0/1 indicator, so the term acts
+            # only on that level's rows. The per-level group means live in the
+            # parametric design (see _factor_by.expand_factor_by), keeping this
+            # centered smooth free of the constant confound. mgcv-exact.
+            x = np.asarray(smooth_data[st.var_name], dtype=np.float64).ravel()
+            B, S, s_scale = _pick_basis(st.bs, x, st.k)
+            B_c, S_c, Z = absorb_sum_to_zero(B, S)
+            ind = np.asarray(smooth_data[st.indicator], dtype=np.float64).ravel()
+            B_c = B_c * ind[:, np.newaxis]
+            kc = B_c.shape[1]
+            blocks_x.append(B_c)
+            built.append(BuiltSmooth(
+                term=st, block=(col, col + kc), S_blocks=[S_c], Z=Z,
+                s_scales=[s_scale],
+            ))
+            col += kc
+            continue
+
         x = np.asarray(smooth_data[st.var_name], dtype=np.float64).ravel()
-        if st.bs == "cr":
-            B, S, s_scale = cr_basis(x, k=st.k)
-        elif st.bs == "tp":
-            B, S, s_scale = tp_basis(x, k=st.k)
-        elif st.bs == "cc":
-            B, S, s_scale = cc_basis(x, k=st.k)
-        elif st.bs == "ps":
-            B, S, s_scale = ps_basis(x, k=st.k)
-        else:
-            raise ValidationError(
-                f"Unknown basis type {st.bs!r}; expected 'cr', 'tp', 'cc', or 'ps'"
-            )
+        B, S, s_scale = _pick_basis(st.bs, x, st.k)
 
         if st.by is not None:
             # Continuous varying-coefficient smooth ``by * f(x)`` (mgcv

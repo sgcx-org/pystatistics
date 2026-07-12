@@ -74,3 +74,58 @@ class TestNbTheta:
         t_ld = gam(y_ld, smooths=[s("x", k=8)], smooth_data={"x": x},
                    family="nb", method="REML")._result.info["nb_theta"]
         assert t_od < t_ld
+
+
+class TestThetaAccessor:
+    """VA3-F1: the estimated NB dispersion theta is a first-class output."""
+
+    def test_theta_matches_deviance_inversion(self, nb_data):
+        """``sol.theta`` (and ``params.theta``) equal the theta recovered by
+        inverting the NB deviance at the fitted mean.
+
+        The NB deviance ``D(y, mu; theta)`` is strictly monotone in theta at a
+        fixed ``(y, mu)``, so the theta reproducing the reported deviance is
+        unique — this is exactly how the VA-3 validation recovered theta to
+        cross-check mgcv when the API exposed it nowhere. Reading it back off
+        the same accessor must agree.
+        """
+        from scipy.optimize import brentq
+
+        x, y, _ = nb_data
+        sol = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
+                  family="nb", method="REML")
+
+        theta = sol.theta
+        assert theta is not None
+        # GAMSolution and its underlying GAMParams agree.
+        assert sol.params.theta == theta
+
+        mu = sol.fitted_values
+        wt = np.ones_like(y)
+        target_dev = sol.deviance
+
+        def _dev_gap(t: float) -> float:
+            return NegativeBinomial(theta=t).deviance(y, mu, wt) - target_dev
+
+        theta_from_dev = brentq(_dev_gap, 1e-3, 1e4, xtol=1e-10, rtol=1e-12)
+        assert abs(theta - theta_from_dev) / theta_from_dev < 1e-6
+
+    def test_fixed_theta_surfaces_on_accessor(self, nb_data):
+        """A user-supplied fixed theta is reported back verbatim."""
+        x, y, _ = nb_data
+        sol = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
+                  family=NegativeBinomial(theta=3.0), method="REML")
+        assert sol.theta == 3.0
+        assert sol.params.theta == 3.0
+
+    def test_theta_is_none_for_non_nb_family(self):
+        """Non-NB families report ``theta = None`` (not 1.0, not an error)."""
+        rng = np.random.default_rng(7)
+        n = 200
+        x = np.sort(rng.uniform(0, 1, n))
+        mu = np.exp(0.5 + np.sin(2 * np.pi * x))
+        y = rng.poisson(mu).astype(float)
+        sol = gam(y, smooths=[s("x", k=8)], smooth_data={"x": x},
+                  family="poisson", method="REML")
+        assert sol.theta is None
+        assert sol.params.theta is None

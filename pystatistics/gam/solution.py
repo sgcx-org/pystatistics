@@ -120,6 +120,17 @@ class GAMSolution(SolutionReprMixin):
         return self._result.params.scale
 
     @property
+    def theta(self) -> float | None:
+        """Negative-binomial dispersion ``theta`` (``mgcv::getTheta``).
+
+        The estimated theta for a ``family='nb'`` fit, the supplied value for a
+        fixed ``NegativeBinomial(theta=...)`` family, or ``None`` for every
+        other family. Larger theta means less overdispersion (theta -> inf
+        recovers Poisson).
+        """
+        return self._result.params.theta
+
+    @property
     def ubre(self) -> float:
         """UBRE / scaled-AIC score (the criterion mgcv's GCV.Cp minimises
         for known-scale families)."""

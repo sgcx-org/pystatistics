@@ -4,9 +4,9 @@ Tests for VA-2: gam continuous ``by=`` (varying-coefficient) smooths.
 ``s(x, by=z)`` fits the varying-coefficient term ``z * f(x)`` — the smooth keeps
 its full basis (no centering) and each row is scaled by the by-variable — exactly
 as mgcv's ``s(x, by=z)`` for a continuous ``by``. Validated vs ``mgcv::gam``
-(total EDF, fitted values). Native factor-``by`` auto-expansion (a separate smooth
-per factor level) is not yet provided; it can be built with one continuous-``by``
-term per level-indicator.
+(total EDF, fitted values). Factor-``by`` (a separate smooth per level, mgcv's
+``s(x, by=factor(g))``) is provided via ``by_type='factor'`` and covered in
+``test_factor_by.py``.
 """
 
 import json

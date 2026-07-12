@@ -64,6 +64,12 @@ class GAMParams:
         dispersion_fixed: True when the family's dispersion is fixed at 1
             (binomial, poisson, negative.binomial) — controls z-vs-t and
             Chi.sq-vs-F conventions downstream.
+        theta: Negative-binomial dispersion parameter for a ``family='nb'``
+            fit — the estimated theta (mgcv's ``getTheta``) when it was fit
+            automatically, or the user-supplied value for a fixed
+            ``NegativeBinomial(theta=...)`` family. ``None`` for every other
+            family. This is the defining output of an NB GAM; larger theta
+            means less overdispersion (theta -> inf recovers Poisson).
         converged: Whether the P-IRLS algorithm converged.
         outer_converged: Whether the smoothing-parameter search converged
             away from its bounds (always True when ``sp`` was user-fixed).
@@ -94,6 +100,7 @@ class GAMParams:
     family_name: str
     link_name: str
     dispersion_fixed: bool
+    theta: float | None
     converged: bool
     outer_converged: bool
     n_iter: int
