@@ -153,7 +153,7 @@ def _resolve_interaction(
 
 
 def _term_display_name(term: Term) -> str:
-    """Human-readable name of a term for anova/drop1 table rows."""
+    """Human-readable name of a term for deviance_table/drop1 table rows."""
     if isinstance(term, tuple):
         return ":".join(_term_display_name(e) for e in term)
     if isinstance(term, C):
@@ -183,7 +183,7 @@ def build_terms_design(
         ``term_names`` of the term that produced column j — the intercept, when
         present, is term 0 ("(Intercept)"); every subsequent term (which may span
         several dummy/interaction columns) gets the next index. This grouping is
-        what ``anova``/``drop1`` use to add or drop whole terms.
+        what ``deviance_table``/``drop1`` use to add or drop whole terms.
 
     Raises:
         ValueError: empty terms, non-numeric bare column, or malformed term.

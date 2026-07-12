@@ -43,7 +43,7 @@ from pystatistics.gam._pirls import (
 from pystatistics.gam._smooth import s
 from pystatistics.regression.families import (
     Binomial,
-    GammaFamily,
+    Gamma,
     Gaussian,
     NegativeBinomial,
     Poisson,
@@ -61,8 +61,8 @@ def _family(key):
         "binomial": lambda: resolve_family("binomial"),
         "binomial-probit": lambda: Binomial(link="probit"),
         "binomial-cloglog": lambda: Binomial(link="cloglog"),
-        "Gamma-log": lambda: GammaFamily(link="log"),
-        "Gamma-inverse": lambda: GammaFamily(),
+        "Gamma-log": lambda: Gamma(link="log"),
+        "Gamma-inverse": lambda: Gamma(),
         "gaussian-log": lambda: Gaussian(link="log"),
         "nb": lambda: NegativeBinomial(theta=3.0),
     }[key]()

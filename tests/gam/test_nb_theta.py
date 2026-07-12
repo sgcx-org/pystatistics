@@ -38,7 +38,7 @@ class TestNbTheta:
         x, y, d = nb_data
         sol = gam(y, smooths=[s("x", k=10)], smooth_data={"x": x},
                   family="nb", method="REML")
-        assert sol._result.params.family_name == "negative.binomial"
+        assert sol._result.params.family_name == "negative-binomial"
         theta = sol._result.info["nb_theta"]
         # theta close to mgcv's nb() estimate (method-sensitive dispersion).
         assert abs(theta - d["mgcv_theta"]) / d["mgcv_theta"] < 0.05

@@ -42,7 +42,7 @@ class Design:
     _p: int
     _source: DataSource | None = None
     _names: tuple[str, ...] | None = None
-    # Term structure for anova/drop1: _assign[j] is the term index of column j;
+    # Term structure for deviance_table/drop1: _assign[j] is the term index of column j;
     # _term_names[t] is the display name of term t. Populated when the design is
     # built from a term spec; None for a raw-array design (each column is then
     # treated as its own term by the analysis functions).
@@ -236,7 +236,7 @@ class Design:
 
     @property
     def assign(self) -> tuple[int, ...] | None:
-        """Term index of each column (for anova/drop1), or None for raw designs.
+        """Term index of each column (for deviance_table/drop1), or None for raw designs.
 
         ``assign[j]`` indexes into :attr:`term_names`. Present only when the
         design was built from a term spec.

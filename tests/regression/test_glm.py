@@ -14,6 +14,7 @@ from pystatistics.regression.families import (
     IdentityLink, LogitLink, LogLink, ProbitLink,
     resolve_family,
 )
+from pystatistics.core.exceptions import ValidationError
 
 
 # =====================================================================
@@ -153,7 +154,7 @@ class TestFamilyResolver:
             resolve_family('unknown')
 
     def test_resolve_wrong_type_raises(self):
-        with pytest.raises(TypeError):
+        with pytest.raises(ValidationError):
             resolve_family(42)
 
 

@@ -56,20 +56,20 @@ class TestRidgeSolveMath:
     def test_negative_lam_raises(self):
         X, y = _lm_data()
         with pytest.raises(ValueError):
-            ridge(X, y, lam=-1.0)
+            ridge(X, y, l2=-1.0)
 
 
 class TestRidgeShrinkage:
     def test_lm_coefficients_shrink(self):
         X, y = _lm_data()
-        norms = [np.linalg.norm(ridge(X, y, lam=lam).coefficients[1:])
+        norms = [np.linalg.norm(ridge(X, y, l2=lam).coefficients[1:])
                  for lam in (0.0001, 10.0, 100.0, 1000.0)]
         assert all(norms[i] >= norms[i + 1] for i in range(len(norms) - 1))
 
     def test_glm_coefficients_shrink(self):
         X, y = _poisson_data()
         norms = [np.linalg.norm(
-            ridge(X, y, lam=lam, family="poisson").coefficients[1:])
+            ridge(X, y, l2=lam, family="poisson").coefficients[1:])
             for lam in (0.0001, 10.0, 100.0, 1000.0)]
         assert all(norms[i] >= norms[i + 1] for i in range(len(norms) - 1))
 
@@ -77,13 +77,13 @@ class TestRidgeShrinkage:
 class TestRidgeNoMisleadingInference:
     def test_lm_penalized_se_are_nan(self):
         X, y = _lm_data()
-        res = ridge(X, y, lam=10.0)
+        res = ridge(X, y, l2=10.0)
         assert np.all(np.isnan(res.standard_errors))
         assert np.all(np.isnan(res.p_values))
 
     def test_glm_penalized_se_are_nan(self):
         X, y = _poisson_data()
-        res = ridge(X, y, lam=10.0, family="poisson")
+        res = ridge(X, y, l2=10.0, family="poisson")
         assert np.all(np.isnan(res.standard_errors))
 
 
@@ -91,13 +91,13 @@ class TestRidgeWrapper:
     def test_ridge_equals_fit_l2_lm(self):
         X, y = _lm_data()
         np.testing.assert_allclose(
-            ridge(X, y, lam=12.0).coefficients,
+            ridge(X, y, l2=12.0).coefficients,
             fit(X, y, l2=12.0).coefficients, rtol=1e-12, atol=1e-12)
 
     def test_ridge_equals_fit_l2_glm(self):
         X, y = _poisson_data()
         np.testing.assert_allclose(
-            ridge(X, y, lam=12.0, family="poisson").coefficients,
+            ridge(X, y, l2=12.0, family="poisson").coefficients,
             fit(X, y, family="poisson", l2=12.0).coefficients, rtol=1e-10, atol=1e-12)
 
 

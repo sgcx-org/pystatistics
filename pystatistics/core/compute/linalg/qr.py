@@ -40,6 +40,8 @@ from typing import Literal, Any, Optional
 import numpy as np
 from numpy.typing import NDArray
 
+from pystatistics.core.exceptions import DimensionError
+
 # R's lm.fit / glm.fit default relative tolerance for rank detection (dqrdc2).
 _RANK_TOL = 1e-7
 
@@ -136,11 +138,11 @@ def qr_solve(
     y = np.asarray(y, dtype=np.float64)
 
     if X.ndim != 2:
-        raise ValueError(f"X must be 2-D, got shape {X.shape}")
+        raise DimensionError(f"X must be 2-D, got shape {X.shape}")
     if y.ndim != 1:
-        raise ValueError(f"y must be 1-D, got shape {y.shape}")
+        raise DimensionError(f"y must be 1-D, got shape {y.shape}")
     if X.shape[0] != y.shape[0]:
-        raise ValueError(
+        raise DimensionError(
             f"X has {X.shape[0]} rows but y has {y.shape[0]} elements"
         )
 

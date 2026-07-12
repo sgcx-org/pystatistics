@@ -1,8 +1,8 @@
 """
 Tests for VA-5: additional GLM links and families.
 
-Links: cloglog, cauchit, sqrt, 1/mu^2 (inverse-squared).
-Families: inverse.gaussian, quasipoisson, quasibinomial.
+Links: cloglog, cauchit, sqrt, inverse-squared (g(mu) = 1/mu^2).
+Families: inverse-gaussian, quasipoisson, quasibinomial.
 
 Validated vs R `glm` on a committed fixture (n=120): coefficients, standard
 errors, dispersion, deviance, and AIC. The quasi families have no proper
@@ -45,7 +45,7 @@ def _family_for(name, link):
 
 
 class TestNewLinks:
-    @pytest.mark.parametrize("name", ["cloglog", "cauchit", "sqrt", "1/mu^2"])
+    @pytest.mark.parametrize("name", ["cloglog", "cauchit", "sqrt", "inverse-squared"])
     def test_link_resolves(self, name):
         assert _resolve_link(name, IdentityLink()).name == name
 
@@ -56,7 +56,7 @@ class TestNewLinks:
         assert np.allclose(link.link(link.linkinv(eta)), eta, atol=1e-8)
 
     def test_sqrt_and_inverse_squared_roundtrip(self):
-        for name in ("sqrt", "1/mu^2"):
+        for name in ("sqrt", "inverse-squared"):
             link = _resolve_link(name, IdentityLink())
             mu = np.array([0.5, 1.0, 2.0, 5.0])
             assert np.allclose(link.linkinv(link.link(mu)), mu, atol=1e-8)

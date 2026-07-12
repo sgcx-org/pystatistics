@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pystatistics.regression import fit, anova, drop1, Design
+from pystatistics.regression import fit, deviance_table, drop1, Design
 from pystatistics.regression.terms import C
 from pystatistics.core.exceptions import ValidationError
 
@@ -74,12 +74,12 @@ class TestAnova:
         X, d = va5
         m = fit(X, np.asarray(d["yc"], float), family="poisson",
                 names=["(Intercept)", "x1", "x2"])
-        _match_anova(anova(m, test="Chisq").rows, refs["poisson_anova"])
+        _match_anova(deviance_table(m, test="chisq").rows, refs["poisson_anova"])
 
     def test_ols_sequential_f(self, va5, refs):
         X, d = va5
         m = fit(X, np.asarray(d["yig"], float), names=["(Intercept)", "x1", "x2"])
-        rows = [r for r in anova(m).rows if r.df is not None]  # drop NULL row
+        rows = [r for r in deviance_table(m).rows if r.df is not None]  # drop NULL row
         for row, (term, df, ss, f, p) in zip(rows, refs["ols_anova"]):
             assert row.df == df
             assert abs(row.deviance - ss) < 1e-4     # SS for a linear model
@@ -91,7 +91,7 @@ class TestAnova:
         yc = np.asarray(d["yc"], float)
         m1 = fit(X[:, :2], yc, family="poisson")
         m2 = fit(X, yc, family="poisson")
-        rows = anova(m1, m2, test="Chisq").rows
+        rows = deviance_table(m1, m2, test="chisq").rows
         for row, (rdf, rdev, df, dev, p) in zip(rows, refs["nested"]):
             assert row.resid_df == rdf
             assert abs(row.resid_deviance - rdev) < 1e-3
@@ -109,9 +109,9 @@ class TestAnova:
             terms=["x", C("grp")], y="y",
         )
         m = fit(d, family="binomial")
-        _match_anova(anova(m, test="Chisq").rows, refs["fac_anova"])
+        _match_anova(deviance_table(m, test="chisq").rows, refs["fac_anova"])
         # grp spans 2 dummy columns but is a single df=2 term.
-        grp_row = [r for r in anova(m, test="Chisq").rows if r.term == "grp"][0]
+        grp_row = [r for r in deviance_table(m, test="chisq").rows if r.term == "grp"][0]
         assert grp_row.df == 2
 
 
@@ -120,7 +120,7 @@ class TestDrop1:
         X, d = va5
         m = fit(X, np.asarray(d["yc"], float), family="poisson",
                 names=["(Intercept)", "x1", "x2"])
-        rows = drop1(m, test="Chisq").rows
+        rows = drop1(m, test="chisq").rows
         for row, (term, df, rdev, aic, lrt, p) in zip(rows, refs["poisson_drop1"]):
             assert abs(row.resid_deviance - rdev) < 1e-3
             assert abs(row.aic - aic) < 1e-2
@@ -135,8 +135,8 @@ class TestFailLoud:
         X, d = va5
         m = fit(X, np.asarray(d["yc"], float), family="poisson")
         with pytest.raises(ValidationError, match="Unknown test"):
-            anova(m, test="wald")
+            deviance_table(m, test="wald")
 
     def test_anova_no_models_raises(self):
         with pytest.raises(ValidationError, match="at least one"):
-            anova()
+            deviance_table()

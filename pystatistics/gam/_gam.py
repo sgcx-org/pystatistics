@@ -148,7 +148,7 @@ def gam(
         smooths: Smooth term specifications from :func:`s`.
         smooth_data: Mapping from smooth variable names to ``(n,)`` arrays.
         family: Exponential family, e.g. ``'gaussian'``, ``'binomial'``,
-            ``'poisson'``, ``'Gamma'``. ``method='REML'`` supports the
+            ``'poisson'``, ``'gamma'``. ``method='REML'`` supports the
             fixed-dispersion families and the Gaussian-identity model.
         method: Smoothing-parameter selection criterion: ``'GCV'``
             (mgcv ``GCV.Cp`` semantics — UBRE is used automatically for
@@ -195,12 +195,12 @@ def gam(
     # registry are not part of gam's validated surface, so refuse them loudly
     # rather than silently fitting an unvalidated criterion (Guarantee 2).
     _GAM_SUPPORTED = {
-        "gaussian", "binomial", "poisson", "Gamma", "negative.binomial",
+        "gaussian", "binomial", "poisson", "gamma", "negative-binomial",
     }
     if fam.name not in _GAM_SUPPORTED:
         raise ValidationError(
             f"gam does not support family '{fam.name}'. Supported families: "
-            f"gaussian, binomial, poisson, Gamma, negative.binomial (nb)."
+            f"gaussian, binomial, poisson, gamma, negative-binomial (nb)."
         )
 
     method_upper = method.upper()

@@ -43,13 +43,16 @@ def repeated_measures_anova(
         subject: 1D subject identifiers
         within: {factor_name: 1D condition labels}
         between: {factor_name: 1D group labels} or None
-        correction: 'none', 'gg', 'hf', or 'auto'
+        correction: 'none', 'greenhouse-geisser', 'huynh-feldt', or 'auto'
 
     Returns:
         AnovaRMParams with table, sphericity tests, and corrected p-values
     """
-    if correction not in ('none', 'gg', 'hf', 'auto'):
-        raise ValidationError(f"correction must be 'none', 'gg', 'hf', or 'auto', got {correction!r}")
+    if correction not in ('none', 'greenhouse-geisser', 'huynh-feldt', 'auto'):
+        raise ValidationError(
+            "correction must be 'none', 'greenhouse-geisser', 'huynh-feldt', or "
+            f"'auto', got {correction!r}"
+        )
 
     if len(within) != 1:
         raise NotImplementedError(

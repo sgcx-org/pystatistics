@@ -8,7 +8,7 @@ edge cases, failure modes, and R validation values.
 import numpy as np
 import pytest
 
-from pystatistics.regression import fit, GammaFamily, NegativeBinomial
+from pystatistics.regression import fit, Gamma, NegativeBinomial
 from pystatistics.regression.families import resolve_family
 from pystatistics.regression.solution import GLMSolution
 
@@ -17,29 +17,29 @@ from pystatistics.regression.solution import GLMSolution
 # Family class unit tests
 # =====================================================================
 
-class TestGammaFamilyUnit:
-    """Unit tests for GammaFamily variance, initialization, and links."""
+class TestGammaUnit:
+    """Unit tests for Gamma variance, initialization, and links."""
 
     def test_variance_equals_mu_squared(self):
-        """GammaFamily variance function should be V(mu) = mu^2."""
+        """Gamma variance function should be V(mu) = mu^2."""
         mu = np.array([0.5, 1.0, 2.0, 10.0])
-        fam = GammaFamily()
+        fam = Gamma()
         np.testing.assert_allclose(fam.variance(mu), mu ** 2)
 
     def test_default_link_is_inverse(self):
         """Gamma default link is the inverse link (1/mu)."""
-        fam = GammaFamily()
+        fam = Gamma()
         assert fam.link.name == 'inverse'
 
     def test_log_link_override(self):
         """Gamma accepts a log link override."""
-        fam = GammaFamily(link='log')
+        fam = Gamma(link='log')
         assert fam.link.name == 'log'
 
     def test_initialize_guards_non_positive(self):
         """initialize() should clamp non-positive y to a small positive value."""
         y = np.array([-1.0, 0.0, 2.0, 5.0])
-        fam = GammaFamily()
+        fam = Gamma()
         mu_init = fam.initialize(y)
         # All initialized values must be positive (Gamma requires mu > 0)
         assert np.all(mu_init > 0)
@@ -48,12 +48,12 @@ class TestGammaFamilyUnit:
 
     def test_name(self):
         """Family name should match R's convention."""
-        fam = GammaFamily()
-        assert fam.name == 'Gamma'
+        fam = Gamma()
+        assert fam.name == 'gamma'
 
     def test_dispersion_is_not_fixed(self):
         """Gamma dispersion (shape) is estimated from data, not fixed."""
-        fam = GammaFamily()
+        fam = Gamma()
         assert not fam.dispersion_is_fixed
 
 
@@ -90,7 +90,7 @@ class TestNegativeBinomialFamilyUnit:
     def test_name(self):
         """Family name should match R's MASS convention."""
         fam = NegativeBinomial(theta=1.0)
-        assert fam.name == 'negative.binomial'
+        assert fam.name == 'negative-binomial'
 
     def test_dispersion_is_fixed(self):
         """For a given theta, NB GLM has fixed dispersion (phi=1)."""
@@ -102,14 +102,14 @@ class TestFamilyResolver:
     """Test resolve_family() for Gamma and NB aliases."""
 
     def test_resolve_gamma(self):
-        """'gamma' should resolve to GammaFamily."""
+        """'gamma' should resolve to Gamma."""
         fam = resolve_family('gamma')
-        assert isinstance(fam, GammaFamily)
+        assert isinstance(fam, Gamma)
 
     def test_resolve_gamma_case_insensitive(self):
-        """'Gamma' should resolve to GammaFamily."""
+        """'Gamma' should resolve to Gamma."""
         fam = resolve_family('Gamma')
-        assert isinstance(fam, GammaFamily)
+        assert isinstance(fam, Gamma)
 
     def test_resolve_nb(self):
         """'nb' should resolve to NegativeBinomial."""
@@ -117,13 +117,13 @@ class TestFamilyResolver:
         assert isinstance(fam, NegativeBinomial)
 
     def test_resolve_negative_binomial(self):
-        """'negative.binomial' should resolve to NegativeBinomial."""
-        fam = resolve_family('negative.binomial')
+        """'negative-binomial' should resolve to NegativeBinomial."""
+        fam = resolve_family('negative-binomial')
         assert isinstance(fam, NegativeBinomial)
 
     def test_resolve_nb_has_no_theta(self):
         """Resolved NB from string should have theta=None (for estimation)."""
-        fam = resolve_family('negative.binomial')
+        fam = resolve_family('negative-binomial')
         assert fam.theta is None
 
     def test_resolve_passthrough(self):
@@ -245,11 +245,11 @@ class TestGammaGLM:
         With n=300 and shape=5, coefficients should be close to truth.
         """
         X, y, true_beta = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
 
         assert isinstance(result, GLMSolution)
         assert result.converged
-        assert result.family_name == 'Gamma'
+        assert result.family_name == 'gamma'
         assert result.link_name == 'log'
         # Coefficient recovery within reasonable tolerance for n=300
         np.testing.assert_allclose(
@@ -264,31 +264,31 @@ class TestGammaGLM:
 
         assert isinstance(result, GLMSolution)
         assert result.converged
-        assert result.family_name == 'Gamma'
+        assert result.family_name == 'gamma'
         assert result.link_name == 'inverse'
 
     def test_gamma_aic_is_finite(self, gamma_log_data):
         """Gamma AIC should be a finite number."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert np.isfinite(result.aic)
 
     def test_gamma_deviance_non_negative(self, gamma_log_data):
         """Gamma deviance must be non-negative."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert result.deviance >= 0
 
     def test_gamma_null_deviance_gte_deviance(self, gamma_log_data):
         """Null deviance should be >= model deviance for well-specified model."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert result.null_deviance >= result.deviance - 1e-6
 
     def test_gamma_dispersion_estimated(self, gamma_log_data):
         """Gamma dispersion should be estimated (not 1.0) and positive."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert result.dispersion > 0
         assert result.dispersion != 1.0
         # True dispersion is 1/shape = 0.2; estimate should be in ballpark
@@ -297,13 +297,13 @@ class TestGammaGLM:
     def test_gamma_fitted_values_positive(self, gamma_log_data):
         """Gamma fitted values must be strictly positive."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert np.all(result.fitted_values > 0)
 
     def test_gamma_standard_errors_positive(self, gamma_log_data):
         """Standard errors should be positive and finite."""
         X, y, _ = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         se = result.standard_errors
         assert np.all(se > 0)
         assert np.all(np.isfinite(se))
@@ -321,7 +321,7 @@ class TestGammaGLM:
         y = np.abs(np.random.standard_normal(n)) + 0.1
         y[0] = 0.0  # edge case: zero response
         # Should not raise; initialize() clamps to small positive
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert isinstance(result, GLMSolution)
 
     def test_gamma_r_validation_log_link(self, gamma_log_data):
@@ -343,7 +343,7 @@ class TestGammaGLM:
           deviance/df_resid ~ 1 when dispersion is correct)
         """
         X, y, true_beta = gamma_log_data
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
 
         # Each coefficient should be within 2 standard errors of truth
         se = result.standard_errors
@@ -377,7 +377,7 @@ class TestNBFixedTheta:
 
         assert isinstance(result, GLMSolution)
         assert result.converged
-        assert result.family_name == 'negative.binomial'
+        assert result.family_name == 'negative-binomial'
         assert result.link_name == 'log'
         # Coefficient recovery
         np.testing.assert_allclose(
@@ -431,16 +431,16 @@ class TestNBFixedTheta:
 # =====================================================================
 
 class TestNBEstimatedTheta:
-    """Test NegativeBinomial GLM with theta estimation (family='negative.binomial')."""
+    """Test NegativeBinomial GLM with theta estimation (family='negative-binomial')."""
 
     def test_theta_estimation_converges(self, nb_fixed_theta_data):
-        """NB with family='negative.binomial' should converge (theta estimated)."""
+        """NB with family='negative-binomial' should converge (theta estimated)."""
         X, y, _, _ = nb_fixed_theta_data
-        result = fit(X, y, family='negative.binomial', backend='cpu')
+        result = fit(X, y, family='negative-binomial', backend='cpu')
 
         assert isinstance(result, GLMSolution)
         assert result.converged
-        assert result.family_name == 'negative.binomial'
+        assert result.family_name == 'negative-binomial'
 
     def test_estimated_theta_close_to_true(self, nb_fixed_theta_data):
         """Estimated theta should be within ~50% of true theta for n=300.
@@ -449,7 +449,7 @@ class TestNBEstimatedTheta:
         We access it via the family object in the solution info.
         """
         X, y, _, true_theta = nb_fixed_theta_data
-        result = fit(X, y, family='negative.binomial', backend='cpu')
+        result = fit(X, y, family='negative-binomial', backend='cpu')
 
         # The deviance-based check: for well-specified NB,
         # deviance/df_residual ~ 1 when theta is correct
@@ -465,7 +465,7 @@ class TestNBEstimatedTheta:
         # Fixed theta result
         result_fixed = fit(X, y, family=NegativeBinomial(theta=theta), backend='cpu')
         # Estimated theta result
-        result_est = fit(X, y, family='negative.binomial', backend='cpu')
+        result_est = fit(X, y, family='negative-binomial', backend='cpu')
 
         # Coefficients should agree within reasonable tolerance
         np.testing.assert_allclose(
@@ -480,7 +480,7 @@ class TestNBEstimatedTheta:
         equidispersed data, theta_ml returns a very large value.
         """
         X, y, _ = poisson_data_for_nb
-        result = fit(X, y, family='negative.binomial', backend='cpu')
+        result = fit(X, y, family='negative-binomial', backend='cpu')
 
         assert result.converged
         # The deviance/df should be close to 1 (good Poisson fit)
@@ -490,7 +490,7 @@ class TestNBEstimatedTheta:
     def test_nb_estimated_aic_finite(self, nb_fixed_theta_data):
         """AIC from theta-estimated NB should be finite."""
         X, y, _, _ = nb_fixed_theta_data
-        result = fit(X, y, family='negative.binomial', backend='cpu')
+        result = fit(X, y, family='negative-binomial', backend='cpu')
         assert np.isfinite(result.aic)
 
 
@@ -506,7 +506,7 @@ class TestGammaDeviance:
         y = np.array([1.0, 2.0, 5.0])
         mu = y.copy()
         wt = np.ones(3)
-        fam = GammaFamily()
+        fam = Gamma()
         assert fam.deviance(y, mu, wt) < 1e-14
 
     def test_deviance_positive_for_imperfect_fit(self):
@@ -514,7 +514,7 @@ class TestGammaDeviance:
         y = np.array([1.0, 2.0, 5.0])
         mu = np.array([1.1, 1.8, 5.5])
         wt = np.ones(3)
-        fam = GammaFamily()
+        fam = Gamma()
         assert fam.deviance(y, mu, wt) > 0
 
     def test_log_likelihood_finite(self):
@@ -522,7 +522,7 @@ class TestGammaDeviance:
         y = np.array([1.0, 2.0, 5.0])
         mu = np.array([1.1, 1.8, 5.5])
         wt = np.ones(3)
-        fam = GammaFamily()
+        fam = Gamma()
         ll = fam.log_likelihood(y, mu, wt, dispersion=0.2)
         assert np.isfinite(ll)
 
@@ -581,7 +581,7 @@ class TestEdgeCases:
         n = 50
         X = np.column_stack([np.ones(n), np.random.standard_normal(n)])
         y = np.full(n, 3.0)  # constant response
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         # Should converge; predictor coefficient should be ~0
         assert result.converged
         assert abs(result.coefficients[1]) < 0.01
@@ -604,16 +604,16 @@ class TestEdgeCases:
         n = 100
         X = np.ones((n, 1))
         y = np.random.gamma(shape=5.0, scale=2.0, size=n)
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert result.converged
         # Intercept should be close to log(mean(y))
         assert result.coefficients[0] == pytest.approx(np.log(np.mean(y)), abs=0.2)
 
     def test_gamma_repr(self):
-        """GammaFamily repr should include link name."""
-        fam = GammaFamily(link='log')
+        """Gamma repr should include link name."""
+        fam = Gamma(link='log')
         r = repr(fam)
-        assert 'GammaFamily' in r
+        assert 'Gamma' in r
         assert 'log' in r
 
     def test_nb_repr(self):
@@ -645,7 +645,7 @@ class TestVectorizedDevianceResiduals:
         X = np.column_stack([np.ones(n), rng.standard_normal((n, 3)) * 0.4])
         eta = X @ np.array([1.0, 0.3, -0.2, 0.1])
         y = rng.poisson(np.exp(eta)).astype(float)
-        result = fit(X, y, family='negative.binomial', backend='cpu')
+        result = fit(X, y, family='negative-binomial', backend='cpu')
         assert np.sum(result.residuals_deviance ** 2) == pytest.approx(
             result.deviance, rel=1e-9)
 
@@ -655,6 +655,6 @@ class TestVectorizedDevianceResiduals:
         X = np.column_stack([np.ones(n), rng.standard_normal((n, 2)) * 0.3])
         mu = np.exp(X @ np.array([1.0, 0.2, -0.1]))
         y = rng.gamma(shape=3.0, scale=mu / 3.0)
-        result = fit(X, y, family=GammaFamily(link='log'), backend='cpu')
+        result = fit(X, y, family=Gamma(link='log'), backend='cpu')
         assert np.sum(result.residuals_deviance ** 2) == pytest.approx(
             result.deviance, rel=1e-9)

@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from pystatistics.core.compute.backend import resolve_backend
-from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.exceptions import ValidationError, NotImplementedFeatureError
 from pystatistics.regression.design import Design
 from pystatistics.regression.solution import (
     LinearSolution, LinearParams, GLMSolution, GLMParams,
@@ -163,7 +163,7 @@ def ridge(
     X_or_design: ArrayLike | Design,
     y: ArrayLike | None = None,
     *,
-    lam: float,
+    l2: float,
     family: 'str | Family | None' = None,
     backend: BackendChoice | None = None,
     tol: float = 1e-8,
@@ -172,21 +172,21 @@ def ridge(
     weights: ArrayLike | None = None,
     offset: ArrayLike | None = None,
 ) -> Union[LinearSolution, GLMSolution]:
-    """Ridge (L2-penalized) regression — a thin wrapper over ``fit(..., l2=lam)``.
+    """Ridge (L2-penalized) regression — a thin wrapper over ``fit(..., l2=...)``.
 
-    ``ridge(X, y, lam=λ)`` fits an L2-penalized linear model; pass ``family=`` for
+    ``ridge(X, y, l2=λ)`` fits an L2-penalized linear model; pass ``family=`` for
     a penalized GLM (e.g. logistic ridge). Predictors are standardized and the
-    intercept is unpenalized; ``lam`` is the penalty on the standardized scale,
+    intercept is unpenalized; ``l2`` is the penalty on the standardized scale,
     matching ``MASS::lm.ridge``. Penalized fits do not report standard errors.
 
-    Equivalent to ``fit(X_or_design, y, family=family, l2=lam, ...)``; provided
+    Equivalent to ``fit(X_or_design, y, family=family, l2=l2, ...)``; provided
     for discoverability. (Future: ``lasso`` / ``elastic_net`` wrappers will sit
     alongside this once the coordinate-descent solver exists.)
     """
-    if lam < 0:
-        raise ValidationError(f"ridge penalty lam must be non-negative, got {lam}")
+    if l2 < 0:
+        raise ValidationError(f"ridge penalty l2 must be non-negative, got {l2}")
     return fit(X_or_design, y, family=family, backend=backend, tol=tol,
-               max_iter=max_iter, names=names, l2=lam,
+               max_iter=max_iter, names=names, l2=l2,
                weights=weights, offset=offset)
 
 
@@ -626,7 +626,7 @@ def _get_lm_backend(choice: BackendChoice, solver: SolverChoice | None, design: 
         if solver in (None, 'qr'):
             return CPUQRBackend()
         if solver == 'svd':
-            raise NotImplementedError("CPU SVD solver not yet implemented")
+            raise NotImplementedFeatureError("CPU SVD solver not yet implemented")
         raise ValidationError(
             f"Unknown solver {solver!r}. Valid options: 'qr', 'svd'."
         )

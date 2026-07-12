@@ -66,3 +66,26 @@ commits; this section accumulates them.
 - `boot_ci` now raises `ValidationError` on a multi-level `conf_level` sequence
   instead of silently using only the first level (a fail-loud fix).
 - `BootstrapSolution.t` / `.t0` (R `boot`-object parity) are unchanged.
+
+**`regression` / `anova` — family, link, and analysis-table naming:**
+
+- The `regression.anova()` analysis-of-deviance function is renamed
+  `regression.deviance_table()` (it collided with the `anova` module's
+  `anova()`); its result class `AnovaTable` → `DevianceTable` (now with a
+  Jupyter `_repr_html_`). Its `test=` values are lowercase `'chisq'`/`'lrt'`/`'f'`
+  (the `Pr(>Chisq)` display headers are unchanged). `drop1()` is unchanged.
+- GLM family string values are hyphenated: `'negative.binomial'` →
+  `'negative-binomial'`, `'inverse.gaussian'` → `'inverse-gaussian'` (both the
+  accepted `family=` value and the emitted `.family_name`). The `'nb'` shorthand
+  still works.
+- The Gamma family class is `Gamma` (was `GammaFamily`) and its `.family_name`
+  is lowercase `'gamma'`, consistent with the other families.
+- The inverse-squared link value/name is `'inverse-squared'` (the cryptic
+  `'1/mu^2'` spelling is removed).
+- `ridge(lam=)` → `ridge(l2=)` (the library-wide L2-penalty name).
+- `anova_rm(correction=)` values `'gg'`/`'hf'` → `'greenhouse-geisser'`/
+  `'huynh-feldt'`.
+- Input-validation errors that were bare `TypeError` / `ValueError` /
+  `NotImplementedError` on public paths now raise the corresponding
+  `core.exceptions` types (`ValidationError` / `DimensionError` /
+  `NotImplementedFeatureError`).

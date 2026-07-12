@@ -95,7 +95,7 @@ class InverseGaussian(Family):
 
     @property
     def name(self) -> str:
-        return 'inverse.gaussian'
+        return 'inverse-gaussian'
 
     def _default_link(self) -> Link:
         return InverseSquaredLink()

@@ -23,7 +23,7 @@ and no R at run time.
 import numpy as np
 import pytest
 
-from pystatistics.regression import fit, GammaFamily, Gaussian, Binomial
+from pystatistics.regression import fit, Gamma, Gaussian, Binomial
 from pystatistics.regression.families import Poisson
 
 
@@ -68,24 +68,24 @@ class TestGammaDispersionIC:
 
     def test_aic_matches_r(self):
         X, y = _disp_design()
-        r = fit(X, y, family=GammaFamily(link='log'))
+        r = fit(X, y, family=Gamma(link='log'))
         assert r.aic == pytest.approx(_R_GAMMA_AIC, rel=0, abs=1e-6)
 
     def test_bic_matches_r(self):
         X, y = _disp_design()
-        r = fit(X, y, family=GammaFamily(link='log'))
+        r = fit(X, y, family=Gamma(link='log'))
         # Pre-4.3.2 this was off by exactly (log(n) - 2).
         assert r.bic == pytest.approx(_R_GAMMA_BIC, rel=0, abs=1e-6)
 
     def test_deviance_matches_r(self):
         X, y = _disp_design()
-        r = fit(X, y, family=GammaFamily(link='log'))
+        r = fit(X, y, family=Gamma(link='log'))
         assert r.deviance == pytest.approx(_R_GAMMA_DEV, rel=0, abs=1e-6)
 
     def test_bic_counts_dispersion_param(self):
         """BIC = AIC - 2k + k·log(n) with k = rank + 1 (dispersion included)."""
         X, y = _disp_design()
-        r = fit(X, y, family=GammaFamily(link='log'))
+        r = fit(X, y, family=Gamma(link='log'))
         n = X.shape[0]
         k = r.rank + 1
         expected = r.aic - 2.0 * k + k * np.log(n)
@@ -126,7 +126,7 @@ class TestDispersionParamCount:
         assert Gaussian().n_ic_dispersion_params == 1
 
     def test_gamma_counts_one(self):
-        assert GammaFamily().n_ic_dispersion_params == 1
+        assert Gamma().n_ic_dispersion_params == 1
 
     def test_binomial_counts_zero(self):
         assert Binomial().n_ic_dispersion_params == 0

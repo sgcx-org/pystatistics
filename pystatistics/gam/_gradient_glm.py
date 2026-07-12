@@ -95,7 +95,7 @@ _CANONICAL_LINKS = {
     "gaussian": "identity",
     "poisson": "log",
     "binomial": "logit",
-    "Gamma": "inverse",
+    "gamma": "inverse",
 }
 
 

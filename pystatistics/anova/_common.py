@@ -116,7 +116,7 @@ class AnovaRMParams:
     within_factors: tuple[str, ...]
     between_factors: tuple[str, ...]
     sphericity: tuple[SphericitySummary, ...]
-    correction: str                    # 'none', 'gg', 'hf', 'auto'
+    correction: str                    # 'none', 'greenhouse-geisser', 'huynh-feldt', 'auto'
     grand_mean: float
     eta_squared: dict[str, float]
     partial_eta_squared: dict[str, float]

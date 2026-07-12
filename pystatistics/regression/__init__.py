@@ -29,10 +29,10 @@ from pystatistics.regression.solution import (
 )
 from pystatistics.regression.solvers import fit, ridge
 from pystatistics.regression.families import (
-    Family, Gaussian, Binomial, Poisson, GammaFamily, NegativeBinomial,
+    Family, Gaussian, Binomial, Poisson, Gamma, NegativeBinomial,
     InverseGaussian, QuasiPoisson, QuasiBinomial,
 )
-from pystatistics.regression._analysis import anova, drop1, AnovaTable
+from pystatistics.regression._analysis import deviance_table, drop1, DevianceTable
 
 __all__ = [
     "fit",
@@ -51,13 +51,13 @@ __all__ = [
     "Gaussian",
     "Binomial",
     "Poisson",
-    "GammaFamily",
+    "Gamma",
     "NegativeBinomial",
     "InverseGaussian",
     "QuasiPoisson",
     "QuasiBinomial",
     # Analysis of deviance
-    "anova",
+    "deviance_table",
     "drop1",
-    "AnovaTable",
+    "DevianceTable",
 ]

@@ -23,7 +23,7 @@ import pytest
 
 from pystatistics.regression import fit
 from pystatistics.regression.families import (
-    GammaFamily, NegativeBinomial, LogLink, InverseLink,
+    Gamma, NegativeBinomial, LogLink, InverseLink,
 )
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
@@ -59,7 +59,7 @@ def _build_family(family, link, theta):
     if family == "poisson":
         return "poisson"
     if family == "Gamma":
-        return GammaFamily(link=LogLink() if link == "log" else InverseLink())
+        return Gamma(link=LogLink() if link == "log" else InverseLink())
     if family == "negative.binomial":
         return NegativeBinomial(theta=theta, link="log")
     raise ValueError(f"unknown family {family}")

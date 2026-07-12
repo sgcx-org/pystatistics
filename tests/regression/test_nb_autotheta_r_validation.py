@@ -4,7 +4,7 @@ Each case in ``tests/fixtures/nb_autotheta_cases.json`` was fit in R with
 ``MASS::glm.nb`` (which estimates the dispersion θ by profile likelihood) and its
 outputs stored in ``nb_autotheta_r_results.json`` (regenerate with
 ``tests/fixtures/run_r_nb_autotheta_validation.R``). These tests fit the same
-data with ``fit(family='negative.binomial', ...)`` — which runs the same
+data with ``fit(family='negative-binomial', ...)`` — which runs the same
 alternating θ-estimation loop — and assert parity.
 
 The estimated θ, coefficients, standard errors, deviance, AIC and BIC are all
@@ -43,7 +43,7 @@ def _fit_case(name):
     y = np.array(cs["y"], dtype=np.float64)
     weights = None if cs["weights"] is None else np.array(cs["weights"], dtype=np.float64)
     offset = None if cs["offset"] is None else np.array(cs["offset"], dtype=np.float64)
-    return fit(X, y, family="negative.binomial", weights=weights, offset=offset,
+    return fit(X, y, family="negative-binomial", weights=weights, offset=offset,
                tol=1e-12, max_iter=300)
 
 

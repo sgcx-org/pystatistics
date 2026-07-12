@@ -229,7 +229,7 @@ def _clamp_mu(
     name = family.name
     if name == "binomial":
         clipped = np.clip(mu, _MU_EPS, 1.0 - _MU_EPS)
-    elif name in ("poisson", "Gamma", "negative.binomial", "inverse.gaussian"):
+    elif name in ("poisson", "gamma", "negative-binomial", "inverse-gaussian"):
         clipped = np.maximum(mu, _MU_EPS)
     else:
         return mu, False

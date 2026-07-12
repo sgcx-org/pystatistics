@@ -297,8 +297,8 @@ def anova_rm(
         between: {factor_name: 1D group labels} or None
         correction: Sphericity correction:
             'none': no correction
-            'gg': Greenhouse-Geisser
-            'hf': Huynh-Feldt
+            'greenhouse-geisser': Greenhouse-Geisser
+            'huynh-feldt': Huynh-Feldt
             'auto': GG if Mauchly p < 0.05, else none (default)
 
     Returns:

@@ -183,13 +183,15 @@ class TestRMCorrection:
 
     def test_correction_gg(self, rm_within_3):
         y, subj, cond = rm_within_3
-        result = anova_rm(y, subj, within={'condition': cond}, correction='gg')
-        assert result.correction == 'gg'
+        result = anova_rm(y, subj, within={'condition': cond},
+                          correction='greenhouse-geisser')
+        assert result.correction == 'greenhouse-geisser'
 
     def test_correction_hf(self, rm_within_3):
         y, subj, cond = rm_within_3
-        result = anova_rm(y, subj, within={'condition': cond}, correction='hf')
-        assert result.correction == 'hf'
+        result = anova_rm(y, subj, within={'condition': cond},
+                          correction='huynh-feldt')
+        assert result.correction == 'huynh-feldt'
 
     def test_invalid_correction_raises(self, rm_within_3):
         y, subj, cond = rm_within_3

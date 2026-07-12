@@ -187,7 +187,6 @@ _LINK_CLASSES: dict[str, type[Link]] = {
     'cloglog': CLogLogLink,
     'cauchit': CauchitLink,
     'sqrt': SqrtLink,
-    '1/mu^2': InverseSquaredLink,
     'inverse-squared': InverseSquaredLink,
 }
 
@@ -204,7 +203,7 @@ def _resolve_link(link: str | Link | None, default: Link) -> Link:
             valid = ', '.join(sorted(_LINK_CLASSES.keys()))
             raise ValidationError(f"Unknown link: {link!r}. Valid links: {valid}")
         return cls()
-    raise TypeError(f"link must be str or Link, got {type(link).__name__}")
+    raise ValidationError(f"link must be str or Link, got {type(link).__name__}")
 
 
 # =====================================================================
@@ -499,7 +498,7 @@ class Poisson(Family):
         return True
 
 
-class GammaFamily(Family):
+class Gamma(Family):
     """Gamma family. Default link: inverse.
 
     V(μ) = μ²
@@ -515,7 +514,7 @@ class GammaFamily(Family):
 
     @property
     def name(self) -> str:
-        return 'Gamma'
+        return 'gamma'
 
     def _default_link(self) -> Link:
         return InverseLink()
@@ -617,7 +616,7 @@ class NegativeBinomial(Family):
     Args:
         theta: The dispersion parameter (> 0). Larger θ means less
             overdispersion; θ → ∞ recovers Poisson. If None, theta must
-            be estimated externally (e.g., via fit(family='negative.binomial')).
+            be estimated externally (e.g., via fit(family='negative-binomial')).
         link: Link function (default: log).
 
     References:
@@ -635,7 +634,7 @@ class NegativeBinomial(Family):
 
     @property
     def name(self) -> str:
-        return 'negative.binomial'
+        return 'negative-binomial'
 
     def _default_link(self) -> Link:
         return LogLink()
@@ -644,7 +643,7 @@ class NegativeBinomial(Family):
         if self.theta is None:
             raise ValidationError(
                 "Cannot compute variance without theta. "
-                "Set theta or use fit(family='negative.binomial') for "
+                "Set theta or use fit(family='negative-binomial') for "
                 "automatic theta estimation."
             )
         # NUMERICAL GUARD: prevents zero variance when mu is near zero
@@ -716,12 +715,12 @@ _FAMILY_CLASSES: dict[str, type[Family]] = {
     'normal': Gaussian,
     'binomial': Binomial,
     'poisson': Poisson,
-    'gamma': GammaFamily,
-    'negative.binomial': NegativeBinomial,
+    'gamma': Gamma,
+    'negative-binomial': NegativeBinomial,
     'nb': NegativeBinomial,
     'quasipoisson': QuasiPoisson,
     'quasibinomial': QuasiBinomial,
-    'inverse.gaussian': InverseGaussian,
+    'inverse-gaussian': InverseGaussian,
 }
 
 
@@ -744,11 +743,9 @@ def resolve_family(family: str | Family) -> Family:
     if isinstance(family, str):
         cls = _FAMILY_CLASSES.get(family.lower())
         if cls is None:
-            valid = ', '.join(
-                sorted(k for k in _FAMILY_CLASSES.keys() if k != 'normal')
-            )
+            valid = ', '.join(sorted(_FAMILY_CLASSES.keys()))
             raise ValidationError(
                 f"Unknown family: {family!r}. Valid families: {valid}"
             )
         return cls()
-    raise TypeError(f"family must be str or Family, got {type(family).__name__}")
+    raise ValidationError(f"family must be str or Family, got {type(family).__name__}")

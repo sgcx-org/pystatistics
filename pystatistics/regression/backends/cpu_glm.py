@@ -314,12 +314,12 @@ class CPUIRLSBackend:
             with np.errstate(divide='ignore', invalid='ignore'):
                 term = np.where(y > 0, y * np.log(y / mu_c), 0.0)
             d = 2.0 * (term - (y - mu_c))
-        elif family.name == 'Gamma':
-            # Unit deviance 2*((y-μ)/μ - log(y/μ)); matches GammaFamily.deviance.
+        elif family.name == 'gamma':
+            # Unit deviance 2*((y-μ)/μ - log(y/μ)); matches Gamma.deviance.
             mu_c = np.maximum(mu, 1e-10)
             y_safe = np.maximum(y, 1e-10)
             d = 2.0 * ((y - mu_c) / mu_c - np.log(y_safe / mu_c))
-        elif family.name == 'negative.binomial':
+        elif family.name == 'negative-binomial':
             # Unit deviance 2*(y*log(y/μ) - (y+θ)*log((y+θ)/(μ+θ))); matches
             # NegativeBinomial.deviance. θ is the fitted dispersion on the family.
             theta = family.theta

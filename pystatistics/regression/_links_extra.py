@@ -81,7 +81,7 @@ class InverseSquaredLink(Link):
 
     @property
     def name(self) -> str:
-        return '1/mu^2'
+        return 'inverse-squared'
 
     def link(self, mu: NDArray) -> NDArray:
         return 1.0 / np.maximum(mu, 1e-10) ** 2

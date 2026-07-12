@@ -196,7 +196,7 @@ def test_ridge_with_offset_raises(ols_data):
 def test_ridge_wrapper_with_weights_raises(ols_data):
     X, y = ols_data
     with pytest.raises(NotImplementedError, match="ridge penalty"):
-        ridge(X, y, lam=1.0, weights=np.ones(len(y)))
+        ridge(X, y, l2=1.0, weights=np.ones(len(y)))
 
 
 def test_weights_wrong_length_raises_through_fit(ols_data):

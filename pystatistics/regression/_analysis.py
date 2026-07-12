@@ -1,12 +1,12 @@
 """
 Analysis-of-deviance tables for fitted linear / generalized-linear models:
-``anova`` (sequential, or a nested-model comparison) and ``drop1``.
+``deviance_table`` (sequential, or a nested-model comparison) and ``drop1``.
 
 These mirror R's ``anova.lm`` / ``anova.glm`` and ``drop1``:
 
-- ``anova(model)``          — sequential (Type I) analysis of deviance: add each
-  term in turn and test the deviance it explains.
-- ``anova(m1, m2, ...)``    — compare nested models: the deviance difference
+- ``deviance_table(model)``      — sequential (Type I) analysis of deviance: add
+  each term in turn and test the deviance it explains.
+- ``deviance_table(m1, m2, ...)``— compare nested models: the deviance difference
   between consecutive fits.
 - ``drop1(model)``          — drop each term singly from the full model and test
   the deviance it accounts for.
@@ -26,10 +26,11 @@ from numpy.typing import NDArray
 from scipy import stats
 
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.core.result import SolutionReprMixin
 
 
 @dataclass(frozen=True)
-class AnovaRow:
+class DevianceRow:
     """One row of an analysis-of-deviance table."""
     term: str
     df: int | None            # degrees of freedom for the term (None for a base row)
@@ -42,9 +43,9 @@ class AnovaRow:
 
 
 @dataclass(frozen=True)
-class AnovaTable:
-    """Result of :func:`anova` / :func:`drop1` — a list of rows plus metadata."""
-    rows: tuple[AnovaRow, ...]
+class DevianceTable(SolutionReprMixin):
+    """Result of :func:`deviance_table` / :func:`drop1` — rows plus metadata."""
+    rows: tuple[DevianceRow, ...]
     test: str | None
     kind: str                 # 'sequential', 'comparison', or 'drop1'
 
@@ -54,10 +55,15 @@ class AnovaTable:
             'comparison': "Analysis of Deviance Table (model comparison)",
             'drop1': "Single-term deletions (drop1)",
         }[self.kind]
+        # R-style display label for the test column header; the stored
+        # ``test`` token is lowercase ('chisq'/'lrt'/'f'), but the header keeps
+        # R's capitalization ("Pr(>Chisq)" / "Pr(>F)").
+        disp = {'chisq': 'Chisq', 'lrt': 'Chisq', 'f': 'F'}.get(
+            self.test, self.test or '')
         lines = [head, "=" * 74,
                  f"{'Term':<22}{'Df':>5}{'Deviance':>12}{'Resid.Df':>10}"
                  f"{'Resid.Dev':>12}"
-                 + (f"{'Stat':>10}{'Pr(>'+ (self.test or '')+')':>10}"
+                 + (f"{'Stat':>10}{'Pr(>'+ disp +')':>10}"
                     if self.test else "")]
         for r in self.rows:
             df = "" if r.df is None else f"{r.df:>5d}"
@@ -72,7 +78,7 @@ class AnovaTable:
         return "\n".join(lines)
 
     def __repr__(self) -> str:
-        return f"AnovaTable(kind={self.kind!r}, rows={len(self.rows)}, test={self.test!r})"
+        return f"DevianceTable(kind={self.kind!r}, rows={len(self.rows)}, test={self.test!r})"
 
 
 # --------------------------------------------------------------------------
@@ -130,11 +136,11 @@ def _refit_deviance(model, cols: list[int]) -> tuple[float, int]:
 
 
 def _default_test(model) -> str:
-    """R's default test: F for estimated-dispersion families / LM, else Chisq."""
+    """R's default test: F for estimated-dispersion families / LM, else chisq."""
     family = _family_of(model)
     if family is None:
-        return 'F'                      # linear model
-    return 'Chisq' if family.dispersion_is_fixed else 'F'
+        return 'f'                      # linear model
+    return 'chisq' if family.dispersion_is_fixed else 'f'
 
 
 def _cols_for_terms(assign: list[int], term_ids: list[int]) -> list[int]:
@@ -146,15 +152,16 @@ def _cols_for_terms(assign: list[int], term_ids: list[int]) -> list[int]:
 # Public API
 # --------------------------------------------------------------------------
 
-def anova(*models, test: str | None = None) -> AnovaTable:
+def deviance_table(*models, test: str | None = None) -> DevianceTable:
     """Analysis-of-deviance table.
 
-    ``anova(model)`` gives a sequential (Type I) table; ``anova(m1, m2, ...)``
-    compares nested models. ``test`` is one of ``'Chisq'``/``'LRT'``, ``'F'``, or
-    ``None`` (no p-values); it defaults to R's choice for the model's family.
+    ``deviance_table(model)`` gives a sequential (Type I) table;
+    ``deviance_table(m1, m2, ...)`` compares nested models. ``test`` is one of
+    ``'chisq'``/``'lrt'``, ``'f'``, or ``None`` (no p-values); it defaults to R's
+    choice for the model's family.
     """
     if not models:
-        raise ValidationError("anova requires at least one fitted model")
+        raise ValidationError("deviance_table requires at least one fitted model")
     if len(models) == 1:
         return _anova_sequential(models[0], test)
     return _anova_comparison(list(models), test)
@@ -165,16 +172,16 @@ def _term_test(deviance: float, df: int, dispersion: float,
     """Return (statistic, p_value) for a term, per the requested test."""
     if test is None or df <= 0:
         return None, None
-    if test in ('Chisq', 'LRT'):
+    if test in ('chisq', 'lrt'):
         stat = deviance / dispersion
         return stat, float(stats.chi2.sf(stat, df))
-    if test == 'F':
+    if test == 'f':
         f = (deviance / df) / dispersion
         return f, float(stats.f.sf(f, df, resid_df))
-    raise ValidationError(f"Unknown test {test!r}. Use 'Chisq', 'LRT', 'F', or None.")
+    raise ValidationError(f"Unknown test {test!r}. Use 'chisq', 'lrt', 'f', or None.")
 
 
-def _anova_sequential(model, test: str | None) -> AnovaTable:
+def _anova_sequential(model, test: str | None) -> DevianceTable:
     X, y, assign, term_names = _term_structure(model)
     if test is None:
         test = _default_test(model)
@@ -198,7 +205,7 @@ def _anova_sequential(model, test: str | None) -> AnovaTable:
     prev_dev, prev_rdf = _refit_deviance(model, base_cols) if base_cols else \
         (_refit_deviance(model, list(range(X.shape[1])))[0], X.shape[0])
 
-    rows = [AnovaRow(term="NULL" if base_cols else term_names[term_ids[0]],
+    rows = [DevianceRow(term="NULL" if base_cols else term_names[term_ids[0]],
                      df=None, deviance=None,
                      resid_df=prev_rdf, resid_deviance=prev_dev)]
     cols = list(base_cols)
@@ -209,14 +216,14 @@ def _anova_sequential(model, test: str | None) -> AnovaTable:
         d_dev = prev_dev - dev
         df = len(tcols)
         stat, p = _term_test(d_dev, df, disp_full, model._result.params.df_residual, test)
-        rows.append(AnovaRow(term=term_names[t], df=df, deviance=d_dev,
+        rows.append(DevianceRow(term=term_names[t], df=df, deviance=d_dev,
                              resid_df=rdf, resid_deviance=dev,
                              statistic=stat, p_value=p))
         prev_dev = dev
-    return AnovaTable(rows=tuple(rows), test=test, kind='sequential')
+    return DevianceTable(rows=tuple(rows), test=test, kind='sequential')
 
 
-def _anova_comparison(models: list, test: str | None) -> AnovaTable:
+def _anova_comparison(models: list, test: str | None) -> DevianceTable:
     if test is None:
         test = _default_test(models[0])
     family = _family_of(models[0])
@@ -237,21 +244,21 @@ def _anova_comparison(models: list, test: str | None) -> AnovaTable:
         rdf = m._result.params.df_residual
         rdev = dev_of(m)
         if prev is None:
-            rows.append(AnovaRow(term=f"Model {i+1}", df=None, deviance=None,
+            rows.append(DevianceRow(term=f"Model {i+1}", df=None, deviance=None,
                                  resid_df=rdf, resid_deviance=rdev))
         else:
             df = prev[0] - rdf
             d_dev = prev[1] - rdev
             stat, p = _term_test(abs(d_dev), abs(df), disp,
                                  min(rdf, prev[0]), test) if df != 0 else (None, None)
-            rows.append(AnovaRow(term=f"Model {i+1}", df=df, deviance=d_dev,
+            rows.append(DevianceRow(term=f"Model {i+1}", df=df, deviance=d_dev,
                                  resid_df=rdf, resid_deviance=rdev,
                                  statistic=stat, p_value=p))
         prev = (rdf, rdev)
-    return AnovaTable(rows=tuple(rows), test=test, kind='comparison')
+    return DevianceTable(rows=tuple(rows), test=test, kind='comparison')
 
 
-def drop1(model, test: str | None = None) -> AnovaTable:
+def drop1(model, test: str | None = None) -> DevianceTable:
     """Single-term deletions: drop each term singly and test its contribution.
 
     Mirrors R's ``drop1`` — the ``<none>`` row is the full model, and each
@@ -278,7 +285,7 @@ def drop1(model, test: str | None = None) -> AnovaTable:
     elif not family.dispersion_is_fixed:
         disp_full = model.dispersion
 
-    rows = [AnovaRow(term="<none>", df=None, deviance=None,
+    rows = [DevianceRow(term="<none>", df=None, deviance=None,
                      resid_df=full_rdf, resid_deviance=full_dev, aic=full_aic)]
     all_ids = seen
     for t in term_ids:
@@ -290,10 +297,10 @@ def drop1(model, test: str | None = None) -> AnovaTable:
         stat, p = _term_test(d_dev, df, disp_full, full_rdf, test)
         # AIC of the reduced model (fixed-dispersion families / LM only rigorously).
         sub_aic = _reduced_aic(model, cols)
-        rows.append(AnovaRow(term=term_names[t], df=df, deviance=d_dev,
+        rows.append(DevianceRow(term=term_names[t], df=df, deviance=d_dev,
                              resid_df=rdf, resid_deviance=dev,
                              statistic=stat, p_value=p, aic=sub_aic))
-    return AnovaTable(rows=tuple(rows), test=test, kind='drop1')
+    return DevianceTable(rows=tuple(rows), test=test, kind='drop1')
 
 
 def _lm_aic(model) -> float:
