@@ -120,3 +120,22 @@ commits; this section accumulates them.
   `.conf_int` (parametric coefficients), and `.backend_name`. Smooth-term
   significance stays on `.summary()` (approximate F/Chi-sq, not per-coefficient),
   so no `.z_values`/`.t_values`/`.p_values` arrays are added.
+
+**`mixed` — descriptive parameter name and uniform accessors:**
+
+- `grm_lmm(W=)` → `grm_lmm(random_factor=)` (the low-rank factor defining
+  `K = WW'/M`); `W` was a single-letter public parameter.
+- `LMMSolution` / `GLMMSolution` gain `.backend_name`, `.timing`, `.warnings`;
+  `GRMSolution` gains `.timing` / `.warnings`. `LMMSolution` / `GLMMSolution`
+  gain a `.coef` accessor aliasing `.fixef`.
+
+**`ordinal` / `multinomial` — predict selector, link value, uniform accessors:**
+
+- `OrdinalSolution.predict(type=)` and `MultinomialSolution.predict(type=)` →
+  `predict(kind=)` (`type` shadowed a builtin); values `'class'`/`'probs'`
+  unchanged.
+- Ordinal logit link value `'logistic'` → `'logit'`, matching the GLM/GAM
+  spelling of the same link.
+- `OrdinalSolution` gains `.category_names`; `MultinomialSolution` gains
+  `.backend_name` / `.info` / `.timing` and a `.coefficients` alias for
+  `.coefficient_matrix`.

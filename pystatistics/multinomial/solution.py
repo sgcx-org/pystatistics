@@ -61,6 +61,14 @@ class MultinomialSolution(SolutionReprMixin):
         return self._result.params.coefficient_matrix
 
     @property
+    def coefficients(self) -> NDArray[np.floating[Any]]:
+        """Alias for ``coefficient_matrix``: the (J-1, p) coefficient matrix.
+
+        One row per non-reference class, one column per predictor.
+        """
+        return self._result.params.coefficient_matrix
+
+    @property
     def coef(self) -> dict[str, dict[str, float]]:
         """Coefficients as nested dict: class -> predictor -> value.
 
@@ -138,6 +146,21 @@ class MultinomialSolution(SolutionReprMixin):
         return self._result.warnings
 
     @property
+    def backend_name(self) -> str:
+        """Backend identifier (parity with ``OrdinalSolution.backend_name``)."""
+        return self._result.backend_name
+
+    @property
+    def info(self) -> dict[str, Any]:
+        """Result metadata dictionary (parity with ``OrdinalSolution.info``)."""
+        return self._result.info
+
+    @property
+    def timing(self) -> dict[str, float] | None:
+        """Execution timing, or None (parity with ``OrdinalSolution.timing``)."""
+        return self._result.timing
+
+    @property
     def conf_int(self) -> NDArray[np.floating[Any]]:
         """Wald confidence intervals, shape (J-1, p, 2).
 
@@ -171,7 +194,7 @@ class MultinomialSolution(SolutionReprMixin):
         return np.argmax(self._result.params.fitted_probs, axis=1)
 
     def predict(self, X: NDArray[np.floating[Any]], *,
-                type: str = "class") -> NDArray[Any]:
+                kind: str = "class") -> NDArray[Any]:
         """Predict for a design matrix, matching R's predict.multinom.
 
         Args:
@@ -179,20 +202,20 @@ class MultinomialSolution(SolutionReprMixin):
                 the model was fit with one (the caller supplies the intercept for
                 multinom, so the prediction design must match the fitted design).
                 p must equal the fitted number of predictors.
-            type: 'class' (default) returns the most probable class code per row
+            kind: 'class' (default) returns the most probable class code per row
                 (shape (n,)); 'probs' returns the (n, J) class-probability matrix
                 (each row sums to 1, columns in code order).
 
         Returns:
-            Class codes (type='class') or a probability matrix (type='probs').
+            Class codes (kind='class') or a probability matrix (kind='probs').
 
         Raises:
-            ValidationError: If type is invalid or X's column count does not match
+            ValidationError: If kind is invalid or X's column count does not match
                 the fitted model.
         """
-        if type not in ("class", "probs"):
+        if kind not in ("class", "probs"):
             raise ValidationError(
-                f"type must be 'class' or 'probs', got {type!r}")
+                f"kind must be 'class' or 'probs', got {kind!r}")
         X_arr = check_array(X, "X")
         check_finite(X_arr, "X")
         if X_arr.ndim == 1:
@@ -206,7 +229,7 @@ class MultinomialSolution(SolutionReprMixin):
                 f"predictors (include the intercept column if the model has one)")
         probs = compute_probs(
             params.coefficient_matrix.ravel(), X_arr, params.n_classes)
-        return probs if type == "probs" else np.argmax(probs, axis=1)
+        return probs if kind == "probs" else np.argmax(probs, axis=1)
 
     # -- Model fit statistics --
 

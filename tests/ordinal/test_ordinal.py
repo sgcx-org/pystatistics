@@ -102,7 +102,7 @@ def four_level_data():
 # =========================================================================
 
 class TestPolrPredict:
-    """fitted_probs / predicted_class / predict(X, type=), matching predict.polr."""
+    """fitted_probs / predicted_class / predict(X, kind=), matching predict.polr."""
 
     def test_fitted_probs_shape_and_sum(self, simple_data):
         y, X = simple_data
@@ -114,20 +114,20 @@ class TestPolrPredict:
     def test_predict_in_sample_matches_fitted(self, simple_data):
         y, X = simple_data
         sol = polr(y, X)
-        assert_allclose(sol.predict(X, type="probs"), sol.fitted_probs)
-        assert np.array_equal(sol.predict(X, type="class"), sol.predicted_class)
+        assert_allclose(sol.predict(X, kind="probs"), sol.fitted_probs)
+        assert np.array_equal(sol.predict(X, kind="class"), sol.predicted_class)
 
     def test_predict_class_is_argmax(self, simple_data):
         y, X = simple_data
         sol = polr(y, X)
-        assert np.array_equal(sol.predict(X, type="class"),
-                              np.argmax(sol.predict(X, type="probs"), axis=1))
+        assert np.array_equal(sol.predict(X, kind="class"),
+                              np.argmax(sol.predict(X, kind="probs"), axis=1))
 
     def test_predict_bad_type_raises(self, simple_data):
         y, X = simple_data
         sol = polr(y, X)
-        with pytest.raises(ValidationError, match="type must be"):
-            sol.predict(X, type="nope")
+        with pytest.raises(ValidationError, match="kind must be"):
+            sol.predict(X, kind="nope")
 
     def test_predict_wrong_columns_raises(self, simple_data):
         y, X = simple_data
@@ -351,14 +351,14 @@ class TestPolrLogistic:
     def test_basic_fit(self, simple_data):
         """polr fits and returns an OrdinalSolution."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         assert isinstance(sol, OrdinalSolution)
         assert sol.converged
 
     def test_coefficient_recovery(self, simple_data):
         """Recovered betas are close to true values [1.0, -0.5]."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic', names=['x1', 'x2'])
+        sol = polr(y, X, link='logit', names=['x1', 'x2'])
 
         # With n=500, we expect reasonable recovery
         assert_allclose(sol.coefficients[0], 1.0, atol=0.25)
@@ -367,7 +367,7 @@ class TestPolrLogistic:
     def test_threshold_recovery(self, simple_data):
         """Recovered thresholds are close to true values [-1.0, 1.0]."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
 
         assert_allclose(sol.threshold_values[0], -1.0, atol=0.3)
         assert_allclose(sol.threshold_values[1], 1.0, atol=0.3)
@@ -375,14 +375,14 @@ class TestPolrLogistic:
     def test_threshold_ordering(self, simple_data):
         """Thresholds are strictly ordered."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         alpha = sol.threshold_values
         assert np.all(np.diff(alpha) > 0)
 
     def test_coef_dict(self, simple_data):
         """coef property returns correctly named dictionary."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic', names=['age', 'income'])
+        sol = polr(y, X, link='logit', names=['age', 'income'])
         coef = sol.coef
         assert 'age' in coef
         assert 'income' in coef
@@ -392,7 +392,7 @@ class TestPolrLogistic:
         """thresholds property returns correctly labeled dictionary."""
         y, X = simple_data
         sol = polr(
-            y, X, link='logistic',
+            y, X, link='logit',
             category_names=['low', 'medium', 'high'],
         )
         thresh = sol.thresholds
@@ -402,14 +402,14 @@ class TestPolrLogistic:
     def test_standard_errors_positive(self, simple_data):
         """Standard errors are all positive."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         assert np.all(sol.standard_errors > 0)
         assert np.all(sol.threshold_standard_errors > 0)
 
     def test_z_and_p_values(self, simple_data):
         """z-values and p-values are computed correctly."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
 
         z = sol.z_values
         p = sol.p_values
@@ -424,7 +424,7 @@ class TestPolrLogistic:
     def test_deviance_and_aic(self, simple_data):
         """Deviance and AIC are consistent."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
 
         assert sol.deviance == pytest.approx(-2 * sol.log_likelihood)
         n_params = 2 + 2  # 2 thresholds + 2 betas
@@ -433,7 +433,7 @@ class TestPolrLogistic:
     def test_n_obs(self, simple_data):
         """n_obs matches input size."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         assert sol.n_obs == len(y)
 
 
@@ -556,7 +556,7 @@ class TestPolrFourLevels:
         """Fits a 4-level model correctly."""
         y, X = four_level_data
         sol = polr(
-            y, X, link='logistic',
+            y, X, link='logit',
             names=['x1', 'x2', 'x3'],
             category_names=['none', 'mild', 'moderate', 'severe'],
         )
@@ -567,14 +567,14 @@ class TestPolrFourLevels:
     def test_four_level_threshold_ordering(self, four_level_data):
         """Four thresholds are strictly ordered."""
         y, X = four_level_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         assert np.all(np.diff(sol.threshold_values) > 0)
 
     def test_four_level_threshold_labels(self, four_level_data):
         """Threshold dict has correct labels for 4 levels."""
         y, X = four_level_data
         sol = polr(
-            y, X, link='logistic',
+            y, X, link='logit',
             category_names=['A', 'B', 'C', 'D'],
         )
         thresh = sol.thresholds
@@ -677,7 +677,7 @@ class TestSummary:
     def test_summary_contains_sections(self, simple_data):
         """Summary contains Coefficients, Intercepts, Deviance, AIC."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic', names=['x1', 'x2'])
+        sol = polr(y, X, link='logit', names=['x1', 'x2'])
         text = sol.summary()
 
         assert 'Coefficients:' in text
@@ -688,7 +688,7 @@ class TestSummary:
     def test_summary_contains_variable_names(self, simple_data):
         """Summary shows the provided variable names."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic', names=['age', 'income'])
+        sol = polr(y, X, link='logit', names=['age', 'income'])
         text = sol.summary()
         assert 'age' in text
         assert 'income' in text
@@ -697,7 +697,7 @@ class TestSummary:
         """Summary shows threshold labels from level_names."""
         y, X = simple_data
         sol = polr(
-            y, X, link='logistic',
+            y, X, link='logit',
             category_names=['low', 'medium', 'high'],
         )
         text = sol.summary()
@@ -707,10 +707,10 @@ class TestSummary:
     def test_repr(self, simple_data):
         """repr includes key information."""
         y, X = simple_data
-        sol = polr(y, X, link='logistic')
+        sol = polr(y, X, link='logit')
         r = repr(sol)
         assert 'OrdinalSolution' in r
-        assert 'logistic' in r
+        assert 'logit' in r
 
 
 # =========================================================================
@@ -734,7 +734,7 @@ class TestOrdinalParams:
             level_names=('low', 'high'),
             n_iter=10,
             converged=True,
-            link='logistic',
+            link='logit',
         )
         with pytest.raises(AttributeError):
             params.link = 'probit'  # type: ignore[misc]
@@ -902,7 +902,7 @@ class TestConvergenceGuard:
             y, X = self._near_separation(seed)
             if len(np.unique(y)) < 4:
                 continue
-            sol = polr(y, X, link="logistic")  # must not raise
+            sol = polr(y, X, link="logit")  # must not raise
             assert sol.converged
 
     def test_polished_estimate_is_stationary(self):
@@ -925,7 +925,7 @@ class TestConvergenceGuard:
         y = np.where(x < -1, 0, np.where(x < 1, 1, 2)).astype(np.intp)
         X = x.reshape(-1, 1)
         with pytest.raises(ConvergenceError):
-            polr(y, X, link="logistic")
+            polr(y, X, link="logit")
 
 
 # =========================================================================
@@ -955,14 +955,14 @@ class TestRidgePenalty:
         R-validated default — is unchanged)."""
         y, X = self._separated()
         with pytest.raises(ConvergenceError) as exc:
-            polr(y, X, link="logistic", max_iter=200)
+            polr(y, X, link="logit", max_iter=200)
         assert exc.value.iterations == 200
 
     def test_ridge_converges_well_below_max_iter(self):
         """With the ridge the fit converges in a small fraction of the budget
         (issue #7 performance goal: no longer runs to max_iter)."""
         y, X = self._separated()
-        sol = polr(y, X, link="logistic", l2=0.05, max_iter=200)
+        sol = polr(y, X, link="logit", l2=0.05, max_iter=200)
         assert sol.converged
         # Far below the 200-iteration limit the unpenalized fit exhausts.
         assert sol._result.params.n_iter < 80
@@ -971,7 +971,7 @@ class TestRidgePenalty:
         """The penalized estimate is finite with a positive-definite vcov —
         usable for the MICE posterior draw (issue #7 correctness goal)."""
         y, X = self._separated()
-        sol = polr(y, X, link="logistic", l2=0.05)
+        sol = polr(y, X, link="logit", l2=0.05)
         assert np.all(np.isfinite(sol.coefficients))
         assert np.all(np.isfinite(sol.vcov))
         assert np.linalg.eigvalsh(sol.vcov).min() > 0.0

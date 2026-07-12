@@ -463,7 +463,7 @@ def cumulative_gradient(
 # -- Fitted / predicted category probabilities ----------------------------
 
 _LINK_BY_NAME: dict[str, type[Link]] = {
-    "logistic": LogitLink, "logit": LogitLink,
+    "logit": LogitLink,
     "probit": ProbitLink, "cloglog": CLogLogLink,
     "loglog": LogLogLink, "cauchit": CauchitLink,
 }
@@ -488,14 +488,14 @@ def category_probs(
             intercepts), matching the design the model was fit on.
         coefficients: Slope coefficients beta, length p.
         thresholds: Natural ordered thresholds alpha, length K-1.
-        link_name: 'logistic'/'logit', 'probit', 'cloglog', 'loglog', or 'cauchit'.
+        link_name: 'logit', 'probit', 'cloglog', 'loglog', or 'cauchit'.
 
     Returns:
         (n, K) probability matrix; each row sums to 1.
     """
     key = link_name.lower()
     if key not in _LINK_BY_NAME:
-        valid = ", ".join(sorted(set(_LINK_BY_NAME) - {"logit"}))
+        valid = ", ".join(sorted(_LINK_BY_NAME))
         raise ValueError(f"Unknown link: {link_name!r}. Valid links: {valid}.")
     link = _LINK_BY_NAME[key]()
     alpha = np.asarray(thresholds, dtype=np.float64)

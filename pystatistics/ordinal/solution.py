@@ -100,43 +100,44 @@ class OrdinalSolution(SolutionReprMixin):
         """In-sample fitted category probabilities, shape (n, K).
 
         The same quantity MASS::polr's ``predict(type='probs')`` returns on the
-        training data. Row i gives P(Y=0|x_i), ..., P(Y=K-1|x_i) and sums to 1.
+        training data (the pystatistics accessor is ``predict(kind='probs')``).
+        Row i gives P(Y=0|x_i), ..., P(Y=K-1|x_i) and sums to 1.
         """
         fp = self._result.params.fitted_probs
         if fp is None:
             raise ValueError(
                 "fitted_probs is unavailable (this solution was constructed "
-                "without them). Use predict(X, type='probs') with the design.")
+                "without them). Use predict(X, kind='probs') with the design.")
         return fp
 
     @property
     def predicted_class(self) -> NDArray[np.intp]:
         """In-sample predicted (most probable) class code per observation, shape
-        (n,) — the argmax of ``fitted_probs``, matching predict(type='class')."""
+        (n,) — the argmax of ``fitted_probs``, matching predict(kind='class')."""
         return np.argmax(self.fitted_probs, axis=1)
 
     def predict(self, X: NDArray[np.floating[Any]], *,
-                type: str = "class") -> NDArray[Any]:
+                kind: str = "class") -> NDArray[Any]:
         """Predict for a design matrix, matching R's predict.polr.
 
         Args:
             X: Design matrix of shape (n, p) with NO intercept column (the
                 ordered thresholds are the intercepts) — the same layout the
                 model was fit on. p must match the fitted number of predictors.
-            type: 'class' (default) returns the most probable class code per row
+            kind: 'class' (default) returns the most probable class code per row
                 (shape (n,)); 'probs' returns the (n, K) category-probability
                 matrix (each row sums to 1).
 
         Returns:
-            Class codes (type='class') or a probability matrix (type='probs').
+            Class codes (kind='class') or a probability matrix (kind='probs').
 
         Raises:
-            ValidationError: If type is not 'class'/'probs' or X's column count
+            ValidationError: If kind is not 'class'/'probs' or X's column count
                 does not match the fitted model.
         """
-        if type not in ("class", "probs"):
+        if kind not in ("class", "probs"):
             raise ValidationError(
-                f"type must be 'class' or 'probs', got {type!r}")
+                f"kind must be 'class' or 'probs', got {kind!r}")
         X_arr = check_array(X, "X")
         check_finite(X_arr, "X")
         if X_arr.ndim == 1:
@@ -150,7 +151,7 @@ class OrdinalSolution(SolutionReprMixin):
         probs = category_probs(
             X_arr, self._result.params.coefficients,
             self._result.params.thresholds, self._result.params.link)
-        return probs if type == "probs" else np.argmax(probs, axis=1)
+        return probs if kind == "probs" else np.argmax(probs, axis=1)
 
     # -- Variance-covariance and standard errors ------------------------------
 
@@ -288,8 +289,16 @@ class OrdinalSolution(SolutionReprMixin):
         return self._result.params.n_iter
 
     @property
+    def category_names(self) -> tuple[str, ...]:
+        """Ordered category labels (the ``category_names=`` fit kwarg).
+
+        Parity with ``MultinomialSolution.category_names``.
+        """
+        return tuple(self._level_names)
+
+    @property
     def link(self) -> str:
-        """Link name ('logistic', 'probit', 'cloglog', 'loglog', 'cauchit')."""
+        """Link name ('logit', 'probit', 'cloglog', 'loglog', 'cauchit')."""
         return self._result.params.link
 
     # -- Metadata accessors ----------------------------------------------------

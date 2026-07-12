@@ -359,19 +359,19 @@ class TestFiveClass:
 
 
 class TestPredictNewData:
-    """predict(X, type=) on new data, matching R's predict.multinom."""
+    """predict(X, kind=) on new data, matching R's predict.multinom."""
 
     def test_predict_matches_fitted_in_sample(self, well_separated_data):
         y, X = well_separated_data
         r = multinom(y, X)
-        assert np.allclose(r.predict(X, type="probs"), r.fitted_probs)
-        assert np.array_equal(r.predict(X, type="class"), r.predicted_class)
+        assert np.allclose(r.predict(X, kind="probs"), r.fitted_probs)
+        assert np.array_equal(r.predict(X, kind="class"), r.predicted_class)
 
     def test_predict_probs_rows_sum_to_one(self, well_separated_data):
         y, X = well_separated_data
         r = multinom(y, X)
         Xnew = X[:10]
-        probs = r.predict(Xnew, type="probs")
+        probs = r.predict(Xnew, kind="probs")
         assert probs.shape == (10, r.n_classes)
         assert np.allclose(probs.sum(axis=1), 1.0)
 
@@ -379,8 +379,8 @@ class TestPredictNewData:
         from pystatistics.core.exceptions import ValidationError
         y, X = well_separated_data
         r = multinom(y, X)
-        with pytest.raises(ValidationError, match="type must be"):
-            r.predict(X, type="nonsense")
+        with pytest.raises(ValidationError, match="kind must be"):
+            r.predict(X, kind="nonsense")
 
     def test_predict_wrong_columns_raises(self, well_separated_data):
         from pystatistics.core.exceptions import ValidationError

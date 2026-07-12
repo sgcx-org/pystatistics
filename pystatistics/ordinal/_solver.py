@@ -83,7 +83,7 @@ _MAX_POLISH_STEPS = 12
 
 
 _LINK_MAP: dict[str, type[Link]] = {
-    'logistic': LogitLink,
+    'logit': LogitLink,
     'probit': ProbitLink,
     'cloglog': CLogLogLink,
     'loglog': LogLogLink,
@@ -96,7 +96,7 @@ def _resolve_method_link(method: str) -> Link:
     Resolve a link name to a Link instance.
 
     Args:
-        method: One of 'logistic', 'probit', 'cloglog', 'loglog', 'cauchit'
+        method: One of 'logit', 'probit', 'cloglog', 'loglog', 'cauchit'
             (the full set of MASS::polr links).
 
     Returns:
@@ -489,7 +489,7 @@ def polr(
     y: ArrayLike,
     X: ArrayLike,
     *,
-    link: str = 'logistic',
+    link: str = 'logit',
     names: list[str] | None = None,
     category_names: list[str] | None = None,
     tol: float = 1e-8,
@@ -511,9 +511,10 @@ def polr(
             Must contain all levels from 0 to max(y) with no gaps.
         X: Design matrix of shape (n, p). Must NOT include an intercept
             column (thresholds serve as category-specific intercepts).
-        link: Link function. One of 'logistic' (default, proportional
+        link: Link function. One of 'logit' (default, proportional
             odds), 'probit', 'cloglog', 'loglog', or 'cauchit' — the full
-            set of MASS::polr links.
+            set of MASS::polr links. (MASS::polr spells this link 'logistic';
+            pystatistics spells it 'logit', matching regression/gam.)
         names: Labels for the p predictor columns. If None, defaults to
             'x1', 'x2', etc.
         category_names: Labels for the K ordered categories. If None,
@@ -559,7 +560,7 @@ def polr(
         >>> cum_p2 = 1 / (1 + np.exp(-(1 - eta)))
         >>> u = rng.uniform(size=n)
         >>> y = np.where(u < cum_p1, 0, np.where(u < cum_p2, 1, 2))
-        >>> sol = polr(y, X, link='logistic', names=['x1', 'x2'])
+        >>> sol = polr(y, X, link='logit', names=['x1', 'x2'])
         >>> print(sol.summary())
     """
     if conf_level <= 0 or conf_level >= 1:

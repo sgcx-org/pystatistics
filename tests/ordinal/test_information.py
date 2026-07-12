@@ -115,7 +115,7 @@ class TestVcovNatural:
     def test_threshold_se_matches_mass(self, reference_data):
         """Natural-coordinate threshold SEs match MASS::polr() exactly."""
         y, X = reference_data
-        sol = polr(y, X, link="logistic")
+        sol = polr(y, X, link="logit")
         # Reference from R: MASS::polr(y ~ x1+x2+x3, link='logistic',
         # Hess=TRUE) on the same seeded data.
         mass_coef_se = np.array([0.0800, 0.0721, 0.0709])
