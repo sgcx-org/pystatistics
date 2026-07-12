@@ -6,7 +6,7 @@ Public API:
 """
 
 from pystatistics.mvnmle.design import MVNDesign
-from pystatistics.mvnmle.solution import MVNSolution, MVNParams
+from pystatistics.mvnmle.solution import MVNSolution
 from pystatistics.mvnmle.solvers import mlest
 from pystatistics.mvnmle.patterns import (
     analyze_patterns,
@@ -29,7 +29,6 @@ __all__ = [
     'mlest',
     'MVNDesign',
     'MVNSolution',
-    'MVNParams',
     'analyze_patterns',
     'pattern_summary',
     'PatternInfo',

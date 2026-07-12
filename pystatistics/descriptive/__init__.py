@@ -14,7 +14,7 @@ Public API:
 """
 
 from pystatistics.descriptive.design import DescriptiveDesign
-from pystatistics.descriptive.solution import DescriptiveParams, DescriptiveSolution
+from pystatistics.descriptive.solution import DescriptiveSolution
 from pystatistics.descriptive.solvers import (
     describe,
     cor,
@@ -32,6 +32,5 @@ __all__ = [
     "quantile",
     "summary",
     "DescriptiveDesign",
-    "DescriptiveParams",
     "DescriptiveSolution",
 ]

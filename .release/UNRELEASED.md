@@ -139,3 +139,15 @@ commits; this section accumulates them.
 - `OrdinalSolution` gains `.category_names`; `MultinomialSolution` gains
   `.backend_name` / `.info` / `.timing` and a `.coefficients` alias for
   `.coefficient_matrix`.
+
+**Public surface — internal parameter payloads are no longer exported:**
+
+- The internal backend-payload dataclasses (`LinearParams`, `GLMParams`,
+  `GAMParams`, `PCAParams`, `FactorParams`, `ACFParams`, `StationarityParams`,
+  `ETSParams`, `ARIMAParams`, `ARMABatchParams`, `AutoARIMAParams`,
+  `DecompositionParams`, `DescriptiveParams`, `HTestParams`, `MVNParams`) are
+  removed from the public package exports. They were an implementation detail
+  wrapped by the corresponding `…Solution` result objects, and were exported
+  inconsistently (7 of the modules leaked them, 7 kept them private). The public
+  result surface is the `…Solution` objects. The payload classes remain
+  importable from their private submodules for backend authors.

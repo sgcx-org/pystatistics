@@ -24,8 +24,8 @@ from pystatistics.core.datasource import DataSource
 from pystatistics.regression.design import Design
 from pystatistics.regression.terms import C
 from pystatistics.regression.solution import (
-    LinearSolution, LinearParams,
-    GLMSolution, GLMParams,
+    LinearSolution,
+    GLMSolution,
 )
 from pystatistics.regression.solvers import fit, ridge
 from pystatistics.regression.families import (
@@ -42,10 +42,8 @@ __all__ = [
     "DataSource",
     # LM types
     "LinearSolution",
-    "LinearParams",
     # GLM types
     "GLMSolution",
-    "GLMParams",
     # GLM families
     "Family",
     "Gaussian",

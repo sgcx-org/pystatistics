@@ -16,14 +16,13 @@ Usage::
     print(sol.summary())
 """
 
-from pystatistics.gam._common import GAMParams, SmoothInfo
+from pystatistics.gam._common import SmoothInfo
 from pystatistics.gam._smooth import s, SmoothTerm
 from pystatistics.gam._tensor_smooth import te, ti, TensorSmooth
 from pystatistics.gam._gam import gam
 from pystatistics.gam.solution import GAMSolution
 
 __all__ = [
-    "GAMParams",
     "SmoothInfo",
     "s",
     "SmoothTerm",

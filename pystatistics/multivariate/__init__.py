@@ -12,7 +12,7 @@ Public API:
 from pystatistics.multivariate._pca import pca
 from pystatistics.multivariate._factor import factor_analysis
 from pystatistics.multivariate._common import (
-    PCASolution, FactorSolution, PCAParams, FactorParams,
+    PCASolution, FactorSolution, 
 )
 
 __all__ = [
@@ -20,6 +20,4 @@ __all__ = [
     "factor_analysis",
     "PCASolution",
     "FactorSolution",
-    "PCAParams",
-    "FactorParams",
 ]

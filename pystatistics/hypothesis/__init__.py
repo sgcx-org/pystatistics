@@ -21,7 +21,6 @@ from pystatistics.hypothesis.solvers import (
 )
 from pystatistics.hypothesis._p_adjust import p_adjust
 from pystatistics.hypothesis.design import HypothesisDesign
-from pystatistics.hypothesis._common import HTestParams
 from pystatistics.hypothesis.solution import HTestSolution
 
 __all__ = [
@@ -34,6 +33,5 @@ __all__ = [
     "var_test",
     "p_adjust",
     "HypothesisDesign",
-    "HTestParams",
     "HTestSolution",
 ]

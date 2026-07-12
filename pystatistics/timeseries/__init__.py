@@ -35,23 +35,23 @@ from pystatistics.timeseries._acf import acf, pacf
 from pystatistics.timeseries._differencing import diff, ndiffs
 from pystatistics.timeseries._stationarity import adf_test, kpss_test
 from pystatistics.timeseries._common import (
-    ACFParams, ACFSolution, StationarityParams, StationaritySolution,
+    ACFSolution, StationaritySolution,
 )
-from pystatistics.timeseries._ets_fit import ETSParams, ETSSolution
+from pystatistics.timeseries._ets_fit import ETSSolution
 from pystatistics.timeseries._ets_select import ets
 from pystatistics.timeseries._ets_forecast import forecast_ets, ETSForecast
 from pystatistics.timeseries._ets_models import ETSSpec
-from pystatistics.timeseries._arima_solution import ARIMAParams, ARIMASolution
+from pystatistics.timeseries._arima_solution import ARIMASolution
 from pystatistics.timeseries._arima_fit import arima
 from pystatistics.timeseries._arima_batch import (
-    arima_batch, ARMABatchParams, ARMABatchSolution,
+    arima_batch, ARMABatchSolution,
 )
 from pystatistics.timeseries._arima_forecast import forecast_arima, ARIMAForecast
 from pystatistics.timeseries._arima_order import (
-    auto_arima, AutoARIMAParams, AutoARIMASolution,
+    auto_arima, AutoARIMASolution,
 )
 from pystatistics.timeseries._decomposition import (
-    decompose, DecompositionParams, DecompositionSolution,
+    decompose, DecompositionSolution,
 )
 from pystatistics.timeseries._stl import stl
 
@@ -62,29 +62,22 @@ __all__ = [
     "ndiffs",
     "adf_test",
     "kpss_test",
-    "ACFParams",
     "ACFSolution",
-    "StationarityParams",
     "StationaritySolution",
     "ets",
-    "ETSParams",
     "ETSSolution",
     "forecast_ets",
     "ETSForecast",
     "ETSSpec",
     "arima",
-    "ARIMAParams",
     "ARIMASolution",
     "arima_batch",
-    "ARMABatchParams",
     "ARMABatchSolution",
     "forecast_arima",
     "ARIMAForecast",
     "auto_arima",
-    "AutoARIMAParams",
     "AutoARIMASolution",
     "decompose",
     "stl",
-    "DecompositionParams",
     "DecompositionSolution",
 ]
