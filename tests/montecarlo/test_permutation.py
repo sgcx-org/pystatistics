@@ -38,7 +38,7 @@ class TestPermutationTest:
         # Should be highly significant (p < 0.05)
         assert result.p_value < 0.05
         assert result.observed_stat == pytest.approx(-5.0, rel=1e-10)
-        assert result.R == 9999
+        assert result.n_resamples == 9999
 
     def test_no_difference(self):
         """No significant difference for identical distributions."""
@@ -184,7 +184,7 @@ class TestPermutationSolution:
         r = repr(result)
 
         assert "PermutationSolution" in r
-        assert "R=99" in r
+        assert "n_resamples=99" in r
 
     def test_backend_name(self):
         """Backend name is correct (cpu or gpu depending on hardware)."""
@@ -210,10 +210,10 @@ class TestPermutationValidation:
             permutation_test(x, y, mean_diff, n_resamples=10, alternative="invalid")
 
     def test_R_must_be_positive(self):
-        """R must be >= 1."""
+        """n_resamples must be >= 1."""
         x = np.array([1.0, 2.0])
         y = np.array([3.0, 4.0])
-        with pytest.raises(ValueError, match="R must be >= 1"):
+        with pytest.raises(ValueError, match="n_resamples must be >= 1"):
             permutation_test(x, y, mean_diff, n_resamples=0)
 
     def test_empty_x(self):

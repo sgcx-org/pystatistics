@@ -52,3 +52,17 @@ commits; this section accumulates them.
   array of `[lower, upper]` per pooled estimate.
 - The metadata `.info` dict keys `"m"`/`"maxit"` are now `"n_imputations"`/
   `"max_iter"`, matching the public parameter names.
+
+**`montecarlo` — result accessors and CI-type values:**
+
+- `BootstrapSolution.R` / `PermutationSolution.R` → `.n_resamples` (the
+  constructor parameter was already `n_resamples`; only the accessor lagged).
+- `BootstrapSolution.se` → `.standard_errors`, `.ci` → `.conf_int`,
+  `.sim` → `.method`, `.ci_conf_level` → `.conf_level`.
+- `boot_ci(ci_type=...)` values `'perc'` → `'percentile'`, `'stud'` →
+  `'studentized'` (the returned CI dict is keyed by these too); `'bca'` unchanged.
+- The metadata `.info` dict keys `'sim'`/`'stype'` are now `'method'`/
+  `'statistic_type'`.
+- `boot_ci` now raises `ValidationError` on a multi-level `conf_level` sequence
+  instead of silently using only the first level (a fail-loud fix).
+- `BootstrapSolution.t` / `.t0` (R `boot`-object parity) are unchanged.

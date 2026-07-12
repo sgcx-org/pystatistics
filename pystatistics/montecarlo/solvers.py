@@ -50,8 +50,8 @@ def _boot_gpu_vectorizable(design: BootstrapDesign) -> bool:
     """
     return (
         design.gpu_statistic == "mean"
-        and design.sim == "ordinary"
-        and design.stype == "i"
+        and design.method == "ordinary"
+        and design.statistic_type == "i"
         and design.strata is None
         and design.data.ndim == 1
     )
@@ -189,7 +189,7 @@ def boot(
         >>> result = boot(data, mean_stat, n_resamples=999, seed=42)
         >>> result.t0  # observed mean
         >>> result.bias  # bootstrap bias estimate
-        >>> result.se  # bootstrap standard error
+        >>> result.standard_errors  # bootstrap standard error
     """
     if backend is None:
         backend = 'cpu'
@@ -203,9 +203,9 @@ def boot(
     design = BootstrapDesign.for_bootstrap(
         data=data,
         statistic=statistic,
-        R=n_resamples,
-        sim=method,
-        stype=_STATISTIC_TYPE_CODE[statistic_type],
+        n_resamples=n_resamples,
+        method=method,
+        statistic_type=_STATISTIC_TYPE_CODE[statistic_type],
         strata=strata,
         ran_gen=ran_gen,
         mle=mle,
@@ -236,27 +236,35 @@ def boot_ci(
 
     Args:
         boot_out: Result from boot().
-        conf_level: Confidence level(s). Default 0.95.
-        ci_type: CI type(s): "normal", "basic", "perc", "bca", "stud", or "all".
-            "all" computes normal, basic, percentile, and BCa (not studentized
-            unless var_t is provided).
+        conf_level: Confidence level(s). Default 0.95. Multi-level sequences
+            (length > 1) are not yet supported and raise ValidationError.
+        ci_type: CI type(s): "normal", "basic", "percentile", "bca",
+            "studentized", or "all". "all" computes normal, basic, percentile,
+            and BCa (not studentized unless var_t is provided).
         index: Which statistic to compute CI for (0-indexed into t0).
         var_t0: Variance of the observed statistic (for normal/studentized).
-        var_t: Per-replicate variance estimates, shape (R,). Required for
-            studentized CI.
+        var_t: Per-replicate variance estimates, shape (n_resamples,). Required
+            for studentized CI.
 
     Returns:
         New BootstrapSolution with CI populated.
 
     Examples:
-        >>> result = boot(data, mean_stat, R=999, seed=42)
-        >>> ci_result = boot_ci(result, ci_type="perc")
-        >>> ci_result.ci["perc"]  # shape (k, 2) for [lower, upper]
+        >>> result = boot(data, mean_stat, n_resamples=999, seed=42)
+        >>> ci_result = boot_ci(result, ci_type="percentile")
+        >>> ci_result.conf_int["percentile"]  # shape (k, 2) for [lower, upper]
     """
     from pystatistics.montecarlo._ci import compute_ci
 
-    # Normalize conf_level to a single float for now
+    # Normalize conf_level to a single float. Multi-level CI is not yet
+    # supported: fail loud rather than silently truncating to the first level.
     if isinstance(conf_level, (list, tuple)):
+        if len(conf_level) > 1:
+            raise ValidationError(
+                "Multi-level conf_level is not yet supported: got "
+                f"{list(conf_level)!r} ({len(conf_level)} levels). Pass a single "
+                "confidence level (a scalar or a length-1 sequence)."
+            )
         cl = float(conf_level[0])
     else:
         cl = float(conf_level)
@@ -264,9 +272,9 @@ def boot_ci(
     # Normalize ci_type
     if isinstance(ci_type, str):
         if ci_type == "all":
-            types = ["normal", "basic", "perc", "bca"]
+            types = ["normal", "basic", "percentile", "bca"]
             if var_t is not None:
-                types.append("stud")
+                types.append("studentized")
         else:
             types = [ci_type]
     else:
@@ -286,11 +294,11 @@ def boot_ci(
     new_params = BootParams(
         t0=old_params.t0,
         t=old_params.t,
-        R=old_params.R,
+        n_resamples=old_params.n_resamples,
         bias=old_params.bias,
-        se=old_params.se,
-        ci=ci_dict,
-        ci_conf_level=cl,
+        standard_errors=old_params.standard_errors,
+        conf_int=ci_dict,
+        conf_level=cl,
     )
 
     from pystatistics.core.result import Result
@@ -357,7 +365,7 @@ def permutation_test(
         x=x,
         y=y,
         statistic=statistic,
-        R=n_resamples,
+        n_resamples=n_resamples,
         alternative=alternative,
         seed=seed,
         gpu_statistic=gpu_statistic,

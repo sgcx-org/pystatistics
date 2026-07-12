@@ -36,9 +36,9 @@ class CPUBootstrapBackend:
 
         data = design.data
         statistic = design.statistic
-        R = design.R
-        sim = design.sim
-        stype = design.stype
+        n_resamples = design.n_resamples
+        method = design.method
+        statistic_type = design.statistic_type
         seed = design.seed
 
         n = data.shape[0]
@@ -46,71 +46,71 @@ class CPUBootstrapBackend:
 
         # Compute t0: statistic on original data
         with timer.section('t0_computation'):
-            if sim == "parametric":
+            if method == "parametric":
                 t0 = np.atleast_1d(np.asarray(
                     statistic(data), dtype=np.float64
                 ))
             else:
                 # For nonparametric: pass original indices
                 original_indices = np.arange(n)
-                if stype == "i":
+                if statistic_type == "i":
                     t0 = np.atleast_1d(np.asarray(
                         statistic(data, original_indices), dtype=np.float64
                     ))
-                elif stype == "f":
+                elif statistic_type == "f":
                     freqs = np.ones(n, dtype=np.float64)
                     t0 = np.atleast_1d(np.asarray(
                         statistic(data, freqs), dtype=np.float64
                     ))
-                elif stype == "w":
+                elif statistic_type == "w":
                     weights = np.ones(n, dtype=np.float64) / n
                     t0 = np.atleast_1d(np.asarray(
                         statistic(data, weights), dtype=np.float64
                     ))
 
         k = len(t0)
-        t = np.empty((R, k), dtype=np.float64)
+        t = np.empty((n_resamples, k), dtype=np.float64)
         warnings_list: list[str] = []
 
         with timer.section('bootstrap_replicates'):
-            if sim == "ordinary":
+            if method == "ordinary":
                 self._ordinary_bootstrap(
-                    data, statistic, R, n, stype, rng,
+                    data, statistic, n_resamples, n, statistic_type, rng,
                     design.strata, t,
                 )
-            elif sim == "balanced":
+            elif method == "balanced":
                 self._balanced_bootstrap(
-                    data, statistic, R, n, stype, rng,
+                    data, statistic, n_resamples, n, statistic_type, rng,
                     design.strata, t,
                 )
-            elif sim == "parametric":
+            elif method == "parametric":
                 self._parametric_bootstrap(
-                    data, statistic, R, design.ran_gen,
+                    data, statistic, n_resamples, design.ran_gen,
                     design.mle, rng, t,
                 )
 
         # Compute bias and SE
         with timer.section('summary_statistics'):
             bias = np.mean(t, axis=0) - t0
-            se = np.std(t, axis=0, ddof=1)
+            standard_errors = np.std(t, axis=0, ddof=1)
 
         timer.stop()
 
         params = BootParams(
             t0=t0,
             t=t,
-            R=R,
+            n_resamples=n_resamples,
             bias=bias,
-            se=se,
-            ci=None,
-            ci_conf_level=None,
+            standard_errors=standard_errors,
+            conf_int=None,
+            conf_level=None,
         )
 
         return Result(
             params=params,
             info={
-                'sim': sim,
-                'stype': stype,
+                'method': method,
+                'statistic_type': statistic_type,
                 'n': n,
                 'k': k,
             },
@@ -123,26 +123,26 @@ class CPUBootstrapBackend:
         self,
         data: NDArray,
         statistic,
-        R: int,
+        n_resamples: int,
         n: int,
-        stype: str,
+        statistic_type: str,
         rng: np.random.Generator,
         strata: NDArray | None,
         t: NDArray,
     ) -> None:
         """Ordinary nonparametric bootstrap (sampling with replacement)."""
-        for b in range(R):
+        for b in range(n_resamples):
             if strata is not None:
                 indices = self._stratified_sample(n, strata, rng)
             else:
                 indices = rng.choice(n, size=n, replace=True)
 
-            if stype == "i":
+            if statistic_type == "i":
                 t[b] = statistic(data, indices)
-            elif stype == "f":
+            elif statistic_type == "f":
                 freqs = np.bincount(indices, minlength=n).astype(np.float64)
                 t[b] = statistic(data, freqs)
-            elif stype == "w":
+            elif statistic_type == "w":
                 freqs = np.bincount(indices, minlength=n).astype(np.float64)
                 weights = freqs / n
                 t[b] = statistic(data, weights)
@@ -151,45 +151,45 @@ class CPUBootstrapBackend:
         self,
         data: NDArray,
         statistic,
-        R: int,
+        n_resamples: int,
         n: int,
-        stype: str,
+        statistic_type: str,
         rng: np.random.Generator,
         strata: NDArray | None,
         t: NDArray,
     ) -> None:
         """
-        Balanced bootstrap: each observation appears exactly R times total.
+        Balanced bootstrap: each observation appears exactly n_resamples times.
 
-        Pre-generates a pool of n*R indices where each of {0,...,n-1}
-        appears exactly R times, then shuffles and splits into R samples
-        of size n.
+        Pre-generates a pool of n*n_resamples indices where each of {0,...,n-1}
+        appears exactly n_resamples times, then shuffles and splits into
+        n_resamples samples of size n.
         """
         if strata is not None:
             # Stratified balanced: balance within each stratum
             unique_strata = np.unique(strata)
-            all_indices = np.empty((R, n), dtype=int)
+            all_indices = np.empty((n_resamples, n), dtype=int)
             for s in unique_strata:
                 mask = strata == s
                 ns = int(mask.sum())
                 s_indices = np.where(mask)[0]
-                pool = np.tile(s_indices, R)
+                pool = np.tile(s_indices, n_resamples)
                 rng.shuffle(pool)
-                for b in range(R):
+                for b in range(n_resamples):
                     all_indices[b, mask] = pool[b * ns:(b + 1) * ns]
         else:
-            pool = np.tile(np.arange(n), R)
+            pool = np.tile(np.arange(n), n_resamples)
             rng.shuffle(pool)
-            all_indices = pool.reshape(R, n)
+            all_indices = pool.reshape(n_resamples, n)
 
-        for b in range(R):
+        for b in range(n_resamples):
             indices = all_indices[b]
-            if stype == "i":
+            if statistic_type == "i":
                 t[b] = statistic(data, indices)
-            elif stype == "f":
+            elif statistic_type == "f":
                 freqs = np.bincount(indices, minlength=n).astype(np.float64)
                 t[b] = statistic(data, freqs)
-            elif stype == "w":
+            elif statistic_type == "w":
                 freqs = np.bincount(indices, minlength=n).astype(np.float64)
                 weights = freqs / n
                 t[b] = statistic(data, weights)
@@ -198,14 +198,14 @@ class CPUBootstrapBackend:
         self,
         data: NDArray,
         statistic,
-        R: int,
+        n_resamples: int,
         ran_gen,
         mle,
         rng: np.random.Generator,
         t: NDArray,
     ) -> None:
         """Parametric bootstrap: generate data from ran_gen, compute statistic."""
-        for b in range(R):
+        for b in range(n_resamples):
             sim_data = ran_gen(data, mle, rng)
             t[b] = statistic(sim_data)
 
@@ -232,7 +232,7 @@ class CPUPermutationBackend:
     CPU backend for permutation testing.
 
     Shuffles combined data and computes test statistic R times.
-    P-value uses Phipson-Smyth correction: (count + 1) / (R + 1).
+    P-value uses Phipson-Smyth correction: (count + 1) / (n_resamples + 1).
     """
 
     @property
@@ -247,7 +247,7 @@ class CPUPermutationBackend:
         x = design.x
         y = design.y
         statistic = design.statistic
-        R = design.R
+        n_resamples = design.n_resamples
         alternative = design.alternative
         seed = design.seed
 
@@ -261,9 +261,9 @@ class CPUPermutationBackend:
         with timer.section('permutation_replicates'):
             combined = np.concatenate([x, y])
             n1 = len(x)
-            perm_stats = np.empty(R, dtype=np.float64)
+            perm_stats = np.empty(n_resamples, dtype=np.float64)
 
-            for b in range(R):
+            for b in range(n_resamples):
                 shuffled = rng.permutation(combined)
                 perm_stats[b] = statistic(
                     shuffled[:n1], shuffled[n1:]
@@ -271,7 +271,7 @@ class CPUPermutationBackend:
 
         # Compute p-value with Phipson-Smyth correction
         with timer.section('p_value'):
-            p_value = perm_pvalue(perm_stats, observed, alternative, R)
+            p_value = perm_pvalue(perm_stats, observed, alternative, n_resamples)
 
         timer.stop()
 
@@ -279,7 +279,7 @@ class CPUPermutationBackend:
             observed_stat=observed,
             perm_stats=perm_stats,
             p_value=p_value,
-            R=R,
+            n_resamples=n_resamples,
             alternative=alternative,
         )
 

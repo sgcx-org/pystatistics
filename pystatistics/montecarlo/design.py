@@ -25,9 +25,9 @@ class BootstrapDesign:
         data: Original data array, shape (n,) or (n, p).
         statistic: User function. For nonparametric: fn(data, indices) -> (k,).
             For parametric: fn(simulated_data) -> (k,).
-        R: Number of bootstrap replicates.
-        sim: Simulation type — "ordinary", "balanced", or "parametric".
-        stype: What the second argument to statistic represents:
+        n_resamples: Number of bootstrap replicates.
+        method: Simulation type — "ordinary", "balanced", or "parametric".
+        statistic_type: What the second argument to statistic represents:
             "i" (indices), "f" (frequencies), "w" (weights).
         strata: Optional stratification vector of length n.
         ran_gen: For parametric bootstrap: fn(data, mle) -> simulated data.
@@ -41,9 +41,9 @@ class BootstrapDesign:
     """
     data: NDArray[np.floating[Any]]
     statistic: Callable
-    R: int
-    sim: str
-    stype: str
+    n_resamples: int
+    method: str
+    statistic_type: str
     strata: NDArray | None
     ran_gen: Callable | None
     mle: Any
@@ -55,10 +55,10 @@ class BootstrapDesign:
         cls,
         data,
         statistic: Callable,
-        R: int = 999,
+        n_resamples: int = 999,
         *,
-        sim: str = "ordinary",
-        stype: str = "i",
+        method: str = "ordinary",
+        statistic_type: str = "i",
         strata=None,
         ran_gen: Callable | None = None,
         mle=None,
@@ -71,9 +71,9 @@ class BootstrapDesign:
         Args:
             data: Input data — 1D or 2D array-like.
             statistic: Function to compute the statistic of interest.
-            R: Number of bootstrap replicates. Must be >= 1.
-            sim: "ordinary" (default), "balanced", or "parametric".
-            stype: "i" (indices), "f" (frequencies), "w" (weights).
+            n_resamples: Number of bootstrap replicates. Must be >= 1.
+            method: "ordinary" (default), "balanced", or "parametric".
+            statistic_type: "i" (indices), "f" (frequencies), "w" (weights).
             strata: Stratification vector (same length as data rows).
             ran_gen: Required for parametric bootstrap.
             mle: Parameter estimates for parametric bootstrap.
@@ -99,18 +99,18 @@ class BootstrapDesign:
         if n < 1:
             raise ValidationError("data must have at least 1 observation")
 
-        if R < 1:
-            raise ValidationError(f"R must be >= 1, got {R}")
+        if n_resamples < 1:
+            raise ValidationError(f"n_resamples must be >= 1, got {n_resamples}")
 
-        if sim not in ("ordinary", "balanced", "parametric"):
+        if method not in ("ordinary", "balanced", "parametric"):
             raise ValidationError(
-                f"sim must be 'ordinary', 'balanced', or 'parametric', "
-                f"got {sim!r}"
+                f"method must be 'ordinary', 'balanced', or 'parametric', "
+                f"got {method!r}"
             )
 
-        if stype not in ("i", "f", "w"):
+        if statistic_type not in ("i", "f", "w"):
             raise ValidationError(
-                f"stype must be 'i', 'f', or 'w', got {stype!r}"
+                f"statistic_type must be 'i', 'f', or 'w', got {statistic_type!r}"
             )
 
         if gpu_statistic is not None and gpu_statistic != "mean":
@@ -118,10 +118,10 @@ class BootstrapDesign:
                 f"gpu_statistic must be 'mean' or None, got {gpu_statistic!r}"
             )
 
-        if sim == "parametric" and ran_gen is None:
+        if method == "parametric" and ran_gen is None:
             raise ValidationError(
                 "ran_gen is required for parametric bootstrap "
-                "(sim='parametric')"
+                "(method='parametric')"
             )
 
         strata_arr = None
@@ -136,9 +136,9 @@ class BootstrapDesign:
         return cls(
             data=data_arr,
             statistic=statistic,
-            R=R,
-            sim=sim,
-            stype=stype,
+            n_resamples=n_resamples,
+            method=method,
+            statistic_type=statistic_type,
             strata=strata_arr,
             ran_gen=ran_gen,
             mle=mle,
@@ -156,7 +156,7 @@ class PermutationDesign:
         x: Group 1 data, shape (n1,) or (n1, p).
         y: Group 2 data, shape (n2,) or (n2, p).
         statistic: fn(x, y) -> float.
-        R: Number of permutations.
+        n_resamples: Number of permutations.
         alternative: "two-sided", "less", or "greater".
         seed: Random seed for reproducibility.
         gpu_statistic: Explicit declaration that ``statistic`` is a GPU-supported
@@ -167,7 +167,7 @@ class PermutationDesign:
     x: NDArray[np.floating[Any]]
     y: NDArray[np.floating[Any]]
     statistic: Callable
-    R: int
+    n_resamples: int
     alternative: str
     seed: int | None
     gpu_statistic: str | None = None
@@ -178,7 +178,7 @@ class PermutationDesign:
         x,
         y,
         statistic: Callable,
-        R: int = 9999,
+        n_resamples: int = 9999,
         *,
         alternative: str = "two-sided",
         seed: int | None = None,
@@ -191,7 +191,7 @@ class PermutationDesign:
             x: Group 1 data.
             y: Group 2 data.
             statistic: fn(x, y) -> float. The test statistic.
-            R: Number of permutations. Must be >= 1.
+            n_resamples: Number of permutations. Must be >= 1.
             alternative: "two-sided", "less", or "greater".
             seed: Random seed.
 
@@ -207,8 +207,8 @@ class PermutationDesign:
         if len(x_arr) < 1 or len(y_arr) < 1:
             raise ValidationError("x and y must each have at least 1 observation")
 
-        if R < 1:
-            raise ValidationError(f"R must be >= 1, got {R}")
+        if n_resamples < 1:
+            raise ValidationError(f"n_resamples must be >= 1, got {n_resamples}")
 
         if alternative not in ("two-sided", "less", "greater"):
             raise ValidationError(
@@ -225,7 +225,7 @@ class PermutationDesign:
             x=x_arr,
             y=y_arr,
             statistic=statistic,
-            R=R,
+            n_resamples=n_resamples,
             alternative=alternative,
             seed=seed,
             gpu_statistic=gpu_statistic,

@@ -39,8 +39,8 @@ def jackknife_influence(
     """
     data = boot_out.data
     statistic = boot_out._design.statistic
-    sim = boot_out._design.sim
-    stype = boot_out._design.stype
+    method = boot_out._design.method
+    statistic_type = boot_out._design.statistic_type
 
     n = data.shape[0]
     jack_stats = np.empty(n, dtype=np.float64)
@@ -49,7 +49,7 @@ def jackknife_influence(
         # Leave-one-out indices
         loo_indices = np.concatenate([np.arange(i), np.arange(i + 1, n)])
 
-        if sim == "parametric":
+        if method == "parametric":
             # For parametric bootstrap, jackknife on original data
             if data.ndim == 1:
                 loo_data = data[loo_indices]
@@ -58,7 +58,7 @@ def jackknife_influence(
             val = np.atleast_1d(np.asarray(statistic(loo_data)))
         else:
             # Nonparametric: call statistic with leave-one-out
-            if stype == "i":
+            if statistic_type == "i":
                 # Pass the leave-one-out data and identity indices
                 if data.ndim == 1:
                     loo_data = data[loo_indices]
@@ -68,13 +68,13 @@ def jackknife_influence(
                 val = np.atleast_1d(np.asarray(
                     statistic(loo_data, loo_idx)
                 ))
-            elif stype == "f":
+            elif statistic_type == "f":
                 freqs = np.ones(n, dtype=np.float64)
                 freqs[i] = 0.0
                 val = np.atleast_1d(np.asarray(
                     statistic(data, freqs)
                 ))
-            elif stype == "w":
+            elif statistic_type == "w":
                 weights = np.ones(n, dtype=np.float64)
                 weights[i] = 0.0
                 weights = weights / weights.sum()
@@ -100,7 +100,7 @@ def _regen_index_matrix(design, rng, R: int, n: int) -> NDArray:
     strata = design.strata
     idx = np.empty((R, n), dtype=int)
 
-    if design.sim == "ordinary":
+    if design.method == "ordinary":
         for b in range(R):
             if strata is None:
                 idx[b] = rng.choice(n, size=n, replace=True)
@@ -155,14 +155,14 @@ def regression_influence(
     silently-wrong influence if the resampling RNG path ever drifts).
     """
     design = boot_out._design
-    if design.sim not in ("ordinary", "balanced"):
+    if design.method not in ("ordinary", "balanced"):
         return None
     if design.seed is None:
         return None
 
     data = boot_out.data
     statistic = design.statistic
-    stype = design.stype
+    statistic_type = design.statistic_type
     strata = design.strata
     t = boot_out.t[:, stat_index]
     n = data.shape[0]
@@ -178,9 +178,9 @@ def regression_influence(
     # Self-check: the regenerated replicate 0 must reproduce the stored t[0].
     # If it does not, the stored replicates did not come from this seed/path
     # (e.g. an injected/GPU solution) — fail safe to the jackknife.
-    if stype == "i":
+    if statistic_type == "i":
         chk = np.atleast_1d(np.asarray(statistic(data, idx_matrix[0])))[stat_index]
-    elif stype == "f":
+    elif statistic_type == "f":
         chk = np.atleast_1d(np.asarray(statistic(data, freq[0])))[stat_index]
     else:  # "w"
         chk = np.atleast_1d(np.asarray(

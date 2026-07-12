@@ -35,10 +35,10 @@ class TestPercentileCI:
         """Percentile CI gives reasonable bounds."""
         data = np.arange(1.0, 101.0)
         result = boot(data, mean_stat, n_resamples=2000, seed=42)
-        ci_result = boot_ci(result, ci_type="perc")
+        ci_result = boot_ci(result, ci_type="percentile")
 
-        assert "perc" in ci_result.ci
-        ci = ci_result.ci["perc"]
+        assert "percentile" in ci_result.conf_int
+        ci = ci_result.conf_int["percentile"]
         assert ci.shape == (1, 2)
 
         # CI should contain the true mean (50.5)
@@ -53,8 +53,8 @@ class TestPercentileCI:
         data = np.arange(1.0, 11.0)
         result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
-        ci_result = boot_ci(result, ci_type="perc", conf_level=0.90)
-        ci = ci_result.ci["perc"]
+        ci_result = boot_ci(result, ci_type="percentile", conf_level=0.90)
+        ci = ci_result.conf_int["percentile"]
 
         # The 5th and 95th percentiles of bootstrap replicates
         expected_lo = np.quantile(result.t[:, 0], 0.05)
@@ -73,8 +73,8 @@ class TestBasicCI:
         result = boot(data, mean_stat, n_resamples=2000, seed=42)
         ci_result = boot_ci(result, ci_type="basic")
 
-        assert "basic" in ci_result.ci
-        ci = ci_result.ci["basic"]
+        assert "basic" in ci_result.conf_int
+        ci = ci_result.conf_int["basic"]
         assert ci.shape == (1, 2)
         assert ci[0, 0] < 50.5 < ci[0, 1]
 
@@ -84,7 +84,7 @@ class TestBasicCI:
         result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
         ci_result = boot_ci(result, ci_type="basic", conf_level=0.90)
-        ci = ci_result.ci["basic"]
+        ci = ci_result.conf_int["basic"]
 
         t0 = result.t0[0]
         q_lo = np.quantile(result.t[:, 0], 0.05)
@@ -107,8 +107,8 @@ class TestNormalCI:
         result = boot(data, mean_stat, n_resamples=2000, seed=42)
         ci_result = boot_ci(result, ci_type="normal")
 
-        assert "normal" in ci_result.ci
-        ci = ci_result.ci["normal"]
+        assert "normal" in ci_result.conf_int
+        ci = ci_result.conf_int["normal"]
         assert ci.shape == (1, 2)
         assert ci[0, 0] < 50.5 < ci[0, 1]
 
@@ -120,7 +120,7 @@ class TestNormalCI:
         result = boot(data, mean_stat, n_resamples=10000, seed=42)
 
         ci_result = boot_ci(result, ci_type="normal", conf_level=0.90)
-        ci = ci_result.ci["normal"]
+        ci = ci_result.conf_int["normal"]
 
         t0 = result.t0[0]
         center = 2.0 * t0 - np.mean(result.t[:, 0])
@@ -143,8 +143,8 @@ class TestBCaCI:
         result = boot(data, mean_stat, n_resamples=2000, seed=42)
         ci_result = boot_ci(result, ci_type="bca")
 
-        assert "bca" in ci_result.ci
-        ci = ci_result.ci["bca"]
+        assert "bca" in ci_result.conf_int
+        ci = ci_result.conf_int["bca"]
         assert ci.shape == (1, 2)
 
         # Should contain the true mean (25.5)
@@ -158,8 +158,8 @@ class TestBCaCI:
         data = rng.normal(0, 1, 100)
 
         result = boot(data, mean_stat, n_resamples=5000, seed=42)
-        ci_perc = boot_ci(result, ci_type="perc").ci["perc"]
-        ci_bca = boot_ci(result, ci_type="bca").ci["bca"]
+        ci_perc = boot_ci(result, ci_type="percentile").conf_int["percentile"]
+        ci_bca = boot_ci(result, ci_type="bca").conf_int["bca"]
 
         # They should be close for symmetric data
         assert ci_bca[0, 0] == pytest.approx(ci_perc[0, 0], abs=0.3)
@@ -181,12 +181,12 @@ class TestStudentizedCI:
         var_t0 = float(result.t0[1])
 
         ci_result = boot_ci(
-            result, ci_type="stud", index=0,
+            result, ci_type="studentized", index=0,
             var_t0=var_t0, var_t=var_t,
         )
 
-        assert "stud" in ci_result.ci
-        ci = ci_result.ci["stud"]
+        assert "studentized" in ci_result.conf_int
+        ci = ci_result.conf_int["studentized"]
         assert ci.shape == (2, 2)  # k=2 statistics
 
         # CI for index=0 (mean) should contain true mean (25.5)
@@ -198,7 +198,7 @@ class TestStudentizedCI:
         result = boot(data, mean_stat, n_resamples=100, seed=42)
 
         with pytest.raises(ValueError, match="var_t"):
-            boot_ci(result, ci_type="stud")
+            boot_ci(result, ci_type="studentized")
 
 
 # ---------------------------------------------------------------------------
@@ -209,26 +209,26 @@ class TestAllCI:
     """Tests for ci_type='all'."""
 
     def test_all_without_var_t(self):
-        """ci_type='all' computes normal, basic, perc, bca (not stud)."""
+        """ci_type='all' computes normal, basic, percentile, bca (not studentized)."""
         data = np.arange(1.0, 21.0)
         result = boot(data, mean_stat, n_resamples=500, seed=42)
         ci_result = boot_ci(result, ci_type="all")
 
-        assert "normal" in ci_result.ci
-        assert "basic" in ci_result.ci
-        assert "perc" in ci_result.ci
-        assert "bca" in ci_result.ci
-        assert "stud" not in ci_result.ci
+        assert "normal" in ci_result.conf_int
+        assert "basic" in ci_result.conf_int
+        assert "percentile" in ci_result.conf_int
+        assert "bca" in ci_result.conf_int
+        assert "studentized" not in ci_result.conf_int
 
     def test_all_with_var_t(self):
-        """ci_type='all' includes stud when var_t provided."""
+        """ci_type='all' includes studentized when var_t provided."""
         data = np.arange(1.0, 21.0)
         result = boot(data, mean_var_stat, n_resamples=500, seed=42)
 
         var_t = result.t[:, 1]
         ci_result = boot_ci(result, ci_type="all", var_t=var_t)
 
-        assert "stud" in ci_result.ci
+        assert "studentized" in ci_result.conf_int
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +243,9 @@ class TestConfLevels:
         data = np.arange(1.0, 51.0)
         result = boot(data, mean_stat, n_resamples=2000, seed=42)
 
-        ci_90 = boot_ci(result, ci_type="perc", conf_level=0.90).ci["perc"]
-        ci_95 = boot_ci(result, ci_type="perc", conf_level=0.95).ci["perc"]
-        ci_99 = boot_ci(result, ci_type="perc", conf_level=0.99).ci["perc"]
+        ci_90 = boot_ci(result, ci_type="percentile", conf_level=0.90).conf_int["percentile"]
+        ci_95 = boot_ci(result, ci_type="percentile", conf_level=0.95).conf_int["percentile"]
+        ci_99 = boot_ci(result, ci_type="percentile", conf_level=0.99).conf_int["percentile"]
 
         width_90 = ci_90[0, 1] - ci_90[0, 0]
         width_95 = ci_95[0, 1] - ci_95[0, 0]
@@ -257,8 +257,22 @@ class TestConfLevels:
         """Confidence level is stored in result."""
         data = np.arange(1.0, 11.0)
         result = boot(data, mean_stat, n_resamples=100, seed=42)
-        ci_result = boot_ci(result, ci_type="perc", conf_level=0.90)
-        assert ci_result.ci_conf_level == 0.90
+        ci_result = boot_ci(result, ci_type="percentile", conf_level=0.90)
+        assert ci_result.conf_level == 0.90
+
+    def test_length_one_conf_level_sequence(self):
+        """A length-1 conf_level sequence is accepted (unwrapped to scalar)."""
+        data = np.arange(1.0, 11.0)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
+        ci_result = boot_ci(result, ci_type="percentile", conf_level=[0.90])
+        assert ci_result.conf_level == 0.90
+
+    def test_multi_level_conf_level_raises(self):
+        """Multi-level conf_level fails loud instead of silently truncating."""
+        data = np.arange(1.0, 11.0)
+        result = boot(data, mean_stat, n_resamples=100, seed=42)
+        with pytest.raises(ValueError, match="Multi-level conf_level is not yet supported"):
+            boot_ci(result, ci_type="percentile", conf_level=[0.90, 0.95])
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +286,8 @@ class TestCISummary:
         """summary() includes CI information when available."""
         data = np.arange(1.0, 11.0)
         result = boot(data, mean_stat, n_resamples=100, seed=42)
-        ci_result = boot_ci(result, ci_type="perc")
+        ci_result = boot_ci(result, ci_type="percentile")
         s = ci_result.summary()
 
-        assert "perc" in s
+        assert "percentile" in s
         assert "CI" in s

@@ -54,15 +54,15 @@ class TestOrdinaryBootstrap:
 
         # Shape checks
         assert result.t.shape == (999, 1)
-        assert result.R == 999
+        assert result.n_resamples == 999
         assert len(result.bias) == 1
-        assert len(result.se) == 1
+        assert len(result.standard_errors) == 1
 
         # Bias should be small (bootstrap is approximately unbiased for mean)
         assert abs(result.bias[0]) < 0.5
 
         # SE should be reasonable (true SE of mean = sd/sqrt(n) ≈ 0.96)
-        assert 0.5 < result.se[0] < 1.5
+        assert 0.5 < result.standard_errors[0] < 1.5
 
     def test_multi_statistic(self):
         """Bootstrap with multiple statistics (mean + var)."""
@@ -100,7 +100,7 @@ class TestOrdinaryBootstrap:
         np.testing.assert_array_equal(r1.t, r2.t)
         np.testing.assert_array_equal(r1.t0, r2.t0)
         np.testing.assert_array_equal(r1.bias, r2.bias)
-        np.testing.assert_array_equal(r1.se, r2.se)
+        np.testing.assert_array_equal(r1.standard_errors, r2.standard_errors)
 
     def test_different_seeds_differ(self):
         """Different seeds give different results."""
@@ -117,7 +117,7 @@ class TestOrdinaryBootstrap:
 
         # True mean = 50.5, true SE ≈ 28.87/sqrt(100) ≈ 2.887
         assert result.t0[0] == pytest.approx(50.5, rel=1e-10)
-        assert result.se[0] == pytest.approx(2.887, rel=0.1)
+        assert result.standard_errors[0] == pytest.approx(2.887, rel=0.1)
         assert abs(result.bias[0]) < 0.5
 
     def test_single_observation(self):
@@ -144,7 +144,7 @@ class TestBalancedBootstrap:
 
         assert result.t0[0] == pytest.approx(3.0, rel=1e-10)
         assert result.t.shape == (100, 1)
-        assert result.sim == "balanced"
+        assert result.method == "balanced"
 
     def test_balanced_coverage(self):
         """In balanced bootstrap, each obs appears exactly R times total."""
@@ -178,7 +178,7 @@ class TestBalancedBootstrap:
         r_bal = boot(data, mean_stat, n_resamples=1000, method="balanced", seed=42)
 
         # SEs should be in the same ballpark
-        assert r_ord.se[0] == pytest.approx(r_bal.se[0], rel=0.3)
+        assert r_ord.standard_errors[0] == pytest.approx(r_bal.standard_errors[0], rel=0.3)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ class TestStratifiedBootstrap:
 
         # Each replicate should mix values from both strata
         # Mean should be between group means
-        for b in range(result.R):
+        for b in range(result.n_resamples):
             # The mean should be roughly between 2 and 20
             assert 0.5 < result.t[b, 0] < 35.0
 
@@ -285,7 +285,7 @@ class TestBootstrapSolution:
         r = repr(result)
 
         assert "BootstrapSolution" in r
-        assert "R=100" in r
+        assert "n_resamples=100" in r
         assert "k=1" in r
 
     def test_backend_name(self):
@@ -310,15 +310,15 @@ class TestBootstrapValidation:
     """Tests for input validation."""
 
     def test_R_must_be_positive(self):
-        """R must be >= 1."""
+        """n_resamples must be >= 1."""
         data = np.array([1.0, 2.0, 3.0])
-        with pytest.raises(ValueError, match="R must be >= 1"):
+        with pytest.raises(ValueError, match="n_resamples must be >= 1"):
             boot(data, mean_stat, n_resamples=0)
 
     def test_invalid_sim(self):
-        """Invalid sim raises ValueError."""
+        """Invalid method raises ValueError."""
         data = np.array([1.0, 2.0, 3.0])
-        with pytest.raises(ValueError, match="sim must be"):
+        with pytest.raises(ValueError, match="method must be"):
             boot(data, mean_stat, n_resamples=10, method="invalid")
 
     def test_invalid_statistic_type(self):
@@ -387,9 +387,9 @@ class TestParametricBootstrap:
 
         # SE should be close to sigma/sqrt(n)
         expected_se = mle_params["std"] / np.sqrt(len(data))
-        assert result.se[0] == pytest.approx(expected_se, rel=0.2)
+        assert result.standard_errors[0] == pytest.approx(expected_se, rel=0.2)
 
-        assert result.sim == "parametric"
+        assert result.method == "parametric"
 
     def test_parametric_seed_reproducibility(self):
         """Parametric bootstrap is reproducible with seed."""

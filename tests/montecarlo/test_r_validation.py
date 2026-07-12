@@ -31,6 +31,7 @@ from pystatistics.montecarlo import boot, boot_ci, permutation_test
 
 # Fixtures mirror R verbatim; map R codes/values to the PyStatistics API.
 _STYPE = {"i": "index", "f": "frequency", "w": "weight"}
+_CI_TYPE = {"perc": "percentile", "stud": "studentized"}
 
 
 def _alt(value):
@@ -190,7 +191,7 @@ class TestBootstrapRValidation:
         )
 
         # SE should be in the right ballpark (within 20% relative)
-        assert result.se[0] == pytest.approx(
+        assert result.standard_errors[0] == pytest.approx(
             r["se"], rel=0.20,
         ), f"SE mismatch for {fixture_name}"
 
@@ -208,7 +209,7 @@ class TestBootstrapRValidation:
             seed=meta["seed"],
         )
 
-        assert result.R == r["R"]
+        assert result.n_resamples == r["R"]
         assert result.t.shape == (r["R"], 1)
 
 
@@ -245,10 +246,11 @@ class TestBootstrapCIRValidation:
             if r_ci is None:
                 continue
 
+            api_ci_type = _CI_TYPE.get(ci_type, ci_type)
             ci_result = boot_ci(
-                result, ci_type=ci_type, conf_level=conf_level,
+                result, ci_type=api_ci_type, conf_level=conf_level,
             )
-            py_ci = ci_result.ci[ci_type]
+            py_ci = ci_result.conf_int[api_ci_type]
 
             # CI endpoints are stochastic — use moderate tolerance.
             # With R=2999, typical MC variance in CI endpoints is ~0.1-0.5.
@@ -274,10 +276,11 @@ class TestBootstrapCIRValidation:
         )
 
         for ci_type in meta["ci_types"]:
+            api_ci_type = _CI_TYPE.get(ci_type, ci_type)
             ci_result = boot_ci(
-                result, ci_type=ci_type, conf_level=meta["conf_level"],
+                result, ci_type=api_ci_type, conf_level=meta["conf_level"],
             )
-            ci = ci_result.ci[ci_type]
+            ci = ci_result.conf_int[api_ci_type]
             assert ci[0, 0] < ci[0, 1], \
                 f"{ci_type} CI not ordered for {fixture_name}"
 
@@ -295,8 +298,8 @@ class TestBootstrapCIRValidation:
         )
 
         # Percentile CI with 95% confidence should contain t0 for normal data
-        ci_result = boot_ci(result, ci_type="perc", conf_level=meta["conf_level"])
-        ci = ci_result.ci["perc"]
+        ci_result = boot_ci(result, ci_type="percentile", conf_level=meta["conf_level"])
+        ci = ci_result.conf_int["percentile"]
 
         # This is not guaranteed for highly biased estimators, but should hold
         # for the mean/variance/median with our test data

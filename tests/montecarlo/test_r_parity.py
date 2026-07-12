@@ -95,8 +95,9 @@ def test_regression_influence_self_check_rejects_foreign_replicates():
     from pystatistics.core.result import Result
     r = boot(LAW, corr, n_resamples=1000, seed=1)
     foreign = np.sort(r.t.copy(), axis=0)  # not the seed's replicates
-    p = BootParams(t0=r.t0, t=foreign, R=1000, bias=r.bias, se=r.se,
-                   ci=None, ci_conf_level=None)
+    p = BootParams(t0=r.t0, t=foreign, n_resamples=1000, bias=r.bias,
+                   standard_errors=r.standard_errors,
+                   conf_int=None, conf_level=None)
     sol = BootstrapSolution(
         _result=Result(params=p, info=r._result.info, timing=None,
                        backend_name="x", warnings=()), _design=r._design)
@@ -105,7 +106,7 @@ def test_regression_influence_self_check_rejects_foreign_replicates():
 
 def test_bca_uses_regression_and_stays_in_range():
     r = boot(LAW, corr, n_resamples=3000, seed=99)
-    ci = boot_ci(r, ci_type="bca").ci["bca"][0]
+    ci = boot_ci(r, ci_type="bca").conf_int["bca"][0]
     assert -1.0 <= ci[0] < ci[1] <= 1.0
 
 

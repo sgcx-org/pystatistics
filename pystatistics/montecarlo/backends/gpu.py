@@ -68,8 +68,9 @@ class GPUBootstrapBackend:
         """Run the vectorized GPU bootstrap for a declared-mean statistic.
 
         The dispatcher only routes a design here once ``gpu_statistic='mean'``
-        is declared and the configuration is vectorizable (ordinary, stype='i',
-        no strata, 1-D data), so no probing or CPU fallback happens here. The
+        is declared and the configuration is vectorizable (ordinary,
+        statistic_type='i', no strata, 1-D data), so no probing or CPU fallback
+        happens here. The
         declaration is verified against the observed statistic on the original
         data (fail-loud) before any GPU work — a statistic that is not the mean
         raises rather than being silently computed as the mean.
@@ -81,7 +82,7 @@ class GPUBootstrapBackend:
 
         data = design.data
         statistic = design.statistic
-        R = design.R
+        n_resamples = design.n_resamples
         seed = design.seed
         n = data.shape[0]
 
@@ -113,12 +114,12 @@ class GPUBootstrapBackend:
 
             data_t = torch.from_numpy(data).to(device=device, dtype=dtype)
 
-            # Memory: R * n * 8 bytes for indices. Chunk if needed.
+            # Memory: n_resamples * n * 8 bytes for indices. Chunk if needed.
             target_bytes = 1_000_000_000
             chunk_size = max(1, target_bytes // (n * 8))
-            chunk_size = min(chunk_size, R)
+            chunk_size = min(chunk_size, n_resamples)
 
-            t = np.empty((R, k), dtype=np.float64)
+            t = np.empty((n_resamples, k), dtype=np.float64)
 
             # NON-DETERMINISTIC: GPU RNG differs from CPU. Bootstrap
             # replicates are statistically equivalent but not identical.
@@ -126,8 +127,8 @@ class GPUBootstrapBackend:
                 torch.manual_seed(seed)
 
             batch_start = 0
-            while batch_start < R:
-                batch = min(chunk_size, R - batch_start)
+            while batch_start < n_resamples:
+                batch = min(chunk_size, n_resamples - batch_start)
 
                 # Generate random indices via randint on GPU
                 idx = torch.randint(0, n, (batch, n), device=device)
@@ -141,17 +142,18 @@ class GPUBootstrapBackend:
 
         with timer.section('summary_statistics'):
             bias = np.mean(t, axis=0) - t0
-            se = np.std(t, axis=0, ddof=1)
+            standard_errors = np.std(t, axis=0, ddof=1)
 
         timer.stop()
 
         return Result(
             params=BootParams(
-                t0=t0, t=t, R=R, bias=bias, se=se,
-                ci=None, ci_conf_level=None,
+                t0=t0, t=t, n_resamples=n_resamples, bias=bias,
+                standard_errors=standard_errors,
+                conf_int=None, conf_level=None,
             ),
             info={
-                'sim': design.sim, 'stype': design.stype,
+                'method': design.method, 'statistic_type': design.statistic_type,
                 'n': n, 'k': k, 'gpu_vectorized': True,
             },
             timing=timer.result(),
@@ -191,7 +193,7 @@ class GPUPermutationBackend:
         x = design.x
         y = design.y
         statistic = design.statistic
-        R = design.R
+        n_resamples = design.n_resamples
         alternative = design.alternative
         seed = design.seed
 
@@ -230,14 +232,14 @@ class GPUPermutationBackend:
             # Chunk size: keep keys matrix under ~1 GB
             target_bytes = 1_000_000_000
             chunk_size = max(1, target_bytes // (n * 4))
-            chunk_size = min(chunk_size, R)
+            chunk_size = min(chunk_size, n_resamples)
 
             combined_t = torch.from_numpy(combined).to(
                 device=device, dtype=dtype,
             )
             total_sum = combined_t.sum()
 
-            perm_stats = np.empty(R, dtype=np.float64)
+            perm_stats = np.empty(n_resamples, dtype=np.float64)
 
             # NON-DETERMINISTIC: GPU RNG differs from CPU RNG. P-values
             # are statistically equivalent but not identical to CPU path.
@@ -245,8 +247,8 @@ class GPUPermutationBackend:
                 torch.manual_seed(seed)
 
             batch_start = 0
-            while batch_start < R:
-                batch = min(chunk_size, R - batch_start)
+            while batch_start < n_resamples:
+                batch = min(chunk_size, n_resamples - batch_start)
 
                 # Random-key sort: generate uniform keys, argsort gives
                 # a random permutation per row — fully parallel on GPU.
@@ -265,7 +267,7 @@ class GPUPermutationBackend:
                 batch_start += batch
 
         with timer.section('p_value'):
-            p_value = perm_pvalue(perm_stats, observed, alternative, R)
+            p_value = perm_pvalue(perm_stats, observed, alternative, n_resamples)
 
         timer.stop()
 
@@ -274,7 +276,7 @@ class GPUPermutationBackend:
                 observed_stat=observed,
                 perm_stats=perm_stats,
                 p_value=p_value,
-                R=R,
+                n_resamples=n_resamples,
                 alternative=alternative,
             ),
             info={

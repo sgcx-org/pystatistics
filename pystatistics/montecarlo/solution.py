@@ -40,13 +40,13 @@ class BootstrapSolution(SolutionReprMixin):
 
     @property
     def t(self) -> NDArray[np.floating[Any]]:
-        """Bootstrap replicates, shape (R, k)."""
+        """Bootstrap replicates, shape (n_resamples, k)."""
         return self._result.params.t
 
     @property
-    def R(self) -> int:
+    def n_resamples(self) -> int:
         """Number of bootstrap replicates."""
-        return self._result.params.R
+        return self._result.params.n_resamples
 
     @property
     def bias(self) -> NDArray[np.floating[Any]]:
@@ -54,19 +54,19 @@ class BootstrapSolution(SolutionReprMixin):
         return self._result.params.bias
 
     @property
-    def se(self) -> NDArray[np.floating[Any]]:
+    def standard_errors(self) -> NDArray[np.floating[Any]]:
         """Bootstrap standard error: sd(t), shape (k,)."""
-        return self._result.params.se
+        return self._result.params.standard_errors
 
     @property
-    def ci(self) -> dict[str, NDArray] | None:
+    def conf_int(self) -> dict[str, NDArray] | None:
         """Confidence intervals keyed by type, or None if not computed."""
-        return self._result.params.ci
+        return self._result.params.conf_int
 
     @property
-    def ci_conf_level(self) -> float | None:
+    def conf_level(self) -> float | None:
         """Confidence level used for CI computation."""
-        return self._result.params.ci_conf_level
+        return self._result.params.conf_level
 
     # --- Metadata ---
 
@@ -76,9 +76,9 @@ class BootstrapSolution(SolutionReprMixin):
         return self._design.data
 
     @property
-    def sim(self) -> str:
-        """Simulation type used."""
-        return self._design.sim
+    def method(self) -> str:
+        """Bootstrap method used."""
+        return self._design.method
 
     @property
     def seed(self) -> int | None:
@@ -118,17 +118,17 @@ class BootstrapSolution(SolutionReprMixin):
         lines = []
 
         # Title
-        sim_name = {
+        method_name = {
             "ordinary": "ORDINARY NONPARAMETRIC BOOTSTRAP",
             "balanced": "BALANCED BOOTSTRAP",
             "parametric": "PARAMETRIC BOOTSTRAP",
-        }.get(self.sim, "BOOTSTRAP")
-        lines.append(f"\n{sim_name}\n")
+        }.get(self.method, "BOOTSTRAP")
+        lines.append(f"\n{method_name}\n")
 
         # Call info
         lines.append(
-            f"Call: boot(data, statistic, n_resamples={self.R}, "
-            f"method=\"{self.sim}\")"
+            f"Call: boot(data, statistic, n_resamples={self.n_resamples}, "
+            f"method=\"{self.method}\")"
         )
         lines.append("")
 
@@ -143,14 +143,14 @@ class BootstrapSolution(SolutionReprMixin):
             label = f"t{i+1}*"
             lines.append(
                 f"{label:>8s} {self.t0[i]:14.5f} {self.bias[i]:14.5f} "
-                f"{self.se[i]:14.5f}"
+                f"{self.standard_errors[i]:14.5f}"
             )
 
         # CI if available
-        if self.ci is not None:
+        if self.conf_int is not None:
             lines.append("")
-            conf_pct = int((self.ci_conf_level or 0.95) * 100)
-            for ci_type, ci_vals in self.ci.items():
+            conf_pct = int((self.conf_level or 0.95) * 100)
+            for ci_type, ci_vals in self.conf_int.items():
                 lines.append(f"{conf_pct}% {ci_type} CI:")
                 for i in range(k):
                     label = f"t{i+1}*"
@@ -164,8 +164,8 @@ class BootstrapSolution(SolutionReprMixin):
     def __repr__(self) -> str:
         k = len(self.t0)
         return (
-            f"BootstrapSolution(R={self.R}, k={k}, "
-            f"sim={self.sim!r}, backend={self.backend_name!r})"
+            f"BootstrapSolution(n_resamples={self.n_resamples}, k={k}, "
+            f"method={self.method!r}, backend={self.backend_name!r})"
         )
 
 
@@ -197,9 +197,9 @@ class PermutationSolution(SolutionReprMixin):
         return self._result.params.p_value
 
     @property
-    def R(self) -> int:
+    def n_resamples(self) -> int:
         """Number of permutations."""
-        return self._result.params.R
+        return self._result.params.n_resamples
 
     @property
     def alternative(self) -> str:
@@ -231,7 +231,7 @@ class PermutationSolution(SolutionReprMixin):
         lines = [
             "\nPERMUTATION TEST",
             "",
-            f"Number of permutations: {self.R}",
+            f"Number of permutations: {self.n_resamples}",
             f"Observed statistic: {self.observed_stat:.6g}",
             f"p-value ({self.alternative}): {self.p_value:.4g}",
             "",
@@ -240,7 +240,7 @@ class PermutationSolution(SolutionReprMixin):
 
     def __repr__(self) -> str:
         return (
-            f"PermutationSolution(R={self.R}, "
+            f"PermutationSolution(n_resamples={self.n_resamples}, "
             f"observed={self.observed_stat:.4g}, "
             f"p_value={self.p_value:.4g})"
         )

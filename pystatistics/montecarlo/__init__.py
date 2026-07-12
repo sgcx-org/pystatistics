@@ -9,10 +9,10 @@ Usage:
 
     # Bootstrap
     result = boot(data, statistic, n_resamples=999, seed=42)
-    ci_result = boot_ci(result, ci_type="perc")
+    ci_result = boot_ci(result, ci_type="percentile")
 
     # Permutation test
-    result = permutation_test(x, y, statistic, R=9999)
+    result = permutation_test(x, y, statistic, n_resamples=9999)
 """
 
 from pystatistics.montecarlo.solvers import boot, boot_ci, permutation_test

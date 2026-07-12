@@ -4,9 +4,9 @@ Bootstrap confidence interval computation.
 Implements all 5 methods from R's boot.ci():
 - normal: bias-corrected normal approximation
 - basic: basic (pivotal) bootstrap interval
-- perc: percentile method
+- percentile: percentile method
 - bca: bias-corrected and accelerated
-- stud: studentized (bootstrap-t)
+- studentized: studentized (bootstrap-t)
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def compute_ci(
         index: Which statistic (column of t) to use. Currently computes
             CI for all k statistics but uses index for studentized/BCa.
         var_t0: Variance of observed statistic.
-        var_t: Per-replicate variances, shape (R,).
+        var_t: Per-replicate variances, shape (n_resamples,).
 
     Returns:
         Dict mapping CI type name to NDArray of shape (k, 2).
@@ -95,17 +95,17 @@ def compute_ci(
             ci_dict["normal"] = _ci_normal(t0, t, alpha, var_t0)
         elif ci_type == "basic":
             ci_dict["basic"] = _ci_basic(t0, t, alpha)
-        elif ci_type == "perc":
-            ci_dict["perc"] = _ci_percentile(t, alpha)
+        elif ci_type == "percentile":
+            ci_dict["percentile"] = _ci_percentile(t, alpha)
         elif ci_type == "bca":
             ci_dict["bca"] = _ci_bca(boot_out, alpha)
-        elif ci_type == "stud":
+        elif ci_type == "studentized":
             if var_t is None:
                 raise ValidationError(
                     "Studentized CI requires var_t "
                     "(per-replicate variance estimates)"
                 )
-            ci_dict["stud"] = _ci_studentized(
+            ci_dict["studentized"] = _ci_studentized(
                 t0, t, alpha, var_t0, var_t, index,
             )
         else:

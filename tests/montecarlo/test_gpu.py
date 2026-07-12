@@ -178,7 +178,7 @@ class TestGPUBootstrap:
         assert 'gpu' in result.backend_name
         assert result.t0[0] == pytest.approx(25.5, rel=1e-10)
         assert result.t.shape == (500, 1)
-        assert 1.0 < result.se[0] < 5.0
+        assert 1.0 < result.standard_errors[0] < 5.0
 
     def test_gpu_bootstrap_matches_cpu_statistically(self, gpu_available):
         """Independent RNGs -> t0 identical, SE within Monte-Carlo error."""
@@ -187,7 +187,7 @@ class TestGPUBootstrap:
         gpu = boot(data, mean_stat, n_resamples=4000, seed=42, backend='gpu',
                    gpu_statistic='mean')
         np.testing.assert_array_equal(gpu.t0, cpu.t0)
-        np.testing.assert_allclose(gpu.se, cpu.se, rtol=0.15)
+        np.testing.assert_allclose(gpu.standard_errors, cpu.standard_errors, rtol=0.15)
 
     def test_gpu_bootstrap_seed_reproducibility(self, gpu_available):
         data = np.arange(1.0, 31.0)
