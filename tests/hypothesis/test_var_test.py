@@ -68,12 +68,12 @@ class TestVarTestBasic:
 
     def test_ratio_hypothesis(self):
         """
-        R: var.test(c(1,2,3,4,5), c(6,7,8,9,10), ratio=2)
+        R: var.test(c(1,2,3,4,5), c(6,7,8,9,10), null_value=2)
         F = 0.5, p-value = 0.5185185
         """
         x = [1, 2, 3, 4, 5]
         y = [6, 7, 8, 9, 10]
-        result = var_test(x, y, ratio=2)
+        result = var_test(x, y, null_value=2)
         assert result.statistic == pytest.approx(0.5, rel=1e-10)
         assert result.p_value == pytest.approx(0.51851851851851849, rel=1e-10)
         assert result.null_value == {"ratio of variances": 2.0}
@@ -137,12 +137,12 @@ class TestVarTestEdgeCases:
     def test_invalid_ratio(self):
         """Negative ratio should raise."""
         with pytest.raises(Exception):
-            var_test([1, 2, 3], [4, 5, 6], ratio=-1)
+            var_test([1, 2, 3], [4, 5, 6], null_value=-1)
 
     def test_zero_ratio(self):
         """Zero ratio should raise."""
         with pytest.raises(Exception):
-            var_test([1, 2, 3], [4, 5, 6], ratio=0)
+            var_test([1, 2, 3], [4, 5, 6], null_value=0)
 
     def test_too_few_observations(self):
         """Need at least 2 observations in each sample."""

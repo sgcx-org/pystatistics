@@ -34,9 +34,9 @@ class TestGPUChisqMonteCarlo:
 
         table = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]])
 
-        cpu_result = chisq_test(table, simulate_p_value=True, B=5000,
+        cpu_result = chisq_test(table, simulate_p_value=True, n_resamples=5000,
                                 backend='cpu')
-        gpu_result = chisq_test(table, simulate_p_value=True, B=5000,
+        gpu_result = chisq_test(table, simulate_p_value=True, n_resamples=5000,
                                 backend='gpu')
 
         # Monte Carlo p-values should be close (stochastic)
@@ -56,10 +56,10 @@ class TestGPUChisqMonteCarlo:
         observed = np.array([16, 18, 16, 14, 12, 12])
         p = np.ones(6) / 6
 
-        cpu_result = chisq_test(observed, p=p, simulate_p_value=True,
-                                B=5000, backend='cpu')
-        gpu_result = chisq_test(observed, p=p, simulate_p_value=True,
-                                B=5000, backend='gpu')
+        cpu_result = chisq_test(observed, expected_probs=p, simulate_p_value=True,
+                                n_resamples=5000, backend='cpu')
+        gpu_result = chisq_test(observed, expected_probs=p, simulate_p_value=True,
+                                n_resamples=5000, backend='gpu')
 
         assert gpu_result.p_value == pytest.approx(
             cpu_result.p_value, abs=0.05,
@@ -73,7 +73,7 @@ class TestGPUChisqMonteCarlo:
         from pystatistics.hypothesis import chisq_test
 
         table = np.array([[10, 20], [30, 40]])
-        result = chisq_test(table, simulate_p_value=True, B=1000,
+        result = chisq_test(table, simulate_p_value=True, n_resamples=1000,
                             backend='gpu')
         assert "gpu" in result.backend_name
 
@@ -103,9 +103,9 @@ class TestGPUFisherMonteCarlo:
             [15, 20, 5],
         ])
 
-        cpu_result = fisher_test(table, simulate_p_value=True, B=5000,
+        cpu_result = fisher_test(table, simulate_p_value=True, n_resamples=5000,
                                  backend='cpu')
-        gpu_result = fisher_test(table, simulate_p_value=True, B=5000,
+        gpu_result = fisher_test(table, simulate_p_value=True, n_resamples=5000,
                                  backend='gpu')
 
         assert gpu_result.p_value == pytest.approx(

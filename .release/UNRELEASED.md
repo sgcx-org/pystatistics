@@ -26,3 +26,16 @@ commits; this section accumulates them.
   tensor `te()`/`ti()` smooth carries one smoothing parameter per margin, so the
   accessors are the tuples `SmoothInfo.lambdas` / `.s_scales` (deprecated in
   4.8.0).
+
+**`hypothesis` — descriptive parameter names (no single-letter / no collisions):**
+
+- `chisq_test`: `p=` → `expected_probs=`, `rescale_p=` → `rescale_probs=`,
+  `B=` → `n_resamples=`.
+- `prop_test`: `p=` → `null_value=` (the null proportion — a generic null),
+  `n=` → `n_trials=`.
+- `fisher_test`: `B=` → `n_resamples=`.
+- `var_test`: `ratio=` → `null_value=` (the null variance ratio; default 1.0).
+- `p_adjust`: `p=` → `p_values=`, `n=` → `n_comparisons=`.
+  Resolves the previous collision where the bare name `p` meant three different
+  things (expected proportions, a null proportion, and a p-value vector) and the
+  bare `n`/`B` were single-letter public parameters.

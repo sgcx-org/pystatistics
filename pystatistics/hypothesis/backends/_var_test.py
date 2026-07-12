@@ -23,7 +23,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     """F-test for equality of two variances, matching R's var.test()."""
     x = design.x
     y = design.y
-    ratio = design.ratio
+    null_value = design.null_value
     alternative = design.alternative
     conf_level = design.conf_level
     warnings_list: list[str] = []
@@ -37,7 +37,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     var_y = float(np.var(y, ddof=1))
 
     # F statistic: ratio of sample variances divided by null ratio
-    f_stat = (var_x / var_y) / ratio
+    f_stat = (var_x / var_y) / null_value
 
     # p-value
     if alternative == "two-sided":
@@ -63,7 +63,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         ci_hi = float('inf')
 
     estimate = {"ratio of variances": float(var_x / var_y)}
-    null_value = {"ratio of variances": ratio}
+    null_value_out = {"ratio of variances": null_value}
     parameter = {"num df": df_x, "denom df": df_y}
 
     method = "F test to compare two variances"
@@ -76,7 +76,7 @@ def var_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         conf_int=np.array([ci_lo, ci_hi]),
         conf_level=conf_level,
         estimate=estimate,
-        null_value=null_value,
+        null_value=null_value_out,
         alternative=alternative,
         method=method,
         data_name=design.data_name,

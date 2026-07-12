@@ -84,13 +84,13 @@ def _run_test(name: str):
         if "correct" in params:
             kwargs["correct"] = params["correct"]
         if "p" in params:
-            kwargs["p"] = params["p"]
+            kwargs["expected_probs"] = params["p"]
         if "simulate.p.value" in params:
             kwargs["simulate_p_value"] = params["simulate.p.value"]
         if "B" in params:
-            kwargs["B"] = params["B"]
+            kwargs["n_resamples"] = params["B"]
         if "rescale.p" in params:
-            kwargs["rescale_p"] = params["rescale.p"]
+            kwargs["rescale_probs"] = params["rescale.p"]
         if "table" in data:
             return chisq_test(data["table"], **kwargs)
         else:
@@ -107,7 +107,7 @@ def _run_test(name: str):
         if "simulate.p.value" in params:
             kwargs["simulate_p_value"] = params["simulate.p.value"]
         if "B" in params:
-            kwargs["B"] = params["B"]
+            kwargs["n_resamples"] = params["B"]
         return fisher_test(data["table"], **kwargs)
 
     elif test_type == "wilcox.test":
@@ -147,7 +147,7 @@ def _run_test(name: str):
     elif test_type == "prop.test":
         kwargs = {}
         if "p" in params:
-            kwargs["p"] = params["p"]
+            kwargs["null_value"] = params["p"]
         if "alternative" in params:
             kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:
@@ -159,7 +159,7 @@ def _run_test(name: str):
     elif test_type == "var.test":
         kwargs = {}
         if "ratio" in params:
-            kwargs["ratio"] = params["ratio"]
+            kwargs["null_value"] = params["ratio"]
         if "alternative" in params:
             kwargs["alternative"] = _alt(params["alternative"])
         if "conf.level" in params:

@@ -19,23 +19,23 @@ VALID_METHODS = (
 
 
 def p_adjust(
-    p: ArrayLike,
+    p_values: ArrayLike,
     method: str = "holm",
-    n: int | None = None,
+    n_comparisons: int | None = None,
 ) -> NDArray[np.floating]:
     """
     Adjust p-values for multiple comparisons. Matches R p.adjust().
 
     Parameters
     ----------
-    p : array-like
+    p_values : array-like
         Vector of p-values.
     method : str
         Adjustment method. One of: "holm" (default), "hochberg", "hommel",
         "bonferroni", "BH", "BY", "fdr" (alias for BH), "none".
-    n : int or None
-        Number of comparisons. Default len(p). Can be larger than len(p)
-        when some p-values are omitted.
+    n_comparisons : int or None
+        Number of comparisons. Default len(p_values). Can be larger than
+        len(p_values) when some p-values are omitted.
 
     Returns
     -------
@@ -48,16 +48,17 @@ def p_adjust(
             f"method must be one of {VALID_METHODS}, got {method!r}"
         )
 
-    p_arr = np.asarray(p, dtype=np.float64).ravel()
+    p_arr = np.asarray(p_values, dtype=np.float64).ravel()
 
-    if n is None:
+    if n_comparisons is None:
         n_tests = len(p_arr)
     else:
-        if n < len(p_arr):
+        if n_comparisons < len(p_arr):
             raise ValidationError(
-                f"n ({n}) must be >= length of p ({len(p_arr)})"
+                f"n_comparisons ({n_comparisons}) must be >= "
+                f"length of p_values ({len(p_arr)})"
             )
-        n_tests = n
+        n_tests = n_comparisons
 
     if len(p_arr) == 0:
         return np.array([], dtype=np.float64)

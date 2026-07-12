@@ -32,7 +32,7 @@ class TestDesignFactories:
         assert d.test_type == "chisq_independence"
 
     def test_build_prop_test_design(self):
-        d = build_prop_test_design([10], [100], p=0.5)
+        d = build_prop_test_design([10], [100], null_value=0.5)
         assert isinstance(d, HypothesisDesign)
         assert d.test_type == "prop_test"
 
@@ -105,22 +105,22 @@ class TestMonteCarloReproducibility:
     # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
     def test_chisq_mc_same_seed_same_result(self):
         obs = np.array([16, 18, 16, 14, 12, 12], dtype=float)
-        r1 = chisq_test(obs, simulate_p_value=True, B=999, seed=42)
-        r2 = chisq_test(obs, simulate_p_value=True, B=999, seed=42)
+        r1 = chisq_test(obs, simulate_p_value=True, n_resamples=999, seed=42)
+        r2 = chisq_test(obs, simulate_p_value=True, n_resamples=999, seed=42)
         assert r1.p_value == r2.p_value
 
     # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
     def test_fisher_mc_same_seed_same_result(self):
         table = np.array([[5, 10, 15], [10, 20, 25]], dtype=float)
-        r1 = fisher_test(table, simulate_p_value=True, B=999, seed=42)
-        r2 = fisher_test(table, simulate_p_value=True, B=999, seed=42)
+        r1 = fisher_test(table, simulate_p_value=True, n_resamples=999, seed=42)
+        r2 = fisher_test(table, simulate_p_value=True, n_resamples=999, seed=42)
         assert r1.p_value == r2.p_value
 
     # NON-DETERMINISTIC: seed-controlled Monte Carlo simulation
     def test_chisq_mc_different_seeds_differ(self):
         obs = np.array([16, 18, 16, 14, 12, 12], dtype=float)
-        r1 = chisq_test(obs, simulate_p_value=True, B=999, seed=42)
-        r2 = chisq_test(obs, simulate_p_value=True, B=999, seed=123)
+        r1 = chisq_test(obs, simulate_p_value=True, n_resamples=999, seed=42)
+        r2 = chisq_test(obs, simulate_p_value=True, n_resamples=999, seed=123)
         # Different seeds should produce slightly different p-values
         # Both should be close (same null), but not identical
         assert abs(r1.p_value - r2.p_value) < 0.1

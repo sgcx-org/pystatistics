@@ -98,7 +98,7 @@ class GPUHypothesisBackend:
         """GPU Monte Carlo for chi-squared independence test."""
         torch = self._torch
         table = design.table.copy()
-        B = design.n_monte_carlo
+        n_resamples = design.n_resamples
         correct = design.correct
         warnings_list: list[str] = []
 
@@ -132,10 +132,12 @@ class GPUHypothesisBackend:
 
         # GPU Monte Carlo: generate random tables and compute statistics
         p_value = self._gpu_mc_independence(
-            row_sums, col_sums, expected, observed_stat, B,
+            row_sums, col_sums, expected, observed_stat, n_resamples,
         )
 
-        method += f" with simulated p-value\n\t(based on {B} replicates)"
+        method += (
+            f" with simulated p-value\n\t(based on {n_resamples} replicates)"
+        )
 
         return HTestParams(
             statistic=observed_stat,
@@ -161,8 +163,8 @@ class GPUHypothesisBackend:
         """GPU Monte Carlo for chi-squared goodness-of-fit test."""
         torch = self._torch
         observed = design.x
-        p = design.expected_p
-        B = design.n_monte_carlo
+        p = design.expected_probs
+        n_resamples = design.n_resamples
         warnings_list: list[str] = []
 
         n = int(np.sum(observed))
@@ -172,7 +174,7 @@ class GPUHypothesisBackend:
             p = np.ones(k) / k
         else:
             p = np.asarray(p, dtype=np.float64)
-            if design.rescale_p:
+            if design.rescale_probs:
                 p = p / np.sum(p)
 
         expected = n * p
@@ -184,11 +186,13 @@ class GPUHypothesisBackend:
             )
 
         # GPU Monte Carlo
-        p_value = self._gpu_mc_gof(observed, p, expected, observed_stat, B)
+        p_value = self._gpu_mc_gof(
+            observed, p, expected, observed_stat, n_resamples,
+        )
 
         method = (
             "Chi-squared test for given probabilities with simulated p-value"
-            f"\n\t(based on {B} replicates)"
+            f"\n\t(based on {n_resamples} replicates)"
         )
 
         return HTestParams(
@@ -214,7 +218,7 @@ class GPUHypothesisBackend:
     ) -> tuple[HTestParams, list[str]]:
         """GPU Monte Carlo for Fisher's exact test (r×c tables)."""
         table = design.table.copy()
-        B = design.n_monte_carlo if design.simulate_p_value else 10000
+        n_resamples = design.n_resamples if design.simulate_p_value else 10000
         warnings_list: list[str] = []
 
         # Compute observed log-probability
@@ -226,12 +230,12 @@ class GPUHypothesisBackend:
 
         # GPU Monte Carlo for p-value
         p_value = self._gpu_mc_fisher(
-            row_sums, col_sums, observed_log_prob, B,
+            row_sums, col_sums, observed_log_prob, n_resamples,
         )
 
         method = (
             f"Fisher's Exact Test for Count Data "
-            f"with simulated p-value\n\t(based on {B} replicates)"
+            f"with simulated p-value\n\t(based on {n_resamples} replicates)"
         )
 
         return HTestParams(
@@ -258,7 +262,7 @@ class GPUHypothesisBackend:
         col_sums: np.ndarray,
         expected: np.ndarray,
         observed_stat: float,
-        B: int,
+        n_resamples: int,
     ) -> float:
         """
         GPU-accelerated Monte Carlo for chi-squared independence test.
@@ -285,8 +289,8 @@ class GPUHypothesisBackend:
         dist = random_table(row_sums_int, col_sums_int)
 
         # Process in batches to manage GPU memory
-        batch_size = min(B, 1000)
-        n_batches = (B + batch_size - 1) // batch_size
+        batch_size = min(n_resamples, 1000)
+        n_batches = (n_resamples + batch_size - 1) // batch_size
         count = 0
 
         expected_t = torch.tensor(
@@ -294,7 +298,7 @@ class GPUHypothesisBackend:
         )
 
         for batch_idx in range(n_batches):
-            actual_batch = min(batch_size, B - batch_idx * batch_size)
+            actual_batch = min(batch_size, n_resamples - batch_idx * batch_size)
             if actual_batch <= 0:
                 break
 
@@ -310,7 +314,7 @@ class GPUHypothesisBackend:
 
             count += int((stats >= observed_stat - 1e-6).sum().item())
 
-        return (count + 1) / (B + 1)
+        return (count + 1) / (n_resamples + 1)
 
     def _gpu_mc_gof(
         self,
@@ -318,7 +322,7 @@ class GPUHypothesisBackend:
         p: np.ndarray,
         expected: np.ndarray,
         observed_stat: float,
-        B: int,
+        n_resamples: int,
     ) -> float:
         """GPU-accelerated Monte Carlo for chi-squared GOF test."""
         torch = self._torch
@@ -335,11 +339,11 @@ class GPUHypothesisBackend:
         # Generate B multinomial samples
         # torch.multinomial returns indices; we need counts
         count = 0
-        batch_size = min(B, 1000)
-        n_batches = (B + batch_size - 1) // batch_size
+        batch_size = min(n_resamples, 1000)
+        n_batches = (n_resamples + batch_size - 1) // batch_size
 
         for batch_idx in range(n_batches):
-            actual_batch = min(batch_size, B - batch_idx * batch_size)
+            actual_batch = min(batch_size, n_resamples - batch_idx * batch_size)
             if actual_batch <= 0:
                 break
 
@@ -360,14 +364,14 @@ class GPUHypothesisBackend:
 
             count += int((stats >= observed_stat - 1e-6).sum().item())
 
-        return (count + 1) / (B + 1)
+        return (count + 1) / (n_resamples + 1)
 
     def _gpu_mc_fisher(
         self,
         row_sums: np.ndarray,
         col_sums: np.ndarray,
         observed_log_prob: float,
-        B: int,
+        n_resamples: int,
     ) -> float:
         """
         GPU-accelerated Monte Carlo for Fisher's exact test.
@@ -388,10 +392,10 @@ class GPUHypothesisBackend:
         dist = random_table(row_sums_int, col_sums_int)
 
         count = 0
-        for _ in range(B):
+        for _ in range(n_resamples):
             sim_table = dist.rvs()
             sim_log_prob = _log_table_prob(sim_table)
             if sim_log_prob <= observed_log_prob + 1e-7:
                 count += 1
 
-        return (count + 1) / (B + 1)
+        return (count + 1) / (n_resamples + 1)

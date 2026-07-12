@@ -25,7 +25,7 @@ def chisq_independence(design: HypothesisDesign) -> tuple[HTestParams, list[str]
     table = design.table.copy()
     correct = design.correct
     simulate = design.simulate_p_value
-    B = design.n_monte_carlo
+    n_resamples = design.n_resamples
     warnings_list: list[str] = []
 
     nrow, ncol = table.shape
@@ -60,9 +60,11 @@ def chisq_independence(design: HypothesisDesign) -> tuple[HTestParams, list[str]
 
     if simulate:
         # Monte Carlo p-value
-        p_value = _monte_carlo_independence(table, chisq, B, seed=design.seed)
+        p_value = _monte_carlo_independence(
+            table, chisq, n_resamples, seed=design.seed,
+        )
         method += (
-            f" with simulated p-value\n\t(based on {B} replicates)"
+            f" with simulated p-value\n\t(based on {n_resamples} replicates)"
         )
         parameter = None  # R returns NA for df when simulated
     else:
@@ -102,9 +104,9 @@ def chisq_independence(design: HypothesisDesign) -> tuple[HTestParams, list[str]
 def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     """Chi-squared goodness-of-fit test."""
     observed = design.x
-    p = design.expected_p
+    p = design.expected_probs
     simulate = design.simulate_p_value
-    B = design.n_monte_carlo
+    n_resamples = design.n_resamples
     warnings_list: list[str] = []
 
     n = np.sum(observed)
@@ -114,7 +116,7 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         p = np.ones(k) / k
     else:
         p = np.asarray(p, dtype=np.float64)
-        if design.rescale_p:
+        if design.rescale_probs:
             p = p / np.sum(p)
 
     expected = n * p
@@ -127,10 +129,12 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
         )
 
     if simulate:
-        p_value = _monte_carlo_gof(observed, p, chisq, B, seed=design.seed)
+        p_value = _monte_carlo_gof(
+            observed, p, chisq, n_resamples, seed=design.seed,
+        )
         method = (
             "Chi-squared test for given probabilities with simulated p-value"
-            f"\n\t(based on {B} replicates)"
+            f"\n\t(based on {n_resamples} replicates)"
         )
         parameter = None
     else:
@@ -158,7 +162,7 @@ def chisq_gof(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
 
 
 def _monte_carlo_independence(
-    table: np.ndarray, observed_stat: float, B: int,
+    table: np.ndarray, observed_stat: float, n_resamples: int,
     *, seed: int | None = None,
 ) -> float:
     """Monte Carlo p-value for independence test using random tables."""
@@ -173,17 +177,17 @@ def _monte_carlo_independence(
     rng = np.random.default_rng(seed)
 
     count = 0
-    for _ in range(B):
+    for _ in range(n_resamples):
         sim_table = dist.rvs(random_state=rng)
         sim_stat = np.sum((sim_table - expected) ** 2 / expected)
         if sim_stat >= observed_stat - 1e-12:
             count += 1
 
-    return (count + 1) / (B + 1)
+    return (count + 1) / (n_resamples + 1)
 
 
 def _monte_carlo_gof(
-    observed: np.ndarray, p: np.ndarray, observed_stat: float, B: int,
+    observed: np.ndarray, p: np.ndarray, observed_stat: float, n_resamples: int,
     *, seed: int | None = None,
 ) -> float:
     """Monte Carlo p-value for GOF test."""
@@ -193,13 +197,13 @@ def _monte_carlo_gof(
     expected = n * p
 
     count = 0
-    for _ in range(B):
+    for _ in range(n_resamples):
         sim = rng.multinomial(n, p).astype(np.float64)
         sim_stat = np.sum((sim - expected) ** 2 / expected)
         if sim_stat >= observed_stat - 1e-12:
             count += 1
 
-    return (count + 1) / (B + 1)
+    return (count + 1) / (n_resamples + 1)
 
 
 def _r2dtable(

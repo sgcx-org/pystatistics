@@ -25,7 +25,7 @@ def fisher_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     alternative = design.alternative
     conf_level = design.conf_level
     simulate = design.simulate_p_value
-    B = design.n_monte_carlo
+    n_resamples = design.n_resamples
     compute_ci = design.compute_conf_int
     warnings_list: list[str] = []
 
@@ -39,7 +39,7 @@ def fisher_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
 
     # r x c table
     return _fisher_rxc(
-        table, simulate, B,
+        table, simulate, n_resamples,
         design.data_name, warnings_list,
         seed=design.seed,
     )
@@ -94,7 +94,7 @@ def _fisher_2x2(
 def _fisher_rxc(
     table: np.ndarray,
     simulate: bool,
-    B: int,
+    n_resamples: int,
     data_name: str,
     warnings_list: list[str],
     *,
@@ -102,15 +102,15 @@ def _fisher_rxc(
 ) -> tuple[HTestParams, list[str]]:
     """Fisher's exact test for r x c tables (r > 2 or c > 2)."""
     if simulate:
-        p_value = _monte_carlo_fisher(table, B, seed=seed)
+        p_value = _monte_carlo_fisher(table, n_resamples, seed=seed)
         method = (
             f"Fisher's Exact Test for Count Data "
-            f"with simulated p-value\n\t(based on {B} replicates)"
+            f"with simulated p-value\n\t(based on {n_resamples} replicates)"
         )
     else:
         # Use R-style exact calculation via network algorithm
         # For now, use scipy's chi2_contingency as approximation,
-        # or fall back to Monte Carlo with a large B
+        # or fall back to Monte Carlo with a large n_resamples
         # Actually, let's use the exact method from scipy if possible
         # scipy doesn't have a general r x c Fisher test, so use Monte Carlo
         p_value = _monte_carlo_fisher(table, 10000, seed=seed)
@@ -344,14 +344,14 @@ def _log_table_prob(table: np.ndarray) -> float:
 
 
 def _monte_carlo_fisher(
-    table: np.ndarray, B: int, *, seed: int | None = None,
+    table: np.ndarray, n_resamples: int, *, seed: int | None = None,
 ) -> float:
     """
     Monte Carlo p-value for Fisher's exact test using random tables.
 
     R's approach: compute the probability of the observed table, then
     count how many random tables (with same marginals) have probability
-    <= the observed table's probability. p = (count + 1) / (B + 1).
+    <= the observed table's probability. p = (count + 1) / (n_resamples + 1).
 
     Uses scipy.stats.random_table (Patefield's algorithm) for
     generating uniformly distributed random tables with fixed marginals.
@@ -370,11 +370,11 @@ def _monte_carlo_fisher(
     observed_log_prob = _log_table_prob(table)
 
     count = 0
-    for _ in range(B):
+    for _ in range(n_resamples):
         sim_table = dist.rvs(random_state=rng)
         sim_log_prob = _log_table_prob(sim_table)
         # Count tables with prob <= observed (i.e., log_prob <= observed)
         if sim_log_prob <= observed_log_prob + 1e-7:
             count += 1
 
-    return (count + 1) / (B + 1)
+    return (count + 1) / (n_resamples + 1)

@@ -118,14 +118,14 @@ class TestChisqGOF:
         R: chisq.test(c(30, 40, 30), p=c(0.25, 0.5, 0.25))
         X-squared = 4, df = 2, p-value = 0.1353
         """
-        result = chisq_test([30, 40, 30], p=[0.25, 0.5, 0.25])
+        result = chisq_test([30, 40, 30], expected_probs=[0.25, 0.5, 0.25])
         assert result.statistic == pytest.approx(4.0, rel=1e-10)
         assert result.parameter == {"df": 2.0}
         assert result.p_value == pytest.approx(0.1353352832366127, rel=1e-10)
 
     def test_gof_expected(self):
         """Expected counts match R."""
-        result = chisq_test([30, 40, 30], p=[0.25, 0.5, 0.25])
+        result = chisq_test([30, 40, 30], expected_probs=[0.25, 0.5, 0.25])
         assert_allclose(result.expected, [25.0, 50.0, 25.0], rtol=1e-10)
 
     def test_rescale_p(self):
@@ -133,7 +133,7 @@ class TestChisqGOF:
         R: chisq.test(c(30, 40, 30), p=c(1, 2, 1), rescale.p=TRUE)
         Same as p=c(0.25, 0.5, 0.25).
         """
-        result = chisq_test([30, 40, 30], p=[1, 2, 1], rescale_p=True)
+        result = chisq_test([30, 40, 30], expected_probs=[1, 2, 1], rescale_probs=True)
         assert result.statistic == pytest.approx(4.0, rel=1e-10)
         assert result.p_value == pytest.approx(0.1353352832366127, rel=1e-10)
 
@@ -148,7 +148,7 @@ class TestChisqGOF:
     def test_p_not_summing_to_one(self):
         """Probabilities that don't sum to 1 should raise error."""
         with pytest.raises(Exception):
-            chisq_test([10, 20, 30], p=[0.3, 0.3, 0.3])
+            chisq_test([10, 20, 30], expected_probs=[0.3, 0.3, 0.3])
 
 
 class TestChisqSummary:

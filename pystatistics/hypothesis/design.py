@@ -44,13 +44,15 @@ class HypothesisDesign:
 
     # Proportion test
     _successes: NDArray[np.floating[Any]] | None = None
-    _trials: NDArray[np.floating[Any]] | None = None
-    _expected_p: NDArray[np.floating[Any]] | None = None
-    _rescale_p: bool = False
+    _n_trials: NDArray[np.floating[Any]] | None = None
+
+    # Chi-squared goodness-of-fit
+    _expected_probs: NDArray[np.floating[Any]] | None = None
+    _rescale_probs: bool = False
 
     # Monte Carlo
     _simulate_p_value: bool = False
-    _n_monte_carlo: int = 2000
+    _n_resamples: int = 2000
     _seed: int | None = None
 
     # Fisher-specific
@@ -64,8 +66,8 @@ class HypothesisDesign:
     _distribution: str | None = None
     _dist_params: dict[str, float] | None = None
 
-    # Var test
-    _ratio: float = 1.0
+    # Null value under H0 (prop_test null proportion(s); var_test null ratio)
+    _null_value: NDArray[np.floating[Any]] | float | None = None
 
     # Metadata
     _data_name: str = ""
@@ -113,8 +115,8 @@ class HypothesisDesign:
         return self._simulate_p_value
 
     @property
-    def n_monte_carlo(self) -> int:
-        return self._n_monte_carlo
+    def n_resamples(self) -> int:
+        return self._n_resamples
 
     @property
     def seed(self) -> int | None:
@@ -141,24 +143,24 @@ class HypothesisDesign:
         return self._dist_params
 
     @property
-    def ratio(self) -> float:
-        return self._ratio
+    def null_value(self) -> NDArray[np.floating[Any]] | float | None:
+        return self._null_value
 
     @property
     def successes(self) -> NDArray[np.floating[Any]] | None:
         return self._successes
 
     @property
-    def trials(self) -> NDArray[np.floating[Any]] | None:
-        return self._trials
+    def n_trials(self) -> NDArray[np.floating[Any]] | None:
+        return self._n_trials
 
     @property
-    def expected_p(self) -> NDArray[np.floating[Any]] | None:
-        return self._expected_p
+    def expected_probs(self) -> NDArray[np.floating[Any]] | None:
+        return self._expected_probs
 
     @property
-    def rescale_p(self) -> bool:
-        return self._rescale_p
+    def rescale_probs(self) -> bool:
+        return self._rescale_probs
 
     @property
     def data_name(self) -> str:
@@ -179,10 +181,10 @@ class HypothesisDesign:
         return build_chisq_test_design(x, y, **kwargs)
 
     @classmethod
-    def for_prop_test(cls, x, n, **kwargs):
+    def for_prop_test(cls, x, n_trials, **kwargs):
         """Build design for prop_test()."""
         from pystatistics.hypothesis._design_factories import build_prop_test_design
-        return build_prop_test_design(x, n, **kwargs)
+        return build_prop_test_design(x, n_trials, **kwargs)
 
     @classmethod
     def for_fisher_test(cls, x, y=None, **kwargs):

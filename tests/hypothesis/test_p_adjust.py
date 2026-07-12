@@ -77,17 +77,17 @@ class TestPAdjustNParameter:
     """Test the n parameter (effective number of tests)."""
 
     def test_holm_n_larger(self):
-        """p.adjust(c(0.01, 0.05), method='holm', n=10)."""
-        result = p_adjust([0.01, 0.05], method="holm", n=10)
+        """p.adjust(c(0.01, 0.05), method='holm', n_comparisons=10)."""
+        result = p_adjust([0.01, 0.05], method="holm", n_comparisons=10)
         assert_allclose(result, [0.1, 0.45], rtol=1e-10)
 
     def test_bh_n_larger(self):
-        """p.adjust(c(0.01, 0.05), method='BH', n=10)."""
-        result = p_adjust([0.01, 0.05], method="BH", n=10)
+        """p.adjust(c(0.01, 0.05), method='BH', n_comparisons=10)."""
+        result = p_adjust([0.01, 0.05], method="BH", n_comparisons=10)
         assert_allclose(result, [0.1, 0.25], rtol=1e-10)
 
     def test_bonferroni_n_larger(self):
-        result = p_adjust([0.01, 0.05], method="bonferroni", n=10)
+        result = p_adjust([0.01, 0.05], method="bonferroni", n_comparisons=10)
         assert_allclose(result, [0.1, 0.5], rtol=1e-10)
 
 
@@ -133,7 +133,7 @@ class TestPAdjustEdgeCases:
     def test_n_too_small(self):
         """n < len(p) should raise."""
         with pytest.raises(Exception):
-            p_adjust([0.01, 0.05], method="holm", n=1)
+            p_adjust([0.01, 0.05], method="holm", n_comparisons=1)
 
     def test_default_is_holm(self):
         """Default method is 'holm' (not bonferroni!)."""

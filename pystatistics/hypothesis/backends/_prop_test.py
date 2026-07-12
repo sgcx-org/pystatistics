@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 def prop_test(design: HypothesisDesign) -> tuple[HTestParams, list[str]]:
     """Proportion test matching R's prop.test()."""
     x = design.successes
-    n = design.trials
-    p0 = design.expected_p
+    n = design.n_trials
+    p0 = design.null_value
     alternative = design.alternative
     conf_level = design.conf_level
     correct = design.correct

@@ -110,10 +110,10 @@ def chisq_test(
     y: ArrayLike | None = None,
     *,
     correct: bool = True,
-    p: ArrayLike | None = None,
-    rescale_p: bool = False,
+    expected_probs: ArrayLike | None = None,
+    rescale_probs: bool = False,
     simulate_p_value: bool = False,
-    B: int = 2000,
+    n_resamples: int = 2000,
     seed: int | None = None,
     backend: str | None = None,
 ) -> HTestSolution:
@@ -132,13 +132,13 @@ def chisq_test(
     correct : bool
         Apply Yates' continuity correction for 2x2 tables.
         Default True (matches R).
-    p : array-like or None
+    expected_probs : array-like or None
         Expected proportions for GOF test. If None, assumes uniform.
-    rescale_p : bool
-        If True, rescale p to sum to 1.
+    rescale_probs : bool
+        If True, rescale expected_probs to sum to 1.
     simulate_p_value : bool
         If True, compute p-value by Monte Carlo simulation.
-    B : int
+    n_resamples : int
         Number of Monte Carlo replicates. Default 2000.
     backend : str
         'cpu' (default). GPU Monte Carlo will be added later.
@@ -155,10 +155,10 @@ def chisq_test(
         design = HypothesisDesign.for_chisq_test(
             x, y,
             correct=correct,
-            p=p,
-            rescale_p=rescale_p,
+            expected_probs=expected_probs,
+            rescale_probs=rescale_probs,
             simulate_p_value=simulate_p_value,
-            B=B,
+            n_resamples=n_resamples,
             seed=seed,
         )
 
@@ -169,9 +169,9 @@ def chisq_test(
 
 def prop_test(
     x: ArrayLike | HypothesisDesign,
-    n: ArrayLike | None = None,
+    n_trials: ArrayLike | None = None,
     *,
-    p: ArrayLike | float | None = None,
+    null_value: ArrayLike | float | None = None,
     alternative: str = "two-sided",
     conf_level: float = 0.95,
     correct: bool = True,
@@ -184,9 +184,9 @@ def prop_test(
     ----------
     x : array-like or HypothesisDesign
         Number of successes. Scalar or vector.
-    n : array-like or None
+    n_trials : array-like or None
         Number of trials. Scalar or vector (same length as x).
-    p : float or array-like or None
+    null_value : float or array-like or None
         Null hypothesis proportion(s). If None, tests equality
         of proportions (k >= 2 groups).
     alternative : str
@@ -207,12 +207,14 @@ def prop_test(
     if isinstance(x, HypothesisDesign):
         design = x
     else:
-        if n is None:
+        if n_trials is None:
             from pystatistics.core.exceptions import ValidationError
-            raise ValidationError("n (number of trials) is required for prop_test")
+            raise ValidationError(
+                "n_trials (number of trials) is required for prop_test"
+            )
         design = HypothesisDesign.for_prop_test(
-            x, n,
-            p=p,
+            x, n_trials,
+            null_value=null_value,
             alternative=alternative,
             conf_level=conf_level,
             correct=correct,
@@ -231,7 +233,7 @@ def fisher_test(
     conf_int: bool = True,
     conf_level: float = 0.95,
     simulate_p_value: bool = False,
-    B: int = 2000,
+    n_resamples: int = 2000,
     seed: int | None = None,
     backend: str | None = None,
 ) -> HTestSolution:
@@ -253,7 +255,7 @@ def fisher_test(
         Confidence level. Default 0.95.
     simulate_p_value : bool
         Use Monte Carlo for p-value.
-    B : int
+    n_resamples : int
         Number of Monte Carlo replicates. Default 2000.
     backend : str
         'cpu' (default).
@@ -273,7 +275,7 @@ def fisher_test(
             conf_int=conf_int,
             conf_level=conf_level,
             simulate_p_value=simulate_p_value,
-            B=B,
+            n_resamples=n_resamples,
             seed=seed,
         )
 
@@ -398,7 +400,7 @@ def var_test(
     x: ArrayLike | HypothesisDesign,
     y: ArrayLike | None = None,
     *,
-    ratio: float = 1.0,
+    null_value: float = 1.0,
     alternative: str = "two-sided",
     conf_level: float = 0.95,
     backend: str | None = None,
@@ -412,7 +414,7 @@ def var_test(
         First sample.
     y : array-like or None
         Second sample. Required unless x is a HypothesisDesign.
-    ratio : float
+    null_value : float
         Hypothesized ratio of variances (var_x / var_y). Default 1.
     alternative : str
         "two-sided" (default), "less", or "greater".
@@ -434,7 +436,7 @@ def var_test(
             raise ValidationError("y is required for var_test")
         design = HypothesisDesign.for_var_test(
             x, y,
-            ratio=ratio,
+            null_value=null_value,
             alternative=alternative,
             conf_level=conf_level,
         )

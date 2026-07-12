@@ -112,10 +112,10 @@ def build_chisq_test_design(
     y: ArrayLike | None = None,
     *,
     correct: bool = True,
-    p: ArrayLike | None = None,
-    rescale_p: bool = False,
+    expected_probs: ArrayLike | None = None,
+    rescale_probs: bool = False,
     simulate_p_value: bool = False,
-    B: int = 2000,
+    n_resamples: int = 2000,
     seed: int | None = None,
 ):
     """Build design for chisq_test()."""
@@ -137,7 +137,7 @@ def build_chisq_test_design(
             test_type="chisq_independence",
             _table=table, _correct=correct,
             _simulate_p_value=simulate_p_value,
-            _n_monte_carlo=B, _seed=seed,
+            _n_resamples=n_resamples, _seed=seed,
             _data_name="x",
         )
 
@@ -160,7 +160,7 @@ def build_chisq_test_design(
             test_type="chisq_independence",
             _table=table, _correct=correct,
             _simulate_p_value=simulate_p_value,
-            _n_monte_carlo=B, _seed=seed,
+            _n_resamples=n_resamples, _seed=seed,
             _data_name="x and y",
         )
 
@@ -176,37 +176,38 @@ def build_chisq_test_design(
         )
 
     p_arr = None
-    if p is not None:
-        p_arr = np.asarray(p, dtype=np.float64).ravel()
+    if expected_probs is not None:
+        p_arr = np.asarray(expected_probs, dtype=np.float64).ravel()
         if len(p_arr) != len(x_1d):
             raise ValidationError(
-                f"length of p ({len(p_arr)}) must equal length of x ({len(x_1d)})"
+                f"length of expected_probs ({len(p_arr)}) must equal "
+                f"length of x ({len(x_1d)})"
             )
-        if not rescale_p:
+        if not rescale_probs:
             p_sum = np.sum(p_arr)
             if abs(p_sum - 1.0) > 1e-7:
                 raise ValidationError(
                     f"probabilities must sum to 1, got {p_sum:.10g}. "
-                    f"Use rescale_p=True to normalize."
+                    f"Use rescale_probs=True to normalize."
                 )
         if np.any(p_arr <= 0):
             raise ValidationError("all probabilities must be positive")
 
     return HypothesisDesign(
         test_type="chisq_gof",
-        _x=x_1d, _expected_p=p_arr,
-        _rescale_p=rescale_p,
+        _x=x_1d, _expected_probs=p_arr,
+        _rescale_probs=rescale_probs,
         _simulate_p_value=simulate_p_value,
-        _n_monte_carlo=B, _seed=seed,
+        _n_resamples=n_resamples, _seed=seed,
         _data_name="x",
     )
 
 
 def build_prop_test_design(
     x: ArrayLike,
-    n: ArrayLike,
+    n_trials: ArrayLike,
     *,
-    p: ArrayLike | float | None = None,
+    null_value: ArrayLike | float | None = None,
     alternative: str = "two-sided",
     conf_level: float = 0.95,
     correct: bool = True,
@@ -218,28 +219,29 @@ def build_prop_test_design(
     conf_level = _validate_conf_level(conf_level)
 
     x_arr = np.atleast_1d(np.asarray(x, dtype=np.float64))
-    n_arr = np.atleast_1d(np.asarray(n, dtype=np.float64))
+    n_arr = np.atleast_1d(np.asarray(n_trials, dtype=np.float64))
 
     if len(x_arr) != len(n_arr):
         raise ValidationError(
-            f"x and n must have same length, got {len(x_arr)} and {len(n_arr)}"
+            f"x and n_trials must have same length, "
+            f"got {len(x_arr)} and {len(n_arr)}"
         )
 
     if np.any(n_arr <= 0):
         raise ValidationError("All trial counts must be positive")
     if np.any(x_arr < 0) or np.any(x_arr > n_arr):
         raise ValidationError(
-            "All success counts must be between 0 and n"
+            "All success counts must be between 0 and n_trials"
         )
 
     p_arr = None
-    if p is not None:
-        p_arr = np.atleast_1d(np.asarray(p, dtype=np.float64))
+    if null_value is not None:
+        p_arr = np.atleast_1d(np.asarray(null_value, dtype=np.float64))
         if len(p_arr) == 1 and len(x_arr) > 1:
             p_arr = np.repeat(p_arr, len(x_arr))
         if len(p_arr) != len(x_arr):
             raise ValidationError(
-                f"length of p ({len(p_arr)}) must match x ({len(x_arr)})"
+                f"length of null_value ({len(p_arr)}) must match x ({len(x_arr)})"
             )
         if np.any(p_arr <= 0) or np.any(p_arr >= 1):
             raise ValidationError(
@@ -255,8 +257,8 @@ def build_prop_test_design(
 
     return HypothesisDesign(
         test_type="prop_test",
-        _successes=x_arr, _trials=n_arr,
-        _expected_p=p_arr,
+        _successes=x_arr, _n_trials=n_arr,
+        _null_value=p_arr,
         _alternative=alternative, _conf_level=conf_level,
         _correct=correct, _data_name=data_name,
     )
@@ -270,7 +272,7 @@ def build_fisher_test_design(
     conf_int: bool = True,
     conf_level: float = 0.95,
     simulate_p_value: bool = False,
-    B: int = 2000,
+    n_resamples: int = 2000,
     seed: int | None = None,
 ):
     """Build design for fisher_test()."""
@@ -324,7 +326,7 @@ def build_fisher_test_design(
         _alternative=alternative,
         _compute_conf_int=conf_int, _conf_level=conf_level,
         _simulate_p_value=simulate_p_value,
-        _n_monte_carlo=B, _seed=seed,
+        _n_resamples=n_resamples, _seed=seed,
         _data_name="x",
     )
 
@@ -431,7 +433,7 @@ def build_var_test_design(
     x: ArrayLike,
     y: ArrayLike,
     *,
-    ratio: float = 1.0,
+    null_value: float = 1.0,
     alternative: str = "two-sided",
     conf_level: float = 0.95,
 ):
@@ -452,15 +454,15 @@ def build_var_test_design(
         raise ValidationError(
             f"Need at least 2 non-missing observations in y, got {len(y_arr)}"
         )
-    if ratio <= 0:
+    if null_value <= 0:
         raise ValidationError(
-            f"ratio must be positive, got {ratio}"
+            f"null_value must be positive, got {null_value}"
         )
 
     return HypothesisDesign(
         test_type="var_test",
         _x=x_arr, _y=y_arr,
-        _ratio=ratio,
+        _null_value=null_value,
         _alternative=alternative, _conf_level=conf_level,
         _data_name="x and y",
     )
