@@ -28,6 +28,7 @@ from pystatistics.regression.solution import (
     GLMSolution,
 )
 from pystatistics.regression.solvers import fit, ridge
+from pystatistics.regression._simple_ols import SimpleOLSResult, simple_ols
 from pystatistics.regression.families import (
     Family, Gaussian, Binomial, Poisson, Gamma, NegativeBinomial,
     InverseGaussian, QuasiPoisson, QuasiBinomial,
@@ -37,6 +38,8 @@ from pystatistics.regression._analysis import deviance_table, drop1, DevianceTab
 __all__ = [
     "fit",
     "ridge",
+    "simple_ols",
+    "SimpleOLSResult",
     "Design",
     "C",
     "DataSource",
