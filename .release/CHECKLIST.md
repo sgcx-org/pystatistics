@@ -40,9 +40,15 @@ permanent cruft with a warning. Do this as its own commit before the release bum
 
 5. **Review:** `git diff`
 
-6. **Commit and tag:**
+6. **Commit and tag:** ⚠️⚠️ A commit ships the *index*, not the working tree.
+   Stage **every** change that belongs in this release — any tracked file left
+   modified-but-unstaged is silently dropped from the release commit. The files
+   below are the minimum; your source changes must be staged too. README.md is
+   the most commonly forgotten one, but the rule applies to every file.
    ```
    git add pyproject.toml <package>/__init__.py CHANGELOG.md README.md
+   git add <source files changed for this release>
+   git diff --name-only    # must be empty, or only unrelated WIP
    git commit -m "Release X.Y.Z"
    git tag vX.Y.Z
    git push origin <branch>
