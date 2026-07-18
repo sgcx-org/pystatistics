@@ -371,6 +371,17 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 5.1.0 — lean univariate OLS front door
+
+- **`regression.simple_ols(x, y)`** fits a line (`y = intercept + slope·x`) to
+  two 1-D vectors and returns just `slope`, `intercept`, `r_squared`,
+  `adjusted_r_squared`, `slope_se`, and `n` in a small frozen result. It skips
+  the design-matrix assembly and lazy-inference object that `fit()` builds, so
+  it stays fast when you fit many small lines in a loop. It fails loudly on
+  mismatched lengths, fewer than 3 points, non-finite values, or zero-variance
+  input, and matches R's `lm(y ~ x)` to `rtol=1e-10`. Reach for `fit()` when you
+  need full inference or multi-column designs.
+
 ### 5.0.0 — pre-launch consistency release (breaking)
 
 A one-time, API-only cleanup that makes parameter names, option values, and

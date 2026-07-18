@@ -1,5 +1,34 @@
 # Changelog
 
+## 5.1.0
+
+Additive release — one new public function, no breaking changes.
+
+### Added
+
+- **`regression.simple_ols(x, y)`** — a lean front door for with-intercept
+  univariate ordinary least squares. Pass two equal-length 1-D array-likes and
+  get back a small frozen `SimpleOLSResult` with `slope`, `intercept`,
+  `r_squared`, `adjusted_r_squared`, `slope_se` (standard error of the slope),
+  and `n`:
+
+  ```python
+  from pystatistics.regression import simple_ols
+
+  r = simple_ols(x, y)
+  r.slope, r.intercept, r.r_squared, r.slope_se
+  ```
+
+  Unlike `fit()`, which assembles a full design matrix and a
+  lazy-inference `LinearSolution`, `simple_ols` does the minimum work for a
+  single "fit a line to these two vectors" call — no 2-D reshape and no
+  per-call design/backend construction — so it stays fast and allocation-light
+  when called many times in a loop. It fails loudly (`ValidationError`) on
+  mismatched lengths, fewer than 3 points, non-finite values (never silently
+  dropped), or zero-variance `x` or `y`. Coefficients, R², adjusted R², and the
+  slope's standard error match R's `lm(y ~ x)` to `rtol=1e-10`. `fit()` is
+  unchanged and remains the full-inference workhorse for multi-column designs.
+
 ## 5.0.0
 
 The pre-launch consistency release. This is a **breaking, API-only** cut:
