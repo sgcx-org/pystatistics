@@ -621,3 +621,55 @@ build hook's MSVC branch uses `/O2 /fp:precise` (no FMA on baseline x64).
 **Final launch matrix:** glibc-Linux x86_64 + macOS arm64 + Windows x64, ×
 CPython 3.11/3.12/3.13. musl remains out (add on demand); Intel-macOS stays out
 (EOL, §15).
+
+---
+
+## 18. Performance audit of the rollout kernels (2026-07-22)
+
+The pilot benchmarked ARIMA thoroughly; the rollout kernels were initially only
+parity-checked. This audit benchmarks them warm against the original Numba
+(reconstructed from the same bodies with real `@njit`).
+
+**Initial results (parity-only ports):**
+
+| Kernel | cy/nb |
+|--------|------:|
+| concordance_simple | 1.06× |
+| concordance_truncated | 0.79× (faster) |
+| ETS recursion | 1.52× |
+| STL robust decomposition | 1.78× |
+
+Concordance was fine; ETS and STL had regressed. Both from the same cause the
+ARIMA workspace addressed: **per-call `np.empty` allocation** in GIL-held code
+(Numba allocates far faster in nopython).
+
+**Optimizations (bit-identity preserved — all parity suites green):**
+
+- **ETS — skip the state history on the fit path.** The ML objective uses only
+  `fitted`/`residuals` but the kernel allocated and wrote the full `(n+1,
+  n_cols)` state history every eval (the old Numba objective wasted it too). A
+  `want_states` flag (False on the objective, True for the final fit) skips it.
+  Fit-path kernel 4.44 → 3.71 µs. The residual **1.47×** vs Numba is
+  clang-vs-LLVM codegen on ETS's 12-way branch tree; closing it would need a
+  dozen manually-specialized loop copies — disproportionate for ~1.2 µs/eval,
+  so left as-is.
+- **STL — reuse scratch buffers in the loess/MA hot path.** A robust
+  decomposition made ~186 `np.empty` calls (out+ws per internal loess, per MA,
+  per cycle-subseries). Allocation-free `cdef` cores (`_loess_into`,
+  `_moving_average_into`) write into caller buffers; `stl_core` preallocates a
+  fixed handful of scratch arrays once and reuses them. Robust n=120:
+  275 → 112 µs — **0.70× Numba (now faster)**; non-robust 0.84×. Public
+  `loess_smooth_nb`/`moving_average_nb` keep their allocating wrappers.
+
+**Final scorecard (warm, vs original Numba):**
+
+| Kernel | cy/nb | |
+|--------|------:|--|
+| ARIMA (fused workspace) | ~1.01× | parity |
+| concordance simple / truncated | 1.08× / 0.79× | parity / faster |
+| STL robust / non-robust | 0.70× / 0.84× | **faster** |
+| ETS fit path | 1.47× | slower, ~1.2 µs/eval (codegen; accepted) |
+
+Net: ARIMA and concordance at parity, STL faster, ETS marginally slower per
+eval on a sub-microsecond-scale operation. Combined with the cold-start win (no
+JIT) and dependency removal, the migration is performance-neutral-to-positive.
