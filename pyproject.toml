@@ -89,16 +89,15 @@ include = [
 ]
 
 [tool.cibuildwheel]
-# Launch matrix scope (see docs/CYTHON_MIGRATION_PROPOSAL.md §11 Q4):
-# glibc-Linux + macOS only. musl and Windows are deliberately excluded and
-# added later on demand.
+# Launch matrix (see docs/CYTHON_MIGRATION_PROPOSAL.md): glibc-Linux x86_64 +
+# macOS arm64 + Windows x64.
 build = "cp311-* cp312-* cp313-*"
-# Only CPython is built (above), so no PyPy selector is needed. musl, 32-bit,
-# Windows, and Intel-macOS (EOL) are excluded per the launch-matrix decision.
+# Only CPython is built (above), so no PyPy selector is needed. Excluded: musl
+# (Alpine), 32-bit (`*_i686` linux + `*-win32`), and Intel-macOS (EOL).
 # `*-macosx_x86_64` encodes the "no Intel Mac" policy in the build config so it
 # holds even if a wheel build is ever run on an Intel host — it does NOT match
 # linux `*-manylinux_x86_64`.
-skip = "*-musllinux_* *_i686 *-win* *-macosx_x86_64"
+skip = "*-musllinux_* *_i686 *-win32 *-macosx_x86_64"
 build-frontend = "build"
 # Every wheel is verified in-place: the bit-identity parity test is the guard
 # that the platform's compiler honored -ffp-contract=off; the R-parity test is
