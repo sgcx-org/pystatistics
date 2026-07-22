@@ -100,8 +100,11 @@ include = [
 # added later on demand.
 build = "cp311-* cp312-* cp313-*"
 # Only CPython is built (above), so no PyPy selector is needed. musl, 32-bit,
-# and Windows are excluded per the launch-matrix decision.
-skip = "*-musllinux_* *_i686 *-win*"
+# Windows, and Intel-macOS (EOL) are excluded per the launch-matrix decision.
+# `*-macosx_x86_64` encodes the "no Intel Mac" policy in the build config so it
+# holds even if a wheel build is ever run on an Intel host — it does NOT match
+# linux `*-manylinux_x86_64`.
+skip = "*-musllinux_* *_i686 *-win* *-macosx_x86_64"
 build-frontend = "build"
 # Every wheel is verified in-place: the bit-identity parity test is the guard
 # that the platform's compiler honored -ffp-contract=off; the R-parity test is

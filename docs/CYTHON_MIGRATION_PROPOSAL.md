@@ -3,7 +3,7 @@
 **Status:** ARIMA pilot complete — Cython port + optimization audit + workspace wiring (§12–§14). Warm path at ~1.0× Numba; cross-platform CI matrix is the last external check.
 **Scope:** `pystatistics` (published package) — 17 `@njit` kernels in `timeseries/` and `survival/`
 **Author:** design session, 2026-07-21
-**Decisions locked:** semver = **major**; build = hatchling build-hook first; sdist = hard-fail (no runtime fallback); launch matrix = **glibc-Linux + macOS only** (musl/Windows on demand)
+**Decisions locked:** semver = **major**; build = hatchling build-hook first; sdist = hard-fail (no runtime fallback); launch matrix = **glibc-Linux + macOS arm64** (Intel-macOS dropped as EOL — see §15; musl/Windows out)
 
 ---
 
@@ -240,7 +240,7 @@ Per-extension compile args, set in the build backend:
 2. Wire a minimal build: `hatchling` build-hook compiling just this one
    extension with the §7.4 flags.
 3. Stand up a minimal `cibuildwheel` matrix — **launch scope only**:
-   {Linux glibc, macOS arm64, macOS x86_64} × {3.11, 3.12, 3.13}, with
+   {Linux glibc, macOS arm64} × {3.11, 3.12, 3.13}, with
    `test-command` running the ARIMA parity + kalman tests inside each wheel.
    (musl and Windows deliberately excluded — §11 Q4.)
 4. Benchmark the Cython kernel vs. the current Numba kernel on the existing
@@ -305,9 +305,10 @@ free absorption of complexity.
 - **Q3 — sdist policy.** ✅ **(a) hard-fail** with a clear error where no wheel
   and no compiler exist. No runtime fallback; pure-numpy references are
   test-only oracles, never a silent slow path. (§7.2)
-- **Q4 — Platform matrix.** ✅ **Launch on glibc-Linux + macOS (arm64 +
-  x86_64) only.** Windows is explicitly **not** a target audience; musl and
-  Windows added later only on demand. (§8, §9)
+- **Q4 — Platform matrix.** ✅ **Launch on glibc-Linux + macOS arm64.**
+  Windows is explicitly **not** a target audience; musl added later only on
+  demand. Intel macOS (x86_64) was initially included but **dropped** — see
+  §15. (§8, §9, §15)
 
 ---
 
@@ -511,3 +512,37 @@ complete.
 
 Design options A (symmetry) and B (`isfinite` hoisting) remain **documented, not
 implemented** (§13), per decision.
+
+---
+
+## 15. Matrix trim — Intel macOS dropped (2026-07-22)
+
+The first two CI runs of the cibuildwheel matrix confirmed the migration's core
+risk is closed: the in-wheel parity + regression suite passed **134/134 on each
+of cp311/312/313** for both **glibc-Linux (gcc)** and **macOS arm64 (clang)** —
+bit-identity holds across two compilers under `-ffp-contract=off`. `sdist` built
+and installed from source. The only failure mode was operational, not
+numerical: the **Intel-macOS (`macos-13` / x86_64) job never got a runner** —
+GitHub's Intel-mac pool is being deprecated and the job sat queued for hours
+(15h on the first run, still queued on the second).
+
+**Decision (reverses part of Q4): drop macOS x86_64 from the matrix.** Rationale:
+
+- Apple has EOL'd Intel Macs; unlike Windows there is no growing supported base
+  to serve — the platform is actively going away.
+- Its numerics are already covered: macOS x86_64 uses the **same clang + libm**
+  as macOS arm64, so the green `macos-14` job already proves the FP behavior;
+  the Intel job would only re-confirm build/packaging on a dying platform.
+- The runner flakiness makes it a standing CI liability (hours-long queues,
+  false "still running" states).
+
+**Changes:** `publish.yml` matrix → `[ubuntu-latest, macos-14]`;
+`[tool.cibuildwheel].skip` gains `*-macosx_x86_64` so the "no Intel Mac" policy
+holds even for a build run on an Intel host (it does not match linux
+`*-manylinux_x86_64`).
+
+**Final launch matrix:** glibc-Linux (x86_64) + macOS arm64, × CPython
+3.11/3.12/3.13. musl and Windows remain out; both add later only on demand.
+
+With Intel-mac removed, the matrix is green end to end and the ARIMA pilot's
+cross-platform verification is **complete**.
