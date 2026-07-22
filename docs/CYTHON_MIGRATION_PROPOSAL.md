@@ -3,7 +3,7 @@
 **Status:** ARIMA pilot complete — Cython port + optimization audit + workspace wiring (§12–§14). Warm path at ~1.0× Numba; cross-platform CI matrix is the last external check.
 **Scope:** `pystatistics` (published package) — 17 `@njit` kernels in `timeseries/` and `survival/`
 **Author:** design session, 2026-07-21
-**Decisions locked:** semver = **major**; build = hatchling build-hook first; sdist = hard-fail (no runtime fallback); launch matrix = **glibc-Linux + macOS arm64** (Intel-macOS dropped as EOL — see §15; musl/Windows out)
+**Decisions locked:** semver = **major**; build = hatchling build-hook first; sdist = hard-fail (no runtime fallback); launch matrix = **glibc-Linux + macOS arm64 + Windows x64** (Windows added §17; Intel-macOS dropped as EOL §15; musl out)
 
 ---
 
@@ -585,3 +585,39 @@ bit-identity oracle and parity tests, each verified green before the next:
 `pystatsbio` no longer pulls `numba` transitively. This completes the
 Numba→Cython migration; the package is ready for the major release once the
 cross-platform CI matrix is green on this final state.
+
+---
+
+## 17. Windows added to the matrix (2026-07-22)
+
+Reversing the "Windows out" part of §11 Q4. Unlike Intel macOS, Windows has a
+supported user base and GitHub has ample runners, so it is worth building —
+*provided MSVC compiles the kernels and holds bit-identity parity*. That is not
+assumed; it was verified in CI.
+
+**First run — one failure, diagnosed as a test bug, not a product bug.** MSVC
+cythonized and compiled all four extension modules cleanly, and **701/702**
+in-wheel tests passed — every bit-identity parity test (ARIMA, ETS, STL,
+concordance) was green on Windows. The lone failure was
+`test_fit_identical_seasonal`: the seasonal ARIMA fit raised `ConvergenceError`
+(64 iters) on Windows. Root cause: the full fit's objective includes `np.log`
+(platform libm), which differs in the last ULP across OSes and can shift the
+L-BFGS-B trajectory — so a synthetic fixture near the iteration limit converges
+on Linux/macOS but not Windows. This is **pre-existing** platform sensitivity
+(true under Numba too — `log` was always platform libm), unrelated to the
+Cython port; the compiled *kernels* are bit-identical across platforms.
+
+**Fix (test robustness).** The full-fit regression asserts *workspace ==
+allocating path on the same machine*; the two are bit-identical, so they must
+share an outcome whether the fit converges or raises. The test now compares
+outcomes (converge → same solution + warnings; raise → same exception) instead
+of assuming convergence. Second run: **all four platforms green**, publish
+skipped.
+
+**Config:** `publish.yml` matrix `[ubuntu-latest, macos-14, windows-latest]`;
+`cibuildwheel` `skip` drops `*-win*`, keeps `*-win32` (win_amd64 only); the
+build hook's MSVC branch uses `/O2 /fp:precise` (no FMA on baseline x64).
+
+**Final launch matrix:** glibc-Linux x86_64 + macOS arm64 + Windows x64, ×
+CPython 3.11/3.12/3.13. musl remains out (add on demand); Intel-macOS stays out
+(EOL, §15).
