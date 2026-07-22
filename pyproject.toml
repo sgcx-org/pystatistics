@@ -36,12 +36,6 @@ classifiers = [
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
-    # numba: required for the JIT'd ARIMA Kalman filter in
-    # pystatistics/timeseries/_arima_kalman.py. SARIMA exact-ML fitting
-    # runs a dense inner loop at small state dimension (r <= ~25) where
-    # pure-numpy per-call overhead dominates. Numba closes the gap with
-    # R's Fortran arima.c by ~20x. See CHANGELOG.
-    "numba>=0.59",
 ]
 
 [project.optional-dependencies]
@@ -110,8 +104,8 @@ build-frontend = "build"
 # that the platform's compiler honored -ffp-contract=off; the R-parity test is
 # the numerical gate. If parity fails on a wheel, that wheel's FP flags are
 # wrong — fix the build, never relax the test.
-test-requires = ["pytest", "scipy", "numba"]
-test-command = "KMP_DUPLICATE_LIB_OK=TRUE pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py -q"
+test-requires = ["pytest", "scipy"]
+test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py -q"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

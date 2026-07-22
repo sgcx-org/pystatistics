@@ -546,3 +546,42 @@ holds even for a build run on an Intel host (it does not match linux
 
 With Intel-mac removed, the matrix is green end to end and the ARIMA pilot's
 cross-platform verification is **complete**.
+
+---
+
+## 16. Full rollout complete — numba dropped (2026-07-22)
+
+All 17 kernels are now Cython; `numba`/`llvmlite` is removed from
+`dependencies`. Landed on the same branch/PR after the ARIMA pilot, each with a
+bit-identity oracle and parity tests, each verified green before the next:
+
+| Group | Kernels | Compiled module | Oracle | Parity tests |
+|-------|--------:|-----------------|--------|-------------:|
+| ARIMA Kalman (pilot) | 2 | `_arima_kalman_kernel` | `_arima_kalman_ref` | bit-identity + R + full-fit regression |
+| Concordance (survival) | 4 | `_concordance_fenwick` | `_concordance_ref` | 36 |
+| ETS | 1 | `_ets_recursion` | `_ets_recursion_reference` | 56 (existing) |
+| STL / LOESS / robustness | 10 | `_stl_kernels` | `_stl_ref` | 428 + R-parity gate |
+
+**Patterns established by the pilot, reused throughout:**
+- `noexcept nogil` raw scalar cores where allocation-free; GIL held only where a
+  kernel allocates (STL driver, loess). Explicit scalar matmuls / no BLAS.
+- `-O3 -ffp-contract=off`, never `-ffast-math`; every `x**2` written `x*x`
+  (0 libm `pow`, 0 FMA), so last-bit parity holds across gcc/clang.
+- Public API and import paths unchanged: the historical `.py` modules become
+  thin re-export shims over the compiled kernels; Python wrappers retained.
+- Coupled kernels that call each other in a hot loop (the STL family) compiled
+  as one translation unit (internal `cdef` calls, no Python boundary).
+
+**Finalization:**
+- `numba` removed from `[project].dependencies` and from `cibuildwheel`
+  `test-requires`. Zero `import numba` remain (the `njit` in `_stl_ref` is a
+  local no-op that makes the reference a verbatim copy).
+- `cibuildwheel` `test-command` now runs the parity/regression suites for all
+  four groups inside each built wheel.
+- Verified: a wheel installed into a venv with **no numba** imports cleanly and
+  fits ARIMA/ETS/STL/Cox; 702 in-wheel parity tests pass; full local
+  `tests/timeseries/` + `tests/survival/` = 1470 passed.
+
+`pystatsbio` no longer pulls `numba` transitively. This completes the
+Numba→Cython migration; the package is ready for the major release once the
+cross-platform CI matrix is green on this final state.
