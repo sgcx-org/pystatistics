@@ -29,18 +29,17 @@ from libc.math cimport fabs
 def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
                      double phi_val, bint mult_error, bint has_trend,
                      int season_code, int m, double l0, double b0,
-                     double[::1] s0):
-    """Run the ETS forward recursion. Returns (fitted, residuals, states)."""
+                     double[::1] s0, bint want_states=True):
+    """Run the ETS forward recursion. Returns (fitted, residuals, states).
+
+    ``want_states`` (default True): compute and return the full state history.
+    Set False on the ML objective's hot path, where only ``fitted`` and
+    ``residuals`` are used — this skips the ``(n+1, n_cols)`` allocation and the
+    per-timestep state writes entirely. ``fitted``/``residuals`` are bit-identical
+    for either value; with False, ``states`` comes back empty (shape ``(0, 0)``).
+    """
     cdef Py_ssize_t n = y.shape[0]
     cdef Py_ssize_t j, t, s_idx, col
-
-    # Local seasonal ring buffer (copied so the caller's array is untouched).
-    cdef double[::1] s = np.empty(m, dtype=np.float64)
-    for j in range(m):
-        s[j] = s0[j]
-
-    cdef double l_prev = l0
-    cdef double b_prev = b0
 
     cdef Py_ssize_t n_cols = 1
     if has_trend:
@@ -48,22 +47,42 @@ def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
     if season_code != 0:
         n_cols += m
 
-    cdef double[:, ::1] states = np.empty((n + 1, n_cols), dtype=np.float64)
+    # Local seasonal ring buffer (copied so the caller's array is untouched).
+    cdef double[::1] s = np.empty(m, dtype=np.float64)
+    cdef double[:, ::1] states = np.empty(((n + 1) if want_states else 0,
+                                           n_cols if want_states else 0),
+                                          dtype=np.float64)
     cdef double[::1] fitted = np.empty(n, dtype=np.float64)
     cdef double[::1] residuals = np.empty(n, dtype=np.float64)
 
+    # Raw pointers for the hot loop, consistent with the ARIMA cores. (For this
+    # branch-heavy recursion they measured the same as memoryviews; the real
+    # win on the fit path is want_states=False skipping the state history.)
+    cdef const double* yp = &y[0]
+    cdef const double* s0p = &s0[0]
+    cdef double* sp = &s[0]
+    cdef double* fp = &fitted[0]
+    cdef double* rp = &residuals[0]
+    cdef double* stp = &states[0, 0] if want_states else NULL
+
+    for j in range(m):
+        sp[j] = s0p[j]
+
+    cdef double l_prev = l0
+    cdef double b_prev = b0
     cdef double mu, e, s_old, l_old, b_old, mu_val, base, denom_s, denom_l
 
     with nogil:
         # Store initial state row (row 0).
-        states[0, 0] = l_prev
-        col = 1
-        if has_trend:
-            states[0, 1] = b_prev
-            col = 2
-        if season_code != 0:
-            for j in range(m):
-                states[0, col + j] = s[j]
+        if want_states:
+            stp[0] = l_prev
+            col = 1
+            if has_trend:
+                stp[1] = b_prev
+                col = 2
+            if season_code != 0:
+                for j in range(m):
+                    stp[col + j] = sp[j]
 
         for t in range(n):
             s_idx = t % m
@@ -73,27 +92,27 @@ def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
                 mu = l_prev if not has_trend else l_prev + phi_val * b_prev
             elif season_code == 1:
                 if not has_trend:
-                    mu = l_prev + s[s_idx]
+                    mu = l_prev + sp[s_idx]
                 else:
-                    mu = l_prev + phi_val * b_prev + s[s_idx]
+                    mu = l_prev + phi_val * b_prev + sp[s_idx]
             else:  # season_code == 2 (multiplicative)
                 if not has_trend:
-                    mu = l_prev * s[s_idx]
+                    mu = l_prev * sp[s_idx]
                 else:
-                    mu = (l_prev + phi_val * b_prev) * s[s_idx]
+                    mu = (l_prev + phi_val * b_prev) * sp[s_idx]
 
-            fitted[t] = mu
+            fp[t] = mu
 
             # --- error ---
             if mult_error:
-                e = (y[t] - mu) if fabs(mu) < 1e-15 else (y[t] / mu) - 1.0
-                residuals[t] = e
+                e = (yp[t] - mu) if fabs(mu) < 1e-15 else (yp[t] / mu) - 1.0
+                rp[t] = e
             else:
-                e = y[t] - mu
-                residuals[t] = e
+                e = yp[t] - mu
+                rp[t] = e
 
             # --- state update ---
-            s_old = s[s_idx]
+            s_old = sp[s_idx]
             l_old = l_prev
             b_old = b_prev
 
@@ -114,10 +133,10 @@ def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
                 # ETS(.,N,A)
                 if mult_error:
                     l_prev = l_old + alpha * (l_old + s_old) * e
-                    s[s_idx] = s_old + gamma * (l_old + s_old) * e
+                    sp[s_idx] = s_old + gamma * (l_old + s_old) * e
                 else:
                     l_prev = l_old + alpha * e
-                    s[s_idx] = s_old + gamma * e
+                    sp[s_idx] = s_old + gamma * e
 
             elif season_code == 1 and has_trend:
                 # ETS(.,A,A) or ETS(.,Ad,A)
@@ -125,22 +144,22 @@ def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
                     mu_val = l_old + phi_val * b_old + s_old
                     l_prev = l_old + phi_val * b_old + alpha * mu_val * e
                     b_prev = phi_val * b_old + beta * mu_val * e
-                    s[s_idx] = s_old + gamma * mu_val * e
+                    sp[s_idx] = s_old + gamma * mu_val * e
                 else:
                     l_prev = l_old + phi_val * b_old + alpha * e
                     b_prev = phi_val * b_old + beta * e
-                    s[s_idx] = s_old + gamma * e
+                    sp[s_idx] = s_old + gamma * e
 
             elif season_code == 2 and not has_trend:
                 # ETS(.,N,M)
                 if mult_error:
                     l_prev = l_old * (1.0 + alpha * e)
-                    s[s_idx] = s_old * (1.0 + gamma * e)
+                    sp[s_idx] = s_old * (1.0 + gamma * e)
                 else:
                     denom_s = s_old if fabs(s_old) > 1e-15 else 1e-15
                     denom_l = l_old if fabs(l_old) > 1e-15 else 1e-15
                     l_prev = l_old + alpha * e / denom_s
-                    s[s_idx] = s_old + gamma * e / denom_l
+                    sp[s_idx] = s_old + gamma * e / denom_l
 
             else:  # season_code == 2 and has_trend
                 # ETS(.,A,M) or ETS(.,Ad,M)
@@ -148,22 +167,23 @@ def ets_recursion_nb(double[::1] y, double alpha, double beta, double gamma,
                 if mult_error:
                     l_prev = base * (1.0 + alpha * e)
                     b_prev = phi_val * b_old + beta * base * e
-                    s[s_idx] = s_old * (1.0 + gamma * e)
+                    sp[s_idx] = s_old * (1.0 + gamma * e)
                 else:
                     denom_s = s_old if fabs(s_old) > 1e-15 else 1e-15
                     denom_l = base if fabs(base) > 1e-15 else 1e-15
                     l_prev = base + alpha * e / denom_s
                     b_prev = phi_val * b_old + beta * e / denom_s
-                    s[s_idx] = s_old + gamma * e / denom_l
+                    sp[s_idx] = s_old + gamma * e / denom_l
 
             # --- store state row (t + 1) ---
-            states[t + 1, 0] = l_prev
-            col = 1
-            if has_trend:
-                states[t + 1, 1] = b_prev
-                col = 2
-            if season_code != 0:
-                for j in range(m):
-                    states[t + 1, col + j] = s[j]
+            if want_states:
+                stp[(t + 1) * n_cols] = l_prev
+                col = 1
+                if has_trend:
+                    stp[(t + 1) * n_cols + 1] = b_prev
+                    col = 2
+                if season_code != 0:
+                    for j in range(m):
+                        stp[(t + 1) * n_cols + col + j] = sp[j]
 
     return np.asarray(fitted), np.asarray(residuals), np.asarray(states)

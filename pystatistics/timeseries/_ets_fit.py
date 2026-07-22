@@ -359,7 +359,10 @@ def _neg_loglik(
     init_states = _assemble_init_states(theta[n_smooth:], spec)
 
     try:
-        fitted, residuals, _ = ets_recursion(y, spec, params, init_states)
+        # The objective needs only fitted + residuals; skip the state history
+        # (and its per-timestep writes) on this hot path.
+        fitted, residuals, _ = ets_recursion(
+            y, spec, params, init_states, want_states=False)
     except (FloatingPointError, ZeroDivisionError):
         return 1e20
 

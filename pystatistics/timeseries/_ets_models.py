@@ -278,6 +278,7 @@ def ets_recursion(
     spec: ETSSpec,
     params: NDArray,
     init_states: NDArray,
+    want_states: bool = True,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """
     Run the ETS state space recursion forward through the data.
@@ -311,7 +312,7 @@ def ets_recursion(
 
     return ets_recursion_nb(
         y_arr, alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
-        season_code, m, l0, b0, s0,
+        season_code, m, l0, b0, s0, want_states,
     )
 
 
