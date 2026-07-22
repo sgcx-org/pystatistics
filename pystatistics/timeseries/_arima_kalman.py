@@ -47,8 +47,30 @@ Harvey, A. C. (1989). Forecasting, Structural Time Series Models and the
 from __future__ import annotations
 
 import numpy as np
-from numba import njit
 from numpy.typing import NDArray
+
+# Compiled Kalman kernels (Cython). These replace the former numba @njit
+# kernels; the algorithm, operation order, and in-place mutation contract are
+# unchanged. A pure-numpy twin lives in ``_arima_kalman_ref`` and is the
+# bit-identity oracle the compiled kernels are tested against.
+#
+# ``_stationary_init`` solves the stationary initial covariance
+# ``P = T P T' + R R'`` by a doubling iteration, judging convergence RELATIVE
+# to the accumulated covariance scale. (An earlier ABSOLUTE-tol/linear version
+# silently fell back to the diffuse init for persistent seasonal AR terms,
+# shifting airline-class log-likelihoods by ~80 units — RIGOR R18 follow-up.)
+# For non-stationary parameters the iterates blow up and it returns ok=False,
+# and the caller falls back to the diffuse init R uses under ``kappa = 1e6``.
+# The matrix products are explicit scalar loops (not BLAS), so P0 is now
+# bit-reproducible across platforms rather than BLAS-reduction-order dependent.
+#
+# ``_kalman_loop`` is the forward filter, exploiting the companion-matrix
+# structure of T so each state/covariance propagation is O(r^2) not O(r^3).
+# It mutates ``a`` and ``P`` in place (callers rely on the post-filter state
+# for forecasting) and returns (innov, F, ok).
+from ._arima_kalman_kernel import ArmaKalmanWorkspace as _ArmaKalmanWorkspace  # noqa: E402
+from ._arima_kalman_kernel import kalman_loop as _kalman_loop  # noqa: E402
+from ._arima_kalman_kernel import stationary_init as _stationary_init  # noqa: E402
 
 __all__ = ["kalman_arma_forecast", "kalman_arma_innovations", "kalman_arma_loglik"]
 
@@ -56,212 +78,21 @@ __all__ = ["kalman_arma_forecast", "kalman_arma_innovations", "kalman_arma_logli
 _DIFFUSE_KAPPA = 1.0e6
 
 
-@njit(cache=True, fastmath=False)
-def _stationary_init(phi: np.ndarray, R_vec: np.ndarray) -> tuple:
-    """Stationary initial covariance P_0 for the ARMA state-space.
+def _new_workspace(p_eff: int, q_eff: int, n: int):
+    """Create a fit-scoped Kalman workspace for an ARMA(p_eff, q_eff) fit.
 
-    Solves ``P = T P T' + R R'`` (i.e. P = sum_k T^k RR' T'^k) by the
-    doubling iteration
+    The workspace is **mutable, fit-scoped scratch storage**: it holds the
+    reusable buffers for a single optimization over a fixed state dimension
+    ``r = max(p_eff, q_eff+1)`` and series length ``n``. Reusing it across the
+    optimizer's many likelihood evaluations avoids reallocating every scratch
+    matrix per evaluation.
 
-        S_0 = RR',  A_0 = T,
-        S_{j+1} = S_j + A_j S_j A_j',  A_{j+1} = A_j A_j,
-
-    so that S_j = sum_{k=0}^{2^j - 1} T^k RR' T'^k. Convergence is
-    quadratic in the horizon: ~20 doublings cover a spectral radius of
-    0.9999, where a linear fixed-point iteration needs ~10^5 steps.
-
-    The previous implementation iterated linearly with max_iter=200 and
-    an ABSOLUTE tol of 1e-12: a moderately persistent seasonal AR term
-    (e.g. sar1 = -0.47 at lag 12 gives spectral radius 0.94) failed to
-    converge in the budget and silently fell back to the diffuse init,
-    which shifted the reported log-likelihood by ~80 units on airline-
-    class models (RIGOR R18 follow-up). R never falls back for
-    stationary models — it solves for Q0 exactly.
-
-    Convergence is judged RELATIVE to the accumulated covariance scale.
-    For non-stationary T the iterates blow up (non-finite, or no decay
-    within the doubling budget) and the caller falls back to the
-    diffuse init, as before.
-
-    Returns
-    -------
-    P : shape (r, r)   stationary covariance (or partial result if
-                       convergence not reached)
-    ok : bool          True if the doubling converged and all entries
-                       are finite.
+    Ownership rule: **one workspace per independent fit.** It must NOT be shared
+    across concurrent objective evaluations (it is overwritten on every call);
+    give each concurrently-running fit its own workspace.
     """
-    r = phi.shape[0]
-
-    # Materialize T (companion form: AR coefs in column 0, ones on the
-    # superdiagonal) — the doubling squares A, which destroys sparsity,
-    # so there is nothing to exploit beyond dense matmuls. r <= ~30, so
-    # each O(r^3) product is trivial.
-    T = np.zeros((r, r), dtype=np.float64)
-    for i in range(r):
-        T[i, 0] = phi[i]
-    for i in range(r - 1):
-        T[i, i + 1] = 1.0
-
-    # S = RR' = outer(R_vec, R_vec)
-    S = np.empty((r, r), dtype=np.float64)
-    for i in range(r):
-        for j in range(r):
-            S[i, j] = R_vec[i] * R_vec[j]
-
-    A = T.copy()
-    rtol = 1e-13
-    max_doublings = 60  # horizon 2^60; far beyond any stationary need
-    for _ in range(max_doublings):
-        U = A @ S @ A.T
-        if not np.all(np.isfinite(U)):
-            return S, False
-        S = S + U
-        # Relative convergence: the tail just added is negligible
-        # against the accumulated covariance.
-        s_scale = np.abs(S).max()
-        if not np.isfinite(s_scale):
-            return S, False
-        if np.abs(U).max() <= rtol * max(1.0, s_scale):
-            # Symmetrize: doubling preserves symmetry analytically, but
-            # float matmuls drift by ~1e-12 relative on near-unit
-            # systems; the filter expects an exactly symmetric P_0.
-            return 0.5 * (S + S.T), True
-        A = A @ A
-        if not np.all(np.isfinite(A)):
-            return S, False
-
-    # No decay within the doubling budget: treat as non-stationary.
-    return S, False
-
-
-@njit(cache=True, fastmath=False)
-def _kalman_loop(
-    z: np.ndarray,       # centered series, shape (n,)
-    phi: np.ndarray,     # AR coefs padded to length r, shape (r,)
-    R_vec: np.ndarray,   # state-noise loading, shape (r,)
-    a: np.ndarray,       # initial state mean (zeros), shape (r,)
-    P: np.ndarray,       # initial state covariance, shape (r, r)
-) -> tuple:
-    """Kalman filter forward pass (numba-JIT).
-
-    The transition matrix T for ARMA state-space has a very specific
-    companion-matrix structure:
-
-        T = [[phi_1, 1, 0, ..., 0],
-             [phi_2, 0, 1, ..., 0],
-             ...
-             [phi_r, 0, 0, ..., 0]]
-
-    so ``T @ x`` is ``phi * x[0] + shift_up(x)`` and ``T @ M`` is
-    ``outer(phi, M[0, :]) + shift_up_rows(M)``. We never materialize T;
-    we just supply ``phi`` (AR coefficients padded with zeros to length
-    r). This drops each state-propagation matmul from O(r^3) to O(r^2),
-    which is where a typical SARIMA fit after seasonal expansion (r ~
-    15) spends most of its time.
-
-    Measurement Z = [1, 0, ..., 0] is implicit. Observation equation has
-    no measurement noise — σ² enters through R η_t only.
-
-    Returns
-    -------
-    innov : shape (n,)   innovations y_t - Z α̂_{t|t-1}
-    F     : shape (n,)   innovation variances Z P_{t|t-1} Z' = P[0, 0]
-    ok    : bool         False if any intermediate value was non-finite
-                         or F_t went non-positive. Caller treats as a
-                         penalty step.
-    """
-    n = z.shape[0]
-    r = phi.shape[0]
-
-    innov = np.empty(n, dtype=np.float64)
-    F = np.empty(n, dtype=np.float64)
-    a_filt = np.empty(r, dtype=np.float64)
-    K = np.empty(r, dtype=np.float64)
-    P_filt = np.empty((r, r), dtype=np.float64)
-    TPf_row0 = np.empty(r, dtype=np.float64)   # top row of T @ P_filt
-    # remaining rows of T @ P_filt are just P_filt[1:, :], accessed directly
-
-    for t in range(n):
-        # Innovation v = z[t] - α[0];  F = P[0, 0].
-        v = z[t] - a[0]
-        f = P[0, 0]
-        if not np.isfinite(f) or f <= 0.0:
-            return innov, F, False
-        innov[t] = v
-        F[t] = f
-
-        # Kalman gain K = P[:, 0] / f
-        inv_f = 1.0 / f
-        for i in range(r):
-            K[i] = P[i, 0] * inv_f
-
-        # Filter update:
-        #   a_filt = a + K * v
-        #   P_filt = P - outer(K, P[0, :])
-        for i in range(r):
-            a_filt[i] = a[i] + K[i] * v
-            p0j_ki = K[i]
-            for j in range(r):
-                P_filt[i, j] = P[i, j] - p0j_ki * P[0, j]
-
-        # State mean propagation: a = T @ a_filt
-        # Exploit T's structure:
-        #   (T a_filt)[0]   = sum_k phi_k a_filt[k]
-        #   (T a_filt)[i]   = a_filt[i + 1] for i >= 1 (shift up; last = 0
-        #                     unless phi_r is part of AR, which it already
-        #                     is in the [0] row via the full phi vector)
-        #
-        # Wait — the companion form here places phi in the FIRST COLUMN
-        # of T, not the first row. Let me re-derive:
-        #
-        #   T[i, 0] = phi_{i+1}     (phi in column 0)
-        #   T[i, i+1] = 1           (superdiagonal)
-        #
-        # So (T a_filt)[i] = phi_{i+1} * a_filt[0] + (a_filt[i+1] if i+1<r else 0).
-        for i in range(r):
-            s = phi[i] * a_filt[0]
-            if i + 1 < r:
-                s += a_filt[i + 1]
-            a[i] = s
-
-        # Covariance propagation: P_new = T @ P_filt @ T' + RR'
-        # Using T[i, 0] = phi_{i+1}, T[i, i+1] = 1:
-        #   (T @ P_filt)[i, j] = phi_{i+1} * P_filt[0, j] + P_filt[i+1, j] (if i+1<r)
-        # Precompute the top row once, then for i>=1 we only need shifted
-        # rows of P_filt — O(r^2) instead of O(r^3).
-        for j in range(r):
-            TPf_row0[j] = phi[0] * P_filt[0, j]
-            if 1 < r:
-                TPf_row0[j] += P_filt[1, j]
-
-        # Now form P_new = (T P_filt) T' + R R'.
-        #   (A T')[i, j] = A[i, 0] * phi[j] + (A[i, j+1] if j+1 < r else 0)
-        # where A = T P_filt.
-        for i in range(r):
-            # A[i, 0]
-            if i == 0:
-                a_i0 = TPf_row0[0]
-            else:
-                a_i0 = phi[i] * P_filt[0, 0]
-                if i + 1 < r:
-                    a_i0 += P_filt[i + 1, 0]
-            for j in range(r):
-                val = a_i0 * phi[j]
-                if j + 1 < r:
-                    # A[i, j+1]
-                    if i == 0:
-                        val += TPf_row0[j + 1]
-                    else:
-                        a_ij1 = phi[i] * P_filt[0, j + 1]
-                        if i + 1 < r:
-                            a_ij1 += P_filt[i + 1, j + 1]
-                        val += a_ij1
-                val += R_vec[i] * R_vec[j]
-                if not np.isfinite(val):
-                    return innov, F, False
-                P[i, j] = val
-
-    return innov, F, True
+    r = max(p_eff, q_eff + 1) if (p_eff + q_eff) > 0 else 1
+    return _ArmaKalmanWorkspace(r, n)
 
 
 def _build_state_space(
@@ -305,11 +136,31 @@ def _build_state_space(
     return T, R_vec, r
 
 
+def _noise_loading(ar: NDArray, ma: NDArray) -> tuple[NDArray, int]:
+    """State-noise loading R and state dim r, without materializing T.
+
+    The Kalman kernels never use the dense transition matrix T (they exploit
+    its companion structure via ``phi`` directly), so the loglik / forecast /
+    innovation paths only need R and r. Building the r×r T on every likelihood
+    evaluation was pure waste; this is the lean builder those paths use.
+    """
+    p = len(ar)
+    q = len(ma)
+    r = max(p, q + 1) if (p + q) > 0 else 1
+    R_vec = np.zeros(r, dtype=np.float64)
+    R_vec[0] = 1.0
+    if q > 0:
+        R_vec[1:1 + q] = ma
+    return R_vec, r
+
+
 def kalman_arma_loglik(
     y: NDArray,
     ar: NDArray,
     ma: NDArray,
     mean: float,
+    *,
+    _workspace=None,
 ) -> tuple[float, float]:
     """Exact Gaussian log-likelihood of ARMA(p, q) via the Kalman filter.
 
@@ -326,6 +177,13 @@ def kalman_arma_loglik(
         MA coefficients (possibly empty).
     mean : float
         Estimated mean of the differenced series (0 if include_mean=False).
+    _workspace : ArmaKalmanWorkspace, optional
+        Internal, fit-scoped scratch (see :func:`_new_workspace`). When
+        supplied, the fused, buffer-reusing kernel path is used instead of
+        allocating fresh scratch — bit-identical result, no per-call
+        allocation. The workspace must be sized for this exact ``(r, n)`` and
+        must not be shared across concurrent evaluations. Leave as ``None`` for
+        one-shot / low-level calls (the historical allocating path).
 
     Returns
     -------
@@ -339,12 +197,14 @@ def kalman_arma_loglik(
         concentrated log-likelihood vanish; ``arima()`` uses it to report
         the final model variance.
     """
-    z = y - mean
+    # The compiled kernel takes C-contiguous float64 (double[::1]); guarantee
+    # it at the boundary rather than trusting the caller's array layout.
+    z = np.ascontiguousarray(y - mean, dtype=np.float64)
     n = z.size
     if n == 0:
         return 1e18, 1.0
 
-    _, R_vec, r = _build_state_space(ar, ma)
+    R_vec, r = _noise_loading(ar, ma)
     # phi = AR coefficients padded with zeros to length r (the column-0
     # entries of the implicit T). The Kalman loop never materializes T
     # — it uses phi directly to exploit the companion-matrix structure.
@@ -352,6 +212,24 @@ def kalman_arma_loglik(
     p = len(ar)
     if p > 0:
         phi[:p] = ar
+
+    if _workspace is not None:
+        # Fused path: init + diffuse-fallback + filter in one nogil call with
+        # reused buffers. The sse / sum(log F) reductions are computed in numpy
+        # inside the workspace, identically to the allocating path below, so
+        # this returns the same (nll, sigma2) bit-for-bit.
+        ok, sse, sum_log_F = _workspace.loglik_parts(z, phi, R_vec, _DIFFUSE_KAPPA)
+        if not ok or not np.isfinite(sse) or sse <= 0.0:
+            return 1e18, 1.0
+        sigma2_hat = sse / n
+        nll = (
+            0.5 * n * np.log(2.0 * np.pi * sigma2_hat)
+            + 0.5 * sum_log_F
+            + 0.5 * n
+        )
+        if not np.isfinite(nll):
+            return 1e18, 1.0
+        return nll, sigma2_hat
 
     # Stationary init via JIT fixed-point iteration. If it fails to
     # converge (AR polynomial has roots near/inside the unit circle),
@@ -445,7 +323,7 @@ def kalman_arma_forecast(
     """
     from pystatistics.core.exceptions import ConvergenceError
 
-    _, R_vec, r = _build_state_space(ar, ma)
+    R_vec, r = _noise_loading(ar, ma)
     phi = np.zeros(r, dtype=np.float64)
     p = len(ar)
     if p > 0:
@@ -536,7 +414,7 @@ def kalman_arma_innovations(
     """
     from pystatistics.core.exceptions import ConvergenceError
 
-    _, R_vec, r = _build_state_space(ar, ma)
+    R_vec, r = _noise_loading(ar, ma)
     phi = np.zeros(r, dtype=np.float64)
     p = len(ar)
     if p > 0:

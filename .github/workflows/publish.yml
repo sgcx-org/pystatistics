@@ -1,13 +1,50 @@
-name: Publish to PyPI
+name: Build, test & publish wheels
 
 on:
   release:
     types: [published]
-
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
+  build_wheels:
+    name: wheels · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Launch matrix (proposal §11 Q4): glibc-Linux + macOS only.
+        #   ubuntu-latest -> manylinux glibc x86_64
+        #   macos-14      -> arm64
+        #   macos-13      -> x86_64
+        # musl and Windows are added later on demand.
+        os: [ubuntu-latest, macos-14, macos-13]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install cibuildwheel
+        # Pin exactly once the current release is confirmed in CI.
+        run: python -m pip install cibuildwheel
+
+      - name: Build and test wheels
+        # cibuildwheel reads [tool.cibuildwheel] in pyproject.toml, builds each
+        # wheel through the hatchling hook (-ffp-contract=off), and runs the
+        # bit-identity + R-parity tests INSIDE each wheel before accepting it.
+        run: python -m cibuildwheel --output-dir wheelhouse
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  build_sdist:
+    name: sdist
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -16,30 +53,35 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      - name: Build sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist --outdir dist
 
-      - name: Build sdist and wheel
-        run: python -m build
+      - name: Verify sdist builds from source (compiler present)
+        # The sdist has no wheel guarantee off-matrix; here we confirm it DOES
+        # build where a C compiler exists (proposal §11 Q3 = hard-fail otherwise).
+        run: python -m pip install dist/*.tar.gz
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7
         with:
-          name: dist
-          path: dist/
+          name: sdist
+          path: dist/*.tar.gz
 
-  publish-pypi:
-    needs: build
+  publish:
+    name: publish to PyPI
+    needs: [build_wheels, build_sdist]
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - name: Download build artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
-          name: dist
-          path: dist/
+          path: dist
+          merge-multiple: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "cython>=3.0", "numpy>=1.24", "setuptools>=64"]
 build-backend = "hatchling.build"
 
 [project]
@@ -70,6 +70,43 @@ Issues = "https://github.com/sgcx-org/pystatistics/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pystatistics"]
+# Compiled Cython kernels produced by hatch_build.py (platform-specific).
+artifacts = [
+    "pystatistics/**/*.so",
+    "pystatistics/**/*.pyd",
+]
+# The generated C is build scratch — the .so is what ships. Keep it out of the
+# wheel (it regenerates from the .pyx in an sdist build).
+exclude = [
+    "pystatistics/**/*.c",
+]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+# Ship the Cython sources so the sdist can be rebuilt where a compiler exists.
+include = [
+    "pystatistics/**/*.py",
+    "pystatistics/**/*.pyx",
+    "hatch_build.py",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.cibuildwheel]
+# Launch matrix scope (see docs/CYTHON_MIGRATION_PROPOSAL.md §11 Q4):
+# glibc-Linux + macOS only. musl and Windows are deliberately excluded and
+# added later on demand.
+build = "cp311-* cp312-* cp313-*"
+skip = "*-musllinux_* pp* *_i686 *-win*"
+build-frontend = "build"
+# Every wheel is verified in-place: the bit-identity parity test is the guard
+# that the platform's compiler honored -ffp-contract=off; the R-parity test is
+# the numerical gate. If parity fails on a wheel, that wheel's FP flags are
+# wrong — fix the build, never relax the test.
+test-requires = ["pytest", "scipy", "numba"]
+test-command = "KMP_DUPLICATE_LIB_OK=TRUE pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py -q"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
