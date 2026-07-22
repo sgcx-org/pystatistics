@@ -28,6 +28,8 @@ PYX_MODULES = {
         "pystatistics/timeseries/_arima_kalman_kernel.pyx",
     "pystatistics.survival._concordance_fenwick":
         "pystatistics/survival/_concordance_fenwick.pyx",
+    "pystatistics.timeseries._ets_recursion":
+        "pystatistics/timeseries/_ets_recursion.pyx",
 }
 
 # No -ffast-math, no -Ofast: those enable reassociation and break last-bit
