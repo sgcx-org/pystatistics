@@ -645,14 +645,16 @@ ARIMA workspace addressed: **per-call `np.empty` allocation** in GIL-held code
 
 **Optimizations (bit-identity preserved — all parity suites green):**
 
-- **ETS — skip the state history on the fit path.** The ML objective uses only
-  `fitted`/`residuals` but the kernel allocated and wrote the full `(n+1,
-  n_cols)` state history every eval (the old Numba objective wasted it too). A
-  `want_states` flag (False on the objective, True for the final fit) skips it.
-  Fit-path kernel 4.44 → 3.71 µs. The residual **1.47×** vs Numba is
-  clang-vs-LLVM codegen on ETS's 12-way branch tree; closing it would need a
-  dozen manually-specialized loop copies — disproportionate for ~1.2 µs/eval,
-  so left as-is.
+- **ETS — skip the state history AND reuse a fit-scoped workspace.** First cut:
+  a `want_states` flag skips the discarded `(n+1, n_cols)` state history on the
+  objective path (4.44 → 3.71 µs). That still measured 1.47× Numba, which was
+  **initially misattributed to branch-tree codegen**. A controlled experiment
+  (§18.1) disproved that: the gap was **per-call allocation** of
+  `fitted`/`residuals`/`s`. An `EtsWorkspace` (mirroring the ARIMA workspace),
+  created once per fit and threaded through the objective, reuses those buffers.
+  Fit-path kernel **3.71 → 2.08 µs = 0.74× Numba (now faster)**; end-to-end
+  ETS(AAA) fit ~7 % faster. Bit-identical (kernel parity + a
+  workspace-vs-allocating full-fit regression across AAN/AAA/ANN/MAM/AAdN).
 - **STL — reuse scratch buffers in the loess/MA hot path.** A robust
   decomposition made ~186 `np.empty` calls (out+ws per internal loess, per MA,
   per cycle-subseries). Allocation-free `cdef` cores (`_loess_into`,
@@ -668,8 +670,28 @@ ARIMA workspace addressed: **per-call `np.empty` allocation** in GIL-held code
 | ARIMA (fused workspace) | ~1.01× | parity |
 | concordance simple / truncated | 1.08× / 0.79× | parity / faster |
 | STL robust / non-robust | 0.70× / 0.84× | **faster** |
-| ETS fit path | 1.47× | slower, ~1.2 µs/eval (codegen; accepted) |
+| ETS fit path (workspace) | 0.74× | **faster** |
 
-Net: ARIMA and concordance at parity, STL faster, ETS marginally slower per
-eval on a sub-microsecond-scale operation. Combined with the cold-start win (no
-JIT) and dependency removal, the migration is performance-neutral-to-positive.
+Net: ARIMA and concordance at parity; STL and ETS faster than the Numba build.
+Combined with the cold-start win (no JIT) and dependency removal, the migration
+is **performance-positive**.
+
+### 18.1 Diagnosing the ETS gap — the value of not trusting the first hypothesis
+
+The ETS 1.47× was first attributed to clang-vs-LLVM codegen on the branch tree,
+"only closeable by a dozen specialized loop copies." A controlled experiment
+falsified that, one hypothesis at a time:
+
+| variant (ETS AAA, n=200) | time | verdict |
+|--------------------------|-----:|---------|
+| cython full, branchy, per-call alloc | 3.75 µs | baseline gap 1.48× |
+| + specialized (branch-free) | 2.83 µs | branches cost ~0.9 µs (real but secondary) |
+| + counter instead of `t % m` | 2.79 µs | **modulo: not it** |
+| + inline-C `restrict` pointers | 2.79 µs | **aliasing: not it** |
+| + buffers reused (no per-call alloc) | **1.11 µs** | **allocation was ~1.7 µs — the dominant cost** |
+
+Allocation, not codegen, was the gap — the same cause as ARIMA and STL, and the
+same fix (a workspace). Specialization would have helped only the smaller
+~0.9 µs branch component and added a dozen loop copies; the workspace closed the
+larger allocation component with the pattern already in the codebase. Lesson:
+benchmark the hypothesis, don't ship the plausible story.

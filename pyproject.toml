@@ -104,7 +104,7 @@ build-frontend = "build"
 # the numerical gate. If parity fails on a wheel, that wheel's FP flags are
 # wrong — fix the build, never relax the test.
 test-requires = ["pytest", "scipy"]
-test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py -q"
+test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_ets_workspace_fit_regression.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py -q"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -27,9 +27,9 @@
   optimizer's likelihood evaluations, removing per-evaluation array allocation.
   Fitted models are identical; warm-fit speed is on par with the previous
   Numba build while cold-start latency is eliminated.
-- Seasonal-trend decomposition (STL) is **faster** than the previous Numba
-  build — the inner loop now reuses scratch buffers instead of allocating on
-  every internal smoothing pass. Results are identical.
+- Seasonal-trend decomposition (STL) and ETS model fitting are **faster** than
+  the previous Numba build — their inner loops now reuse scratch buffers across
+  iterations/evaluations instead of allocating each pass. Results are identical.
 
 ### Removed
 - **`numba` (and its `llvmlite` dependency) is no longer required.** This drops
