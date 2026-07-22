@@ -99,7 +99,9 @@ include = [
 # glibc-Linux + macOS only. musl and Windows are deliberately excluded and
 # added later on demand.
 build = "cp311-* cp312-* cp313-*"
-skip = "*-musllinux_* pp* *_i686 *-win*"
+# Only CPython is built (above), so no PyPy selector is needed. musl, 32-bit,
+# and Windows are excluded per the launch-matrix decision.
+skip = "*-musllinux_* *_i686 *-win*"
 build-frontend = "build"
 # Every wheel is verified in-place: the bit-identity parity test is the guard
 # that the platform's compiler honored -ffp-contract=off; the R-parity test is
