@@ -41,17 +41,33 @@ def _series(seed, n=120, drift=0.0, level=40.0):
     return np.cumsum(rng.standard_normal(n) + drift) + level
 
 
-def _fit_both(monkeypatch, thunk):
+def _capture(thunk):
+    """Run *thunk*, returning its outcome as a comparable value.
+
+    ('ok', solution) if it returns, else ('raise', ExcType, message). The
+    workspace and allocating paths are bit-identical, so their outcomes must
+    match even when the fit does not converge — which is platform-dependent
+    (the objective's ``log`` is platform libm), so a fit can raise
+    ConvergenceError on one OS and converge on another. What must NEVER differ
+    is workspace-vs-allocating on the *same* machine.
+    """
+    try:
+        return ("ok", thunk())
+    except Exception as e:  # noqa: BLE001 - comparing outcome identity
+        return ("raise", type(e).__name__, str(e))
+
+
+def _run_both(monkeypatch, thunk):
     """Run *thunk* with the workspace (default) and with it forced off."""
     with warnings.catch_warnings(record=True) as w_ws:
         warnings.simplefilter("always")
-        sol_ws = thunk()
+        out_ws = _capture(thunk)
     monkeypatch.setattr(_arima_fit, "_new_workspace", lambda *a, **k: None)
     with warnings.catch_warnings(record=True) as w_alloc:
         warnings.simplefilter("always")
-        sol_alloc = thunk()
+        out_alloc = _capture(thunk)
     msgs = lambda ws: sorted(str(x.message) for x in ws)
-    return sol_ws, msgs(w_ws), sol_alloc, msgs(w_alloc)
+    return out_ws, msgs(w_ws), out_alloc, msgs(w_alloc)
 
 
 def _assert_equal_field(name, a, b):
@@ -65,10 +81,20 @@ def _assert_equal_field(name, a, b):
         assert a == b, f"field {name}: {a!r} vs {b!r}"
 
 
-def _assert_solutions_identical(sol_ws, w_ws, sol_alloc, w_alloc):
+def _assert_same_solution(s1, s2):
     for f in _ARRAY_FIELDS + _SCALAR_FIELDS:
-        _assert_equal_field(f, getattr(sol_ws, f), getattr(sol_alloc, f))
-    # Warnings emitted must be identical (CSS-ML / convergence / veto messages).
+        _assert_equal_field(f, getattr(s1, f), getattr(s2, f))
+
+
+def _assert_identical(out_ws, w_ws, out_alloc, w_alloc, extract=lambda s: s):
+    """Workspace and allocating outcomes must be identical: same kind (converge
+    vs raise), same exception if raised, same solution + warnings if converged."""
+    assert out_ws[0] == out_alloc[0], (
+        f"outcome kind differs: {out_ws[0]} vs {out_alloc[0]}")
+    if out_ws[0] == "raise":
+        assert out_ws == out_alloc, f"exception differs: {out_ws} vs {out_alloc}"
+        return
+    _assert_same_solution(extract(out_ws[1]), extract(out_alloc[1]))
     assert w_ws == w_alloc, f"warnings differ:\n  ws={w_ws}\n  alloc={w_alloc}"
 
 
@@ -86,7 +112,7 @@ def test_fit_identical_workspace_vs_allocating(monkeypatch, order, method, seed,
                                                mean_series):
     y = _series(seed, drift=0.3 if mean_series else 0.0)
     thunk = lambda: arima(y, order=order, method=method)
-    _assert_solutions_identical(*_fit_both(monkeypatch, thunk))
+    _assert_identical(*_run_both(monkeypatch, thunk))
 
 
 def test_fit_identical_seasonal(monkeypatch):
@@ -97,7 +123,7 @@ def test_fit_identical_seasonal(monkeypatch):
     y = (10 * np.sin(2 * np.pi * t / 4) + np.cumsum(rng.standard_normal(160)) + 50)
     thunk = lambda: arima(y, order=(1, 1, 1), seasonal=(1, 0, 1, 4),
                           method="css-ml")
-    _assert_solutions_identical(*_fit_both(monkeypatch, thunk))
+    _assert_identical(*_run_both(monkeypatch, thunk))
 
 
 def test_fit_identical_near_nonstationary(monkeypatch):
@@ -108,7 +134,7 @@ def test_fit_identical_near_nonstationary(monkeypatch):
     for i in range(1, 200):
         y[i] = 0.98 * y[i - 1] + rng.standard_normal()
     thunk = lambda: arima(y, order=(1, 0, 1), method="ml")
-    _assert_solutions_identical(*_fit_both(monkeypatch, thunk))
+    _assert_identical(*_run_both(monkeypatch, thunk))
 
 
 def test_auto_arima_identical(monkeypatch):
@@ -116,11 +142,13 @@ def test_auto_arima_identical(monkeypatch):
     and all its fields must match the allocating search exactly."""
     y = _series(31, n=140, drift=0.2)
     thunk = lambda: auto_arima(y, max_p=2, max_q=2)
-    a, w_a, b, w_b = _fit_both(monkeypatch, thunk)
+    out_a, w_a, out_b, w_b = _run_both(monkeypatch, thunk)
+    assert out_a[0] == "ok" and out_b[0] == "ok", "auto_arima should return a model"
+    a, b = out_a[1], out_b[1]
     assert a.best_order == b.best_order
     assert a.best_aic == b.best_aic
     assert a.best_seasonal == b.best_seasonal
-    _assert_solutions_identical(a.best_model, w_a, b.best_model, w_b)
+    _assert_identical(out_a, w_a, out_b, w_b, extract=lambda s: s.best_model)
 
 
 def test_degenerate_series_identical(monkeypatch):
@@ -129,7 +157,7 @@ def test_degenerate_series_identical(monkeypatch):
     identically — same convergence, warnings, and (possibly None) vcov."""
     y = np.full(90, 3.0)
     thunk = lambda: arima(y, order=(1, 1, 1), method="css-ml")
-    _assert_solutions_identical(*_fit_both(monkeypatch, thunk))
+    _assert_identical(*_run_both(monkeypatch, thunk))
 
 
 def test_objective_bit_identical_including_penalties(monkeypatch):
