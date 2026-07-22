@@ -130,21 +130,21 @@ cdef inline Py_ssize_t _nleft_for(Py_ssize_t xs, Py_ssize_t span, Py_ssize_t n,
     return v
 
 
-cpdef loess_smooth_nb(double[::1] y, Py_ssize_t span, Py_ssize_t degree,
-                      Py_ssize_t jump, double[::1] w, bint use_w):
-    """Smooth a whole series, evaluating every ``jump``-th point."""
-    cdef Py_ssize_t n = y.shape[0]
-    cdef double[::1] out = np.empty(n, dtype=np.float64)
+cdef void _loess_into(double[::1] y, Py_ssize_t n, Py_ssize_t span,
+                      Py_ssize_t degree, Py_ssize_t jump, double[::1] w,
+                      bint use_w, double[::1] out, double[::1] ws) noexcept nogil:
+    """Smooth y[:n] into out[:n], using ws[:width] scratch. No allocation —
+    caller provides out (len >= n) and ws (len >= n). Same arithmetic as the
+    reference loess."""
     cdef Py_ssize_t i
     if n < 2:
         for i in range(n):
             out[i] = y[i]
-        return np.asarray(out)
+        return
 
     cdef Py_ssize_t nj, width
     cdef bint span_ge_n
     _grid_width_nleft(n, span, jump, &nj, &width, &span_ge_n)
-    cdef double[::1] ws = np.empty(width, dtype=np.float64)
 
     cdef Py_ssize_t xs = 1, last = 1, nleft, g, gap, off
     cdef bint ok
@@ -177,6 +177,15 @@ cpdef loess_smooth_nb(double[::1] y, Py_ssize_t span, Py_ssize_t degree,
             delta = (out[n - 1] - vl) / gap
             for off in range(1, gap):
                 out[last - 1 + off] = vl + delta * off
+
+
+cpdef loess_smooth_nb(double[::1] y, Py_ssize_t span, Py_ssize_t degree,
+                      Py_ssize_t jump, double[::1] w, bint use_w):
+    """Smooth a whole series, evaluating every ``jump``-th point."""
+    cdef Py_ssize_t n = y.shape[0]
+    cdef double[::1] out = np.empty(n, dtype=np.float64)
+    cdef double[::1] ws = np.empty(n if n > 0 else 1, dtype=np.float64)
+    _loess_into(y, n, span, degree, jump, w, use_w, out, ws)
     return np.asarray(out)
 
 
@@ -397,11 +406,10 @@ cpdef robustness_weights_nb(double[::1] y, double[::1] fit):
 # STL driver
 # ---------------------------------------------------------------------------
 
-cpdef moving_average_nb(double[::1] x, Py_ssize_t width):
-    """Running mean of ``width`` consecutive values (sequential update)."""
-    cdef Py_ssize_t n = x.shape[0]
+cdef void _moving_average_into(double[::1] x, Py_ssize_t n, Py_ssize_t width,
+                               double[::1] out) noexcept nogil:
+    """Running mean of width consecutive values of x[:n] into out[:n-width+1]."""
     cdef Py_ssize_t m = n - width + 1
-    cdef double[::1] out = np.empty(m, dtype=np.float64)
     cdef double v = 0.0
     cdef Py_ssize_t i, jx
     for i in range(width):
@@ -410,6 +418,13 @@ cpdef moving_average_nb(double[::1] x, Py_ssize_t width):
     for jx in range(1, m):
         v = v - x[jx - 1] + x[jx + width - 1]
         out[jx] = v / width
+
+
+cpdef moving_average_nb(double[::1] x, Py_ssize_t width):
+    """Running mean of ``width`` consecutive values (sequential update)."""
+    cdef Py_ssize_t n = x.shape[0]
+    cdef double[::1] out = np.empty(n - width + 1, dtype=np.float64)
+    _moving_average_into(x, n, width, out)
     return np.asarray(out)
 
 
@@ -417,15 +432,15 @@ cdef void _cycle_subseries_into(double[::1] detrended, Py_ssize_t period,
                                 Py_ssize_t span, Py_ssize_t degree,
                                 Py_ssize_t jump, double[::1] rob_w, bint use_w,
                                 double[::1] ext, double[::1] yrow,
-                                double[::1] wrow):
+                                double[::1] wrow, double[::1] smoothed,
+                                double[::1] ws) noexcept nogil:
     """Smooth each cycle-subseries and write the one-period-extended result
-    into ``ext`` (length n + 2*period), interleaved by cycle position."""
+    into ``ext`` (length n + 2*period), interleaved by cycle position.
+    ``smoothed`` (len >= n) and ``ws`` (len >= n) are caller-provided scratch."""
     cdef Py_ssize_t n = detrended.shape[0]
     cdef Py_ssize_t pos, k, t, nleft_t, idx, tt, nj, width
     cdef bint span_ge_n, ok
     cdef double head, tail, val
-    cdef double[::1] smoothed
-    cdef double[::1] ws
     for pos in range(period):
         k = 0
         t = pos
@@ -435,9 +450,9 @@ cdef void _cycle_subseries_into(double[::1] detrended, Py_ssize_t period,
                 wrow[k] = rob_w[t]
             k += 1
             t += period
-        smoothed = loess_smooth_nb(yrow[:k], span, degree, jump, wrow[:k], use_w)
+        _loess_into(yrow[:k], k, span, degree, jump, wrow[:k], use_w,
+                    smoothed, ws)
         _grid_width_nleft(k, span, jump, &nj, &width, &span_ge_n)
-        ws = np.empty(width, dtype=np.float64)
         val = _eval_window_c(yrow[:k], wrow[:k], use_w, k, span, degree,
                              0.0, 1, width, ws, &ok)
         head = val if ok else smoothed[0]
@@ -463,17 +478,25 @@ cpdef stl_core_nb(double[::1] y, Py_ssize_t period, Py_ssize_t s_win,
                   Py_ssize_t n_outer, bint periodic):
     """Run the full STL inner/outer loop. Returns (seasonal, trend, weights)."""
     cdef Py_ssize_t n = y.shape[0]
+    cdef Py_ssize_t cap = n + 2 * period          # safe upper bound for MA/ext
+    cdef Py_ssize_t L_ext = n + 2 * period
     cdef double[::1] trend = np.zeros(n, dtype=np.float64)
     cdef double[::1] seasonal = np.zeros(n, dtype=np.float64)
     cdef double[::1] rob_w = np.ones(n, dtype=np.float64)
     cdef bint use_w = False
-    cdef double[::1] ext = np.empty(n + 2 * period, dtype=np.float64)
+    cdef double[::1] ext = np.empty(cap, dtype=np.float64)
     cdef double[::1] detr = np.empty(n, dtype=np.float64)
     cdef double[::1] deseas = np.empty(n, dtype=np.float64)
     cdef double[::1] yrow = np.empty(n, dtype=np.float64)
     cdef double[::1] wrow = np.empty(n, dtype=np.float64)
-    cdef double[::1] ma1, ma2, ma3, low, fit
-    cdef Py_ssize_t iteration, inner, i, pos, t, cnt
+    cdef double[::1] fit = np.empty(n, dtype=np.float64)
+    # Reusable scratch — allocated once, not per inner/outer pass.
+    cdef double[::1] ws = np.empty(cap, dtype=np.float64)       # loess/window scratch
+    cdef double[::1] smoothed = np.empty(n, dtype=np.float64)   # cycle-subseries out
+    cdef double[::1] bufA = np.empty(cap, dtype=np.float64)     # MA ping-pong
+    cdef double[::1] bufB = np.empty(cap, dtype=np.float64)
+    cdef double[::1] low = np.empty(n, dtype=np.float64)
+    cdef Py_ssize_t iteration, inner, i, pos, t, cnt, L1, L2
     cdef double acc, mean
 
     for iteration in range(n_outer + 1):
@@ -481,18 +504,20 @@ cpdef stl_core_nb(double[::1] y, Py_ssize_t period, Py_ssize_t s_win,
             for i in range(n):
                 detr[i] = y[i] - trend[i]
             _cycle_subseries_into(detr, period, s_win, s_deg, s_jump,
-                                  rob_w, use_w, ext, yrow, wrow)
-            ma1 = moving_average_nb(ext, period)
-            ma2 = moving_average_nb(ma1, period)
-            ma3 = moving_average_nb(ma2, 3)
-            low = loess_smooth_nb(ma3, l_win, l_deg, l_jump, wrow, False)
+                                  rob_w, use_w, ext, yrow, wrow, smoothed, ws)
+            # Low-pass: MA(period), MA(period), MA(3), then (unweighted) loess.
+            L1 = L_ext - period + 1
+            _moving_average_into(ext, L_ext, period, bufA)   # ma1 -> bufA[:L1]
+            L2 = L1 - period + 1
+            _moving_average_into(bufA, L1, period, bufB)     # ma2 -> bufB[:L2]
+            _moving_average_into(bufB, L2, 3, bufA)          # ma3 -> bufA[:n]
+            _loess_into(bufA, n, l_win, l_deg, l_jump, wrow, False, low, ws)
             for i in range(n):
                 seasonal[i] = ext[period + i] - low[i]
                 deseas[i] = y[i] - seasonal[i]
-            trend = loess_smooth_nb(deseas, t_win, t_deg, t_jump, rob_w, use_w)
+            _loess_into(deseas, n, t_win, t_deg, t_jump, rob_w, use_w, trend, ws)
         if iteration == n_outer:
             break
-        fit = np.empty(n, dtype=np.float64)
         for i in range(n):
             fit[i] = trend[i] + seasonal[i]
         rob_w = robustness_weights_nb(y, fit)
