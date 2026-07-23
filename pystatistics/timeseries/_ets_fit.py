@@ -49,6 +49,7 @@ from pystatistics.core.validation import check_array, check_1d, check_finite
 from pystatistics.timeseries._ets_models import (
     ETSSpec,
     ets_recursion,
+    ets_recursion_ws,
     parse_ets_spec,
     unpack_params,
 )
@@ -326,6 +327,7 @@ def _neg_loglik(
     fixed_smooth: list[float | None],
     alpha_box: tuple[float, float],
     n_smooth: int,
+    _ws_cell: list | None = None,
 ) -> float:
     """
     Compute negative log-likelihood for the optimiser.
@@ -359,7 +361,16 @@ def _neg_loglik(
     init_states = _assemble_init_states(theta[n_smooth:], spec)
 
     try:
-        fitted, residuals, _ = ets_recursion(y, spec, params, init_states)
+        # The objective needs only fitted + residuals. With a fit-scoped
+        # workspace (the hot optimizer path) reuse its buffers; otherwise skip
+        # the state history via want_states=False. Both give identical
+        # fitted/residuals.
+        if _ws_cell is not None:
+            fitted, residuals = ets_recursion_ws(y, spec, params, init_states,
+                                                 _ws_cell)
+        else:
+            fitted, residuals, _ = ets_recursion(
+                y, spec, params, init_states, want_states=False)
     except (FloatingPointError, ZeroDivisionError):
         return 1e20
 
@@ -576,11 +587,17 @@ def fit_ets_model(
     # there is always something to optimise)
     free_idx = [i for i, f in enumerate(fixed_mask) if not f]
 
+    # One fit-scoped ETS workspace, reused across every objective evaluation
+    # this fit performs (lazily created on first eval, sized to this y/spec).
+    # Single-owner mutable scratch — not shared across concurrent fits.
+    _ws_cell: list = []
+
     def _objective(theta_free: NDArray) -> float:
         theta_full = theta0.copy()
         theta_full[free_idx] = theta_free
         return _neg_loglik(
-            theta_full, y_arr, spec, fixed_smooth, alpha_box, n_smooth
+            theta_full, y_arr, spec, fixed_smooth, alpha_box, n_smooth,
+            _ws_cell=_ws_cell,
         )
 
     # Damped models are optimised from two phi starts (mid-range 0.9 and

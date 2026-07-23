@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "cython>=3.0", "numpy>=1.24", "setuptools>=64"]
 build-backend = "hatchling.build"
 
 [project]
@@ -36,12 +36,6 @@ classifiers = [
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
-    # numba: required for the JIT'd ARIMA Kalman filter in
-    # pystatistics/timeseries/_arima_kalman.py. SARIMA exact-ML fitting
-    # runs a dense inner loop at small state dimension (r <= ~25) where
-    # pure-numpy per-call overhead dominates. Numba closes the gap with
-    # R's Fortran arima.c by ~20x. See CHANGELOG.
-    "numba>=0.59",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +64,47 @@ Issues = "https://github.com/sgcx-org/pystatistics/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pystatistics"]
+# Compiled Cython kernels produced by hatch_build.py (platform-specific).
+artifacts = [
+    "pystatistics/**/*.so",
+    "pystatistics/**/*.pyd",
+]
+# The generated C is build scratch — the .so is what ships. Keep it out of the
+# wheel (it regenerates from the .pyx in an sdist build).
+exclude = [
+    "pystatistics/**/*.c",
+]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.sdist]
+# Ship the Cython sources so the sdist can be rebuilt where a compiler exists.
+include = [
+    "pystatistics/**/*.py",
+    "pystatistics/**/*.pyx",
+    "hatch_build.py",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.cibuildwheel]
+# Launch matrix (see docs/CYTHON_MIGRATION_PROPOSAL.md): glibc-Linux x86_64 +
+# macOS arm64 + Windows x64.
+build = "cp311-* cp312-* cp313-*"
+# Only CPython is built (above), so no PyPy selector is needed. Excluded: musl
+# (Alpine), 32-bit (`*_i686` linux + `*-win32`), and Intel-macOS (EOL).
+# `*-macosx_x86_64` encodes the "no Intel Mac" policy in the build config so it
+# holds even if a wheel build is ever run on an Intel host — it does NOT match
+# linux `*-manylinux_x86_64`.
+skip = "*-musllinux_* *_i686 *-win32 *-macosx_x86_64"
+build-frontend = "build"
+# Every wheel is verified in-place: the bit-identity parity test is the guard
+# that the platform's compiler honored -ffp-contract=off; the R-parity test is
+# the numerical gate. If parity fails on a wheel, that wheel's FP flags are
+# wrong — fix the build, never relax the test.
+test-requires = ["pytest", "scipy"]
+test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_ets_workspace_fit_regression.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py -q"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -35,6 +35,7 @@ from pystatistics.timeseries._arima_factored import (
     normalize_to_invertible,
     optimize_arima_factored as _optimize_arima_factored_impl,
 )
+from pystatistics.timeseries._arima_kalman import _new_workspace
 from pystatistics.timeseries._arima_likelihood import (
     arima_css_residuals,
     arima_negloglik,
@@ -257,6 +258,20 @@ def _optimize_arima(
         method_used = "ml" if method == "ml" else "css-ml"
         return opt_params, nll_ml, True, 0, method_used
 
+    # One fit-scoped Kalman workspace, reused across every ML likelihood
+    # evaluation this optimization performs (the L-BFGS-B objective and its
+    # finite-difference gradient probes). Created once here; the CSS objective
+    # does not use it. Mutable, single-owner scratch — not shared across
+    # concurrent fits (see _new_workspace).
+    _ml_ws = None
+    if method in ("ml", "css-ml"):
+        _ml_ws = _new_workspace(p_eff, q_eff, len(y_diff))
+
+    def _ml_objective(params):
+        return arima_negloglik(
+            params, y_diff, order_pq, include_mean, "ml", _workspace=_ml_ws,
+        )
+
     if method == "css" or method == "css-ml":
         result_css = minimize_quiet(
             arima_negloglik,
@@ -280,9 +295,8 @@ def _optimize_arima(
             css_params = opt_params.copy()
             try:
                 result_ml = minimize_quiet(
-                    arima_negloglik,
+                    _ml_objective,
                     css_params,
-                    args=(y_diff, order_pq, include_mean, "ml"),
                     method="L-BFGS-B",
                     options={"maxiter": max_iter, "ftol": tol},
                 )
@@ -335,9 +349,8 @@ def _optimize_arima(
             if include_mean:
                 try:
                     result_ml2 = minimize_quiet(
-                        arima_negloglik,
+                        _ml_objective,
                         start_params,
-                        args=(y_diff, order_pq, include_mean, "ml"),
                         method="L-BFGS-B",
                         options={"maxiter": max_iter, "ftol": tol},
                     )
@@ -353,9 +366,8 @@ def _optimize_arima(
     else:
         # Pure ML
         result_ml = minimize_quiet(
-            arima_negloglik,
+            _ml_objective,
             start_params,
-            args=(y_diff, order_pq, include_mean, "ml"),
             method="L-BFGS-B",
             options={"maxiter": max_iter, "ftol": tol},
         )

@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+# Cython-generated C (regenerated from the .pyx sources at build time)
+pystatistics/**/*.c
 
 # Distribution / packaging
 .Python

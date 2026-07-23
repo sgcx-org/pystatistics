@@ -278,6 +278,7 @@ def ets_recursion(
     spec: ETSSpec,
     params: NDArray,
     init_states: NDArray,
+    want_states: bool = True,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """
     Run the ETS state space recursion forward through the data.
@@ -310,6 +311,40 @@ def ets_recursion(
     ) = _unpack_recursion_inputs(spec, params, init_states)
 
     return ets_recursion_nb(
+        y_arr, alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
+        season_code, m, l0, b0, s0, want_states,
+    )
+
+
+def ets_recursion_ws(
+    y: NDArray,
+    spec: ETSSpec,
+    params: NDArray,
+    init_states: NDArray,
+    ws_cell: list,
+) -> tuple[NDArray, NDArray]:
+    """Workspace-backed recursion for the ML objective's hot path.
+
+    Reuses a fit-scoped :class:`EtsWorkspace` (held in the one-element
+    ``ws_cell``) across every likelihood evaluation, avoiding per-eval
+    allocation. Returns ``(fitted, residuals)`` — bit-identical to
+    :func:`ets_recursion` (want_states=False). The returned arrays are views
+    into the workspace and are valid only until the next call. Ownership rule:
+    one ws_cell per independent fit, never shared across concurrent evals.
+    """
+    from pystatistics.timeseries._ets_recursion import EtsWorkspace
+
+    y_arr = np.ascontiguousarray(y, dtype=np.float64)
+    (
+        alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
+        season_code, m, l0, b0, s0,
+    ) = _unpack_recursion_inputs(spec, params, init_states)
+
+    ws = ws_cell[0] if ws_cell else None
+    if ws is None:
+        ws = EtsWorkspace(y_arr.shape[0], m)
+        ws_cell.append(ws)
+    return ws.recurse(
         y_arr, alpha, beta_f, gamma_f, phi_val, mult_error, has_trend,
         season_code, m, l0, b0, s0,
     )

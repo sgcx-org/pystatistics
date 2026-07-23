@@ -139,6 +139,8 @@ def exact_loglik(
     y: NDArray,
     order: tuple[int, int],
     include_mean: bool,
+    *,
+    _workspace=None,
 ) -> float:
     """
     Exact Gaussian log-likelihood via the Kalman filter (negated).
@@ -168,7 +170,7 @@ def exact_loglik(
 
     p, q = order
     ar, ma, mean = _unpack_params(params, p, q, include_mean)
-    nll, _ = kalman_arma_loglik(y, ar, ma, mean)
+    nll, _ = kalman_arma_loglik(y, ar, ma, mean, _workspace=_workspace)
     return nll
 
 
@@ -182,6 +184,8 @@ def arima_negloglik(
     order: tuple[int, int],
     include_mean: bool,
     method: str,
+    *,
+    _workspace=None,
 ) -> float:
     """
     Negative log-likelihood for ARMA optimization.
@@ -214,7 +218,7 @@ def arima_negloglik(
     if method == "css":
         return css_loglik(params, y, order, include_mean)
     if method == "ml":
-        return exact_loglik(params, y, order, include_mean)
+        return exact_loglik(params, y, order, include_mean, _workspace=_workspace)
     raise ValidationError(f"method must be 'css' or 'ml', got '{method}'")
 
 

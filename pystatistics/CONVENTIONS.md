@@ -349,7 +349,9 @@ fit that explicitly ran in float32 cannot be held to float64 convergence.
 
 ## Result objects
 
-- **Suffix.** Every public fit returns a `…Solution` (not `…Result`).
+- **Suffix.** Every public fit returns a `…Solution` (not `…Result`). For what
+  counts — non-fit analyses (a ratio, a rate, a frequency) versus closed-form
+  transformations of already-computed scalars — see **A16**.
 - **Envelope.** Every Solution wraps the core `Result[Params]`, so
   `.backend_name`, `.timing`, `.warnings`, and `.info` exist library-wide
   (including timeseries and multivariate, which previously returned bare
@@ -881,3 +883,91 @@ clearer than a "corrected" one:
 
 This list is exhaustive; a new single-letter or abbreviated public identifier
 that is not on it is an S1/A1 violation to fix, not an exemption to assume.
+
+### A15 — Domain packages delegate general estimation to PyStatistics
+
+When a downstream `pystats*` domain package needs a general statistical method
+that PyStatistics already provides, it **calls PyStatistics**. It does not
+reimplement the estimator, its optimizer, its covariance/standard errors, or its
+resampling locally. PyStatistics is the shared statistical engine; the domain
+package owns the *framing* — domain inputs and preprocessing, terminology,
+defaults, workflow composition, interpretation, reporting, and domain-specific
+diagnostics — not the estimation.
+
+**Delegate (non-exhaustive):** linear models and OLS (`regression`), GLM
+families, GAM, Kaplan–Meier / log-rank / Cox (`survival`), mixed models, ordinal
+and multinomial, PCA and factor analysis (`multivariate`), ARIMA/ETS/STL
+(`timeseries`), bootstrap and permutation (`montecarlo`), multiple-testing
+correction (`hypothesis.p_adjust`), and the standard tests (`t_test`,
+`chisq_test`, `fisher_test`, `wilcox_test`, `ks_test`, `prop_test`, `var_test`).
+
+**Stays local — genuinely domain-native mathematics.** Hardy–Weinberg exact
+tests, linkage disequilibrium, chain-ladder development factors, PK/NCA
+trapezoidal AUC, dose-response 4PL/5PL curve fitting, DeLong AUC covariance,
+epidemiological effect-measure intervals, actuarial credibility. These are not
+"a general estimator wearing a domain hat"; there is nothing upstream to call.
+
+**Explicitly NOT a violation: raw distribution quantiles from scipy.**
+`norm.ppf`, `chi2.sf`, `nct`, `ncf`, `t.ppf` and friends are correct layering.
+PyStatistics is a *methods* library and deliberately does not re-export
+distribution functions; reaching past it for an inverse CDF is not duplication.
+
+**A missing upstream primitive is added upstream.** If the general primitive a
+domain package needs does not exist here, the fix is to add it to PyStatistics —
+as its own task, with tests, a version bump, and the consumer re-pegged — never
+to implement it downstream "just this once". Worked precedent: `simple_ols`
+(5.1.0) was added because `pystatsbio`'s PK/NCA terminal-slope (lambda_z)
+estimation had been calling `scipy.stats.linregress`. The engine could already do
+the statistics; it was cumbersome enough for an ordinary univariate fit in a hot
+loop that a domain module routed around it.
+
+**Corollary — a bypassed engine is a defect in PyStatistics, not merely in the
+caller.** If a domain package "naturally" reaches past PyStatistics for an
+ordinary task, treat that as a missing or unergonomic public surface here and fix
+it here. Downstream duplication is the symptom; upstream friction is the cause.
+
+**Cross-domain duplication promotes upward.** A general mechanic needed by two or
+more domain packages is promoted to PyStatistics rather than implemented twice;
+domain packages do not depend on one another for general machinery.
+
+This amendment governs *estimation*. It is distinct from — and in addition to —
+platform reuse (`core.result`, `core.exceptions`, `core.compute.backend`), which
+downstream packages import rather than fork. Ruling recorded 2026-07-18.
+
+### A16 — The Solution envelope covers analyses, not scalar formulas
+
+The result-object law states that every public **fit** returns a `…Solution`.
+That leaves non-fit public functions ambiguous: a Sharpe ratio, a responder rate,
+an allele frequency, and a loss summary are all analyses of data, but none is a
+"fit" in the model-fitting sense. The line:
+
+> **Analysis of data → `…Solution`. Closed-form transformation of
+> already-computed scalars → bare number.**
+
+**A function that consumes a dataset returns a Solution** — typically alongside
+convention parameters — because the number alone is not the answer. The
+conventions it was computed under, the sample size, any interval, and any
+diagnostic warning all belong *with* the estimate, and the structured warnings
+channel needs somewhere to put them. A bare scalar is a hole in that channel.
+
+**A function that consumes already-computed statistics and applies a closed-form
+transformation returns a bare number.** It has no data, no conventions, no sample
+size, and nothing to warn about. The standing examples are
+`pystatsbio.meta.i_squared(Q, k)`, `h_squared(Q, k)`, and `cochran_q(…)`: these
+are correct as bare returns and are **not** violations of the result-object law.
+
+**Tie-breaker for genuine borderline cases:** adding fields to a Solution is
+non-breaking; changing a return type from scalar to Solution is breaking. When
+unsure, return the Solution — and note the change is free before 1.0, which is
+when most of these calls are made.
+
+**Ergonomics corollary (binding).** A Solution that wraps essentially one number
+must make that number the obvious primary accessor (`.ratio`, `.rate`,
+`.frequency`), with a short `summary()` and nothing important buried in `.info`.
+If the envelope makes an ordinary call awkward, callers route around the library
+— the precise failure A15 exists to prevent, and adding ceremony here would
+manufacture new instances of it. Whether a scalar-like Solution should define
+`__float__` is deliberately left unspecified: it helps in tight loops but brushes
+against A6, so each package decides it explicitly rather than drifting into it.
+
+Ruling recorded 2026-07-18.
