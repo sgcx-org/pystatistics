@@ -371,6 +371,24 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 6.0.0 — compiled wheels, no first-use warm-up (packaging change)
+
+pystatistics now ships as **prebuilt binary wheels** instead of a pure-Python
+package. The public API and every computed result are **unchanged, bit-for-bit**
+— this is a packaging release, marked major only because it narrows which
+platforms install without a compiler.
+
+- **Prebuilt wheels** for Linux (x86_64/glibc), macOS (Apple Silicon), and
+  Windows (x64) on CPython 3.11–3.13 — `pip install` needs no compiler there.
+- **No first-use warm-up:** the accelerated internals no longer compile
+  themselves on the first call, so time-to-first-result is immediate — a win for
+  containers, serverless, and CI. The `numba`/`llvmlite` dependency is dropped.
+- **Faster** seasonal-trend (`stl`) decomposition and exponential-smoothing
+  (`ets`) fitting; all results identical to 5.1.0.
+- **Heads up:** on platforms without a prebuilt wheel (Linux ARM, Alpine/musl,
+  32-bit, or Python outside 3.11–3.13), `pip` now builds from source and needs a
+  C compiler. See the [changelog](CHANGELOG.md) for full upgrade notes.
+
 ### 5.1.0 — lean univariate OLS front door
 
 - **`regression.simple_ols(x, y)`** fits a line (`y = intercept + slope·x`) to

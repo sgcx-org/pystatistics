@@ -1,5 +1,51 @@
 # Changelog
 
+## 6.0.0
+
+The library now ships as compiled binary wheels instead of a pure-Python
+package. The public API is unchanged and every computed result is identical,
+bit-for-bit, to 5.1.0. This is a major release only because it narrows the set
+of platforms that can install without a compiler.
+
+### Changed
+
+- **pystatistics now ships prebuilt binary wheels.** The performance-critical
+  time-series and survival internals are compiled C extensions (via Cython)
+  rather than just-in-time-compiled Python. Prebuilt wheels are published for:
+  - Linux (x86_64, glibc), macOS (Apple Silicon), and Windows (x64)
+  - CPython 3.11, 3.12, and 3.13
+
+  On these platforms `pip install pystatistics` downloads a wheel and needs no
+  compiler, exactly as before.
+
+- **No first-use warm-up.** The accelerated code paths used to compile
+  themselves on the first call, adding a one-time delay of up to a few seconds
+  in a fresh process. That is gone — time-to-first-result is now immediate and
+  deterministic. This matters most in containers, serverless functions, CI, and
+  other short-lived or read-only environments where a compilation cache cannot
+  persist between runs.
+
+- **Faster.** Seasonal-trend decomposition (`stl`) and exponential-smoothing
+  model fitting (`ets`) are faster than in 5.1.0; other models are unchanged in
+  speed. No results change.
+
+### Removed
+
+- **The `numba` and `llvmlite` dependencies are gone.** Installs are lighter,
+  and support for new Python versions no longer waits on a third-party
+  just-in-time compiler.
+
+### Upgrade notes
+
+- **No code changes are needed.** Public functions, arguments, return types, and
+  numerical results are all identical to 5.1.0.
+- **If you install on a platform without a prebuilt wheel** — for example Linux
+  on ARM (aarch64), Alpine/musl-based images, 32-bit systems, or a Python
+  version outside 3.11–3.13 — `pip` now builds from the source distribution,
+  which requires a C compiler and the Python development headers. The 5.x line
+  was pure Python and installed anywhere Python runs; 6.0 does not. If a
+  prebuilt wheel for your platform matters to you, please open an issue.
+
 ## 5.1.0
 
 Additive release — one new public function, no breaking changes.
