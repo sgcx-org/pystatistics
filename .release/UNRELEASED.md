@@ -109,3 +109,27 @@
   patches `torch.cuda.is_available`, so it cannot run without PyTorch and
   previously errored with `ModuleNotFoundError` on a PyTorch-less install. No
   library change.
+
+- **packaging/CI: the wheel test command now runs the torch-free mvnmle tests
+  inside every built wheel.** `[tool.cibuildwheel] test-command` in
+  `pyproject.toml` gains ten files from `tests/mvnmle/`:
+  `test_numpy_cholesky.py`, `test_base_preparation.py`,
+  `test_backend_routing.py`, `test_mlest.py`, `test_optimize.py`,
+  `test_degeneracy.py`, `test_pattern_codes_large_p.py`,
+  `test_patterns_large_p.py`, `test_pattern_summary_format.py`,
+  `test_mcar.py`. The wheel test environment has no PyTorch, so these exercise
+  the NumPy forward-Cholesky path, pattern grouping, starting values, the
+  pattern diagnostics / Little's MCAR test and no-torch routing on Linux,
+  macOS and Windows wheels — previously no CI job ran any mvnmle test. No new
+  test dependency (`pytest`, `scipy`). Local cost (macOS arm64, no torch): the
+  command goes from 707 passed in about 1.5 s to 898 passed, 32 skipped in
+  about 2.4 s.
+  - To make those tests platform-independent: the seeded problems whose
+    recorded results are checked are now stored as data
+    (`tests/mvnmle/references/pre_base_rewrite_data.npz`, 152 KB) instead of
+    being regenerated with `Generator.multivariate_normal`, whose output
+    depends on the LAPACK build; the other seeded test data are generated
+    with an explicit Cholesky factor; and comparisons against values recorded
+    on one machine use optimizer-level tolerances (objective 1e-9 relative,
+    estimates 1e-4, iteration count within 2). No library change.
+

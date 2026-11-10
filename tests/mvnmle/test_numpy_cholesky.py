@@ -51,11 +51,17 @@ needs_torch = pytest.mark.skipif(not _torch_available(), reason="needs PyTorch")
 
 
 def make_problem(n, p, missing_rate, seed):
-    """Seeded MVN sample with MCAR missingness (no all-missing rows)."""
+    """Seeded MVN sample with MCAR missingness (no all-missing rows).
+
+    Built from ``standard_normal`` draws and an explicit Cholesky factor, so
+    the data are the same on every platform up to rounding
+    (``Generator.multivariate_normal`` factorises with an SVD whose sign
+    conventions depend on the LAPACK build)."""
     rng = np.random.default_rng(seed)
     A = rng.standard_normal((p, p))
     sigma = A @ A.T + p * np.eye(p)
-    X = rng.multivariate_normal(rng.standard_normal(p), sigma, size=n)
+    mu = rng.standard_normal(p)
+    X = mu + rng.standard_normal((n, p)) @ np.linalg.cholesky(sigma).T
     X[rng.random((n, p)) < missing_rate] = np.nan
     return X[~np.isnan(X).all(axis=1)]
 
