@@ -17,8 +17,9 @@ class DirectMLEBackend:
 
     Device-parametrised. Despite the historical name, this backend also drives
     the fast CPU path: a CPU torch device with FP64 runs the same
-    forward-Cholesky estimator and is the default CPU backend (it beats the
-    numpy inverse-Cholesky reference substantially while matching R to ~1e-9).
+    forward-Cholesky estimator and is the default CPU backend when PyTorch is
+    installed (it matches R to ~1e-9). Without PyTorch the same estimator runs
+    through ``NumpyCholeskyMLEBackend``.
 
     Precision is selected by device:
     - CPU torch device: FP64 (the fast default CPU path)

@@ -5,9 +5,9 @@ Covers the dispatch contract that ``mlest(method='direct')`` exposes:
 - the default / ``backend='cpu'`` path is the fast PyTorch forward-Cholesky
   FP64 estimator,
 - ``solver='reference'`` forces the numpy inverse-Cholesky reference
-  (the R-exact validation anchor, and the only direct path needing no PyTorch),
-- when PyTorch is unavailable the default path falls back to the reference
-  *loudly* (Rule 1), while the explicit reference request stays silent,
+  (the R-exact validation anchor),
+- when PyTorch is unavailable the default path runs the NumPy forward-Cholesky
+  backend *loudly* (Rule 1), while the explicit reference request stays silent,
 - ``solver='reference'`` is rejected for non-direct algorithms.
 
 These are dispatch tests; numerical R-agreement lives in test_mlest.py.
@@ -79,15 +79,17 @@ class TestReferencePath:
 
 
 class TestTorchFreeFallback:
-    """With PyTorch absent, the default path falls back to the reference and
-    says so out loud (Rule 1 — no silent fallback)."""
+    """With PyTorch absent, the default path runs the NumPy implementation of
+    the forward-Cholesky estimator and says so out loud (Rule 1 — no silent
+    fallback). Numerical coverage lives in test_numpy_cholesky.py."""
 
     def test_default_falls_back_loudly_without_torch(self, monkeypatch):
         monkeypatch.setitem(sys.modules, 'torch', None)  # `import torch` -> ImportError
         with pytest.warns(UserWarning, match="PyTorch is not installed"):
             result = mlest(datasets.apple, backend='cpu')
-        # Falls back to the correct, R-validated numpy reference.
-        assert _info(result)['parameterization'] == 'inverse_cholesky'
+        # Same estimator as the PyTorch path, not the inverse-Cholesky reference.
+        assert result.backend_name == 'cpu_cholesky_numpy_fp64'
+        assert _info(result)['parameterization'] == 'cholesky'
         assert result.converged
 
 
@@ -181,10 +183,12 @@ class TestPrecisionAwareTolDefault:
         # Patch where the backends resolved it from.
         import pystatistics.mvnmle.backends.gpu as gpu_mod
         import pystatistics.mvnmle.backends.cpu as cpu_mod
+        import pystatistics.mvnmle.backends.numpy_cholesky as numpy_mod
         monkeypatch.setattr(gpu_mod, 'run_direct_solve', spy)
         monkeypatch.setattr(cpu_mod, 'run_direct_solve', spy)
+        monkeypatch.setattr(numpy_mod, 'run_direct_solve', spy)
 
-        mlest(datasets.apple)  # default: fast CPU path, FP64
+        mlest(datasets.apple)  # default: forward-Cholesky CPU path, FP64
         assert captured.get('tol') == 1e-5  # backend's own FP64 default
 
     def test_user_tol_still_forwarded(self, monkeypatch):
@@ -198,8 +202,10 @@ class TestPrecisionAwareTolDefault:
 
         import pystatistics.mvnmle.backends.gpu as gpu_mod
         import pystatistics.mvnmle.backends.cpu as cpu_mod
+        import pystatistics.mvnmle.backends.numpy_cholesky as numpy_mod
         monkeypatch.setattr(gpu_mod, 'run_direct_solve', spy)
         monkeypatch.setattr(cpu_mod, 'run_direct_solve', spy)
+        monkeypatch.setattr(numpy_mod, 'run_direct_solve', spy)
 
         mlest(datasets.apple, tol=3e-6)
         assert captured.get('tol') == 3e-6
