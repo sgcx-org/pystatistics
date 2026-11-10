@@ -11,8 +11,8 @@ this preparation was rewritten (``references/pre_base_rewrite_fits.json``):
   does not depend on the order of the rows or of the patterns,
 - converged fits are unchanged to optimizer tolerance on the NumPy path, the
   PyTorch FP64 CPU path and (when a GPU is present) the FP32 path,
-- the inverse-Cholesky reference path, which keeps its own data preparation,
-  is unchanged,
+- the stored results of the removed inverse-Cholesky reference optimizer are
+  reproduced,
 - data with more than 50 and more than 64 variables are grouped and fitted.
 """
 
@@ -450,34 +450,67 @@ class TestFitsUnchanged:
         assert res.params.n_iter == rec['forward_cholesky_fp64']['n_iter']
 
 
-class TestReferencePathUnchanged:
-    """The inverse-Cholesky reference keeps its own data preparation, so the
-    rewrite must not move it. (Verified bit-for-bit on the recording machine;
-    asserted here to 1e-9 so the test is portable across BLAS builds.)"""
-
-    def test_reference_objective_does_not_use_the_shared_base(self):
-        from pystatistics.mvnmle._objectives._r_port_base import (
-            RPortObjectiveBase,
-        )
-        from pystatistics.mvnmle._objectives.cpu import CPUObjectiveFP64
-
-        assert issubclass(CPUObjectiveFP64, RPortObjectiveBase)
-        assert not issubclass(CPUObjectiveFP64, MLEObjectiveBase)
+class TestAgreementWithFormerReferenceOptimizer:
+    """The removed inverse-Cholesky reference optimizer's stored results (a
+    finite-difference BFGS on a different parameterization) are reproduced by
+    the forward-Cholesky estimator: the same maximum, to optimizer tolerance."""
 
     @pytest.mark.parametrize(
         'name', sorted(n for n in PRE_CHANGE if 'reference' in PRE_CHANGE[n]))
-    def test_reference_fit_matches_pre_change(self, name):
+    def test_numpy_fit_matches_stored_reference_fit(self, name):
         rec = PRE_CHANGE[name]
-        res = mlest(problem_data(name), solver='reference',
-                    max_iter=rec['max_iter'])
         expected = rec['reference']
-        assert res.n_iter == expected['n_iter']
-        assert abs(res.loglik - expected['loglik']) <= (
-            1e-9 * abs(expected['loglik']))
-        np.testing.assert_allclose(res.muhat, expected['muhat'],
-                                   rtol=1e-7, atol=1e-7)
-        np.testing.assert_allclose(res.sigmahat, expected['sigmahat'],
-                                   rtol=1e-7, atol=1e-7)
+        res = NumpyCholeskyMLEBackend().solve(
+            MVNDesign.from_array(problem_data(name)), max_iter=rec['max_iter'])
+        assert res.params.converged
+        assert abs(res.params.loglik - expected['loglik']) < 1e-5
+        np.testing.assert_allclose(res.params.muhat, expected['muhat'],
+                                   rtol=1e-3, atol=1e-3)
+        np.testing.assert_allclose(res.params.sigmahat, expected['sigmahat'],
+                                   rtol=5e-3, atol=5e-3)
+
+
+class TestPatternDiagnosticsUnchanged:
+    """``identify_missingness_patterns`` is built on the shared grouping; its
+    public output and Little's MCAR test, which consumes it, are what they
+    were (statistics recorded before the change)."""
+
+    # name -> (statistic, df, p_value) recorded before the rewrite
+    MCAR = {
+        'apple': (7.357854458961007, 1, 0.006677042025383067),
+        'missvals': (11.160688852048725, 6, 0.08353530901018048),
+        'bench_n500_p5': (68.06869015048711, 72, 0.6094633682864238),
+    }
+
+    @pytest.mark.parametrize('name', sorted(MCAR))
+    def test_little_mcar_statistic_and_p_value(self, name):
+        from pystatistics.mvnmle import little_mcar_test
+
+        statistic, df, p_value = self.MCAR[name]
+        res = little_mcar_test(problem_data(name))
+        assert res.df == df
+        assert res.statistic == pytest.approx(statistic, rel=1e-9)
+        assert res.p_value == pytest.approx(p_value, rel=1e-8)
+
+    def test_patterns_sorted_by_frequency_with_documented_tie_break(self):
+        from pystatistics.mvnmle.patterns import identify_missingness_patterns
+
+        X = make_problem(60, 6, 0.3, 9)      # many equally frequent patterns
+        patterns = identify_missingness_patterns(X)
+        keys = [(-p.n_cases, tuple(p.pattern_vector.tolist()))
+                for p in patterns]
+        assert keys == sorted(keys)
+        assert len(set(k[0] for k in keys)) < len(keys)   # ties are present
+        assert [p.pattern_id for p in patterns] == list(
+            range(1, len(patterns) + 1))
+        assert sum(p.n_cases for p in patterns) == X.shape[0]
+        assert sum(p.percent_cases for p in patterns) == pytest.approx(100.0)
+        for p in patterns:
+            assert not np.isnan(p.data).any()
+            np.testing.assert_array_equal(
+                np.flatnonzero(p.pattern_vector == 1), p.observed_indices)
+            np.testing.assert_array_equal(
+                np.flatnonzero(p.pattern_vector == 0), p.missing_indices)
 
 
 # ---------------------------------------------------------------------------

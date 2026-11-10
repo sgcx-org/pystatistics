@@ -1,12 +1,16 @@
 """
-Reference datasets for MVN MLE validation and examples.
-EXACT ports of the datasets from R's mvnmle package.
+Example datasets for MVN MLE validation and examples.
+
+``apple`` (18 rows, 2 variables) and ``missvals`` (13 rows, 5 variables) are
+the two small example datasets with missing values that are also distributed
+with the R package ``mvnmle``. The values here are the same as in those
+datasets, so fits can be compared against R output directly.
 """
 
 import numpy as np
 
-# Apple dataset - tree size vs worm infestation
-# From R: data(apple) - EXACT VALUES
+# Apple dataset - tree size vs worm infestation.
+# Same values as the ``apple`` dataset distributed with R's mvnmle.
 apple = np.array([
     [8.0, 59.0],
     [6.0, 58.0],
@@ -28,8 +32,8 @@ apple = np.array([
     [10.0, np.nan],
 ])
 
-# Missvals dataset - multivariate data with missing values
-# From R: data(missvals) - EXACT VALUES
+# Missvals dataset - multivariate data with missing values.
+# Same values as the ``missvals`` dataset distributed with R's mvnmle.
 missvals = np.array([
     [7.0, 26.0, 6.0, 60.0, 78.5],
     [1.0, 29.0, 15.0, 52.0, 74.3],

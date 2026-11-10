@@ -79,17 +79,20 @@ class TestRegularizedInverse:
 class TestNoIdentityFallback:
     """Parameter extraction must never return identity covariance.
 
-    Targets the LIVE R-exact objective (_objectives/cpu.py). An earlier
-    version of this test pointed at the dead _utils.py module, which let an
-    identical identity fallback survive in the live path.
+    Scans every live objective module (``_objectives/*.py``). An earlier
+    version of this test pointed at a dead module, which let an identity
+    fallback survive in the live path.
     """
 
     def test_source_has_no_identity_fallback(self):
-        src = (Path(__file__).parent.parent.parent
-               / "pystatistics" / "mvnmle" / "_objectives" / "cpu.py").read_text()
-        assert "NumericalError" in src
-        assert "sigma = np.eye(n_vars)" not in src
-        assert "sigma = np.eye(self.n_vars)" not in src
+        objectives = (Path(__file__).parent.parent.parent
+                      / "pystatistics" / "mvnmle" / "_objectives")
+        sources = sorted(objectives.glob("*.py"))
+        assert sources, "no objective modules found"
+        for path in sources:
+            src = path.read_text()
+            assert "sigma = np.eye(n_vars)" not in src, path.name
+            assert "sigma = np.eye(self.n_vars)" not in src, path.name
 
 
 class TestNoSilentRegularization:

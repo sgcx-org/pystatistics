@@ -4,11 +4,9 @@ Routing/API tests for the direct MVN MLE CPU backends.
 Covers the dispatch contract that ``mlest(method='direct')`` exposes:
 - the default / ``backend='cpu'`` path is the fast PyTorch forward-Cholesky
   FP64 estimator,
-- ``solver='reference'`` forces the numpy inverse-Cholesky reference
-  (the R-exact validation anchor),
 - when PyTorch is unavailable the default path runs the NumPy forward-Cholesky
-  backend *loudly* (Rule 1), while the explicit reference request stays silent,
-- ``solver='reference'`` is rejected for non-direct algorithms.
+  backend *loudly* (Rule 1),
+- the removed ``solver='reference'`` option raises a ``ValidationError``.
 
 These are dispatch tests; numerical R-agreement lives in test_mlest.py.
 """
@@ -53,29 +51,39 @@ class TestDefaultPath:
         assert _info(result)['parameterization'] == 'cholesky'
 
 
-class TestReferencePath:
-    """``solver='reference'`` selects the numpy inverse-Cholesky path."""
+class TestRemovedReferenceSolver:
+    """``solver='reference'`` (the inverse-Cholesky reference optimizer) was
+    removed; asking for it fails loud with the migration path."""
 
-    def test_reference_solver_uses_numpy_inverse_cholesky(self):
-        result = mlest(datasets.apple, solver='reference')
-        assert 'cpu' in result.backend_name
-        assert _info(result)['parameterization'] == 'inverse_cholesky'
+    @pytest.mark.parametrize('kwargs', [
+        {},
+        {'backend': 'cpu'},
+        {'backend': 'gpu'},
+        {'method': 'em'},
+        {'method': 'monotone'},
+    ])
+    def test_reference_solver_raises(self, kwargs):
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="has been removed"):
+            mlest(datasets.apple, solver='reference', **kwargs)
 
-    def test_reference_solver_needs_no_torch(self, monkeypatch):
-        """The canonical reference path (solver='reference') must work with
-        PyTorch absent and stay silent (it is an explicit, intentional choice —
-        not a fallback)."""
-        monkeypatch.setitem(sys.modules, 'torch', None)  # `import torch` -> ImportError
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter('error')  # any warning fails the test
-            result = mlest(datasets.apple, solver='reference')
-        assert _info(result)['parameterization'] == 'inverse_cholesky'
+    def test_message_names_the_replacement(self):
+        from pystatistics.core.exceptions import ValidationError
+        with pytest.raises(ValidationError, match="forward-Cholesky"):
+            mlest(datasets.apple, solver='reference')
 
-    @pytest.mark.parametrize('algorithm', ['em', 'monotone'])
-    def test_reference_solver_rejected_for_non_direct(self, algorithm):
-        with pytest.raises(ValueError, match="only valid with method='direct'"):
-            mlest(datasets.apple, solver='reference', method=algorithm)
+    @pytest.mark.parametrize('module', [
+        'pystatistics.mvnmle.backends.cpu',
+        'pystatistics.mvnmle._objectives.cpu',
+    ])
+    def test_removed_modules_are_gone(self, module):
+        import importlib
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module)
+
+    def test_other_solver_values_are_scipy_methods(self):
+        result = mlest(datasets.apple, solver='L-BFGS-B')
+        assert _info(result)['method'] == 'L-BFGS-B'
 
 
 class TestTorchFreeFallback:
@@ -87,28 +95,26 @@ class TestTorchFreeFallback:
         monkeypatch.setitem(sys.modules, 'torch', None)  # `import torch` -> ImportError
         with pytest.warns(UserWarning, match="PyTorch is not installed"):
             result = mlest(datasets.apple, backend='cpu')
-        # Same estimator as the PyTorch path, not the inverse-Cholesky reference.
+        # Same estimator as the PyTorch path.
         assert result.backend_name == 'cpu_cholesky_numpy_fp64'
         assert _info(result)['parameterization'] == 'cholesky'
         assert result.converged
 
 
-class TestFastReferenceAgreement:
-    """The fast path and the reference agree with R and with each other."""
+class TestAgreementWithR:
+    """The default path agrees with the stored R result, whichever
+    implementation (PyTorch or NumPy) runs it."""
 
-    @pytest.mark.skipif(not _torch_available(), reason="needs PyTorch")
-    def test_fast_matches_reference_on_apple(self):
+    def test_default_matches_r_on_apple(self):
+        import warnings
         with open(REFERENCES / "apple_reference.json") as f:
             ref = json.load(f)
-        fast = mlest(datasets.apple, backend='cpu')
-        reference = mlest(datasets.apple, solver='reference')
-        # Both match R...
-        assert abs(fast.loglik - ref['loglik']) < 1e-7
-        assert abs(reference.loglik - ref['loglik']) < 1e-7
-        # ...and therefore each other.
-        assert abs(fast.loglik - reference.loglik) < 1e-6
-        np.testing.assert_allclose(fast.muhat, reference.muhat, atol=1e-3)
-        np.testing.assert_allclose(fast.sigmahat, reference.sigmahat, rtol=1e-3)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)  # no-torch notice
+            fit = mlest(datasets.apple, backend='cpu')
+        assert abs(fit.loglik - ref['loglik']) < 1e-7
+        np.testing.assert_allclose(fit.muhat, ref['muhat'], atol=1e-3)
+        np.testing.assert_allclose(fit.sigmahat, ref['sigmahat'], rtol=1e-3)
 
 
 class TestAutoWithoutCuda:
@@ -127,27 +133,6 @@ class TestAutoWithoutCuda:
 class TestConflictingRequestsFailLoud:
     """Explicit-but-contradictory argument combinations must raise, never
     silently override the user's choice (Rule 1)."""
-
-    def test_reference_with_gpu_backend_raises(self):
-        from pystatistics.core.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="reference"):
-            mlest(datasets.apple, solver='reference', backend='gpu')
-
-    def test_reference_with_gpu_fp64_backend_raises(self):
-        from pystatistics.core.exceptions import ValidationError
-        with pytest.raises(ValidationError, match="reference"):
-            mlest(datasets.apple, solver='reference', backend='gpu_fp64')
-
-    def test_reference_with_bogus_backend_raises(self):
-        # The backend string must not escape validation just because
-        # solver='reference' short-circuits backend resolution.
-        from pystatistics.core.exceptions import ValidationError
-        with pytest.raises(ValidationError):
-            mlest(datasets.apple, solver='reference', backend='bogus')
-
-    def test_reference_with_explicit_cpu_ok(self):
-        res = mlest(datasets.apple, solver='reference', backend='cpu')
-        assert res.backend_name == 'cpu_bfgs_fp64'
 
     def test_monotone_with_gpu_backend_raises(self):
         from pystatistics.core.exceptions import ValidationError
@@ -182,10 +167,8 @@ class TestPrecisionAwareTolDefault:
 
         # Patch where the backends resolved it from.
         import pystatistics.mvnmle.backends.gpu as gpu_mod
-        import pystatistics.mvnmle.backends.cpu as cpu_mod
         import pystatistics.mvnmle.backends.numpy_cholesky as numpy_mod
         monkeypatch.setattr(gpu_mod, 'run_direct_solve', spy)
-        monkeypatch.setattr(cpu_mod, 'run_direct_solve', spy)
         monkeypatch.setattr(numpy_mod, 'run_direct_solve', spy)
 
         mlest(datasets.apple)  # default: forward-Cholesky CPU path, FP64
@@ -201,10 +184,8 @@ class TestPrecisionAwareTolDefault:
             return original(objective_factory, **kwargs)
 
         import pystatistics.mvnmle.backends.gpu as gpu_mod
-        import pystatistics.mvnmle.backends.cpu as cpu_mod
         import pystatistics.mvnmle.backends.numpy_cholesky as numpy_mod
         monkeypatch.setattr(gpu_mod, 'run_direct_solve', spy)
-        monkeypatch.setattr(cpu_mod, 'run_direct_solve', spy)
         monkeypatch.setattr(numpy_mod, 'run_direct_solve', spy)
 
         mlest(datasets.apple, tol=3e-6)

@@ -61,8 +61,7 @@ def run_direct_solve(
     backend_name : str
         Identifier recorded on the returned ``Result``.
     parameterization : str
-        Label for ``info['parameterization']`` ('cholesky' or
-        'inverse_cholesky').
+        Label for ``info['parameterization']`` (``'cholesky'``).
     device : str or None
         When given, recorded as ``info['device']`` and surfaced to callers.
     precision : str or None
@@ -98,7 +97,7 @@ def run_direct_solve(
         mu, sigma, loglik = objective.extract_parameters(opt.x)
 
     # A non-finite log-likelihood means the objective could not be evaluated at
-    # the reported optimum (e.g. the R-exact reconstruction broke down under
+    # the reported optimum (e.g. the covariance reconstruction broke down under
     # extreme column-scale disparity). The optimizer may still flag success, but
     # such a fit is not a trustworthy optimum: surface it loudly (Rule 1) and do
     # not claim convergence, rather than returning a spurious enormous loglik.

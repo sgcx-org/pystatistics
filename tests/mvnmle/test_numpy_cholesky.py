@@ -259,17 +259,15 @@ class TestFit:
         np.testing.assert_allclose(
             res.params.muhat, ref['muhat'], rtol=1e-3, atol=1e-3)
 
+    @needs_torch
     @pytest.mark.parametrize('name,max_iter', [('apple', 100),
                                                ('missvals', 2000)])
-    def test_bundled_datasets_match_existing_paths(self, name, max_iter):
+    def test_bundled_datasets_match_torch_path(self, name, max_iter):
         data = getattr(datasets, name)
         res = fit_numpy(data, max_iter=max_iter)
-        reference = mlest(data, solver='reference', max_iter=max_iter)
-        assert abs(res.params.loglik - reference.loglik) < 1e-5
-        if _torch_available():
-            fast = mlest(data, backend='cpu', max_iter=max_iter)
-            assert fast.backend_name == 'cpu_cholesky_fp64'
-            assert abs(res.params.loglik - fast.loglik) < 1e-6
+        fast = mlest(data, backend='cpu', max_iter=max_iter)
+        assert fast.backend_name == 'cpu_cholesky_fp64'
+        assert abs(res.params.loglik - fast.loglik) < 1e-6
 
     def test_nonconvergence_is_reported(self):
         res = fit_numpy(make_problem(200, 5, 0.20, 2), max_iter=1)

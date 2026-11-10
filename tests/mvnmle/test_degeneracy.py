@@ -211,17 +211,19 @@ class TestMlestDegeneracyGuard:
                 mlest(X, backend="cpu", method="em")
 
     def test_collinearity_tol_can_relax_the_guard(self):
-        X = _collinear_data()
-        # Demonstrated on the numpy inverse-Cholesky reference, whose degenerate
-        # floor is well-characterized at ~3e-6: a tolerance below that floor lets
-        # the fit through without raising. (The default forward-Cholesky path
-        # drives the collinear direction to ~1e-13 — essentially machine zero and
-        # platform-sensitive — so the relaxation window there is not a stable
-        # thing to assert on. The default path's *raise* on collinear input is
-        # covered by test_direct_collinear_raises.)
-        res = mlest(X, solver="reference", method="direct",
-                    collinearity_tol=1e-9)
-        assert res is not None  # no SingularMatrixError
+        # Near-collinear but full-rank data: x3 = x1 + x2 + small noise gives a
+        # fitted correlation matrix whose smallest eigenvalue (~5e-6) sits just
+        # below the default threshold (1e-5) and far above machine zero, so it
+        # is stable across platforms. (Exactly collinear input drives that
+        # eigenvalue to ~1e-13, which is not a stable thing to assert on.)
+        rng = np.random.default_rng(0)
+        x1, x2 = rng.standard_normal(400), rng.standard_normal(400)
+        X = np.column_stack(
+            [x1, x2, x1 + x2 + 0.005 * rng.standard_normal(400)])
+        with pytest.raises(SingularMatrixError, match="collinear"):
+            mlest(X, backend="cpu", method="direct")
+        res = mlest(X, backend="cpu", method="direct", collinearity_tol=1e-9)
+        assert np.isfinite(res.loglik)  # no SingularMatrixError
 
     def test_full_rank_data_unaffected(self):
         res = mlest(datasets.apple, backend="cpu", method="direct")
@@ -262,17 +264,38 @@ class TestConstantGuardLargeOffset:
             mlest(X)
 
 
-class TestReferenceSolverNonFiniteLoglik:
-    """solver='reference' must not report a garbage loglik — 6.0.x red-team.
+class TestNonFiniteLoglik:
+    """A fit whose log-likelihood cannot be evaluated at the reported optimum
+    must not be reported as converged (it used to surface as a spurious,
+    enormous log-likelihood with converged=True)."""
 
-    On scale-disparate (but full-rank) data the R-exact objective hits its
-    failure sentinel (1e20); the old code reported loglik = -5e19 with
-    converged=True. It now reports NaN, converged=False, and a rescale warning.
-    """
+    def test_non_finite_loglik_flags_not_converged(self):
+        from pystatistics.mvnmle.backends._direct import run_direct_solve
 
-    def test_scale_disparate_reference_flags_not_converged(self):
-        import numpy as np
-        from pystatistics.mvnmle import mlest
+        class _Objective:
+            """Quadratic bowl whose reported log-likelihood is not finite."""
+            n_observed_scalars = 10
+
+            def get_initial_parameters(self):
+                return np.array([1.0, -1.0])
+
+            def compute_objective(self, theta):
+                return float(theta @ theta)
+
+            def compute_gradient(self, theta):
+                return 2.0 * theta
+
+            def extract_parameters(self, theta):
+                return theta[:1], np.eye(1), float('nan')
+
+        res = run_direct_solve(
+            _Objective, method='BFGS', tol=1e-8, max_iter=50,
+            backend_name='stub', parameterization='cholesky')
+        assert not res.params.converged
+        assert np.isnan(res.params.loglik)
+        assert any("not finite" in w for w in res.warnings)
+
+    def test_scale_disparate_default_path_reports_finite_loglik(self):
         rng = np.random.default_rng(1)
         A = rng.standard_normal((4, 4))
         L = np.linalg.cholesky(A @ A.T + 4 * np.eye(4))
@@ -282,25 +305,13 @@ class TestReferenceSolverNonFiniteLoglik:
         m = rng.random((300, 4)) < 0.10
         Z[m] = np.nan
         Z[np.all(np.isnan(Z), 1), 0] = 1.0
-        res = mlest(Z, solver="reference")
-        assert not res.converged
-        assert np.isnan(res.loglik)                       # not -5e19
-        assert any("not finite" in w for w in res.warnings)
-
-    def test_wellposed_reference_matches_default(self):
-        import numpy as np
-        from pystatistics.mvnmle import mlest
-        rng = np.random.default_rng(5)
-        A = rng.standard_normal((4, 4))
-        L = np.linalg.cholesky(A @ A.T + 4 * np.eye(4))
-        Y = rng.standard_normal((400, 4)) @ L.T
-        mm = rng.random((400, 4)) < 0.12
-        Y[mm] = np.nan
-        Y[np.all(np.isnan(Y), 1), 0] = 0.1
-        rd = mlest(Y)
-        rr = mlest(Y, solver="reference")
-        assert rr.converged and np.isfinite(rr.loglik)
-        assert rr.loglik == pytest.approx(rd.loglik, abs=1e-5)  # unchanged
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            res = mlest(Z)
+        assert np.isfinite(res.loglik)
+        # Either a genuine optimum or an honest non-convergence report.
+        assert res.converged or any(
+            "did not converge" in w for w in res.warnings)
 
 
 def _gpu_available() -> bool:

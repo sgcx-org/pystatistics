@@ -1,13 +1,13 @@
 """
 Regression tests: pattern identification must stay exact for p >= 65.
 
-``2 ** np.arange(...)`` in int64 silently overflows for column indices with
-bit position >= 64 (numpy integer overflow raises no warning), collapsing
-distinct missingness patterns onto one code. The first affected width is
-p = 65, where 2**64 wraps to exactly 0 and column 0 becomes invisible to the
-pattern code. This corrupted ``analyze_patterns`` and, through it, Little's
-MCAR test. The same bug was fixed earlier in ``MLEObjectiveBase._apply_mysort``
-(see test_pattern_codes_large_p.py); these tests pin the public-API siblings.
+A grouping keyed on fixed-width integer pattern codes silently overflows once
+the number of variables exceeds the code's width (numpy integer overflow
+raises no warning), collapsing distinct missingness patterns onto one code;
+that once corrupted ``analyze_patterns`` and, through it, Little's MCAR test
+from p = 65. Patterns are now grouped by exact mask equality (see
+test_pattern_codes_large_p.py for the estimator-side tests); these tests pin
+the public-API siblings.
 """
 
 import numpy as np

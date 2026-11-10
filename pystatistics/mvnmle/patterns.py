@@ -6,6 +6,9 @@ Tools for analyzing missingness patterns in multivariate data.
 
 import numpy as np
 from pystatistics.core.exceptions import ValidationError
+from pystatistics.mvnmle._objectives._pattern_grouping import (
+    group_rows_by_pattern,
+)
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -73,7 +76,9 @@ def identify_missingness_patterns(data: np.ndarray) -> List[PatternInfo]:
     """
     Identify and extract all unique missingness patterns in the data.
 
-    Uses powers-of-2 pattern identification matching R's approach.
+    Rows are grouped by exact equality of their missingness masks (see
+    ``_objectives/_pattern_grouping``), so the result is correct for any
+    number of variables.
 
     Parameters
     ----------
@@ -83,70 +88,32 @@ def identify_missingness_patterns(data: np.ndarray) -> List[PatternInfo]:
     Returns
     -------
     List[PatternInfo]
-        Patterns sorted by frequency (most common first).
+        Patterns sorted by frequency (most common first), with
+        ``pattern_id`` running from 1 in that order. Patterns with equal
+        frequency are ordered lexicographically on the observed-indicator
+        vector (``pattern_vector``, 0 = missing sorts before 1 = observed,
+        variable 0 most significant).
     """
-    n_obs, n_vars = data.shape
+    n_obs = data.shape[0]
+    groups = group_rows_by_pattern(data)
 
-    # Create binary pattern matrix (1 = observed, 0 = missing)
-    pattern_matrix = (~np.isnan(data)).astype(int)
-
-    # Convert patterns to unique identifiers using powers of 2. Each distinct
-    # missingness pattern must map to a distinct code, or rows with different
-    # patterns get grouped together and a group's observed mask is applied to
-    # rows it does not match — dropping observed data or pulling NaNs into it.
-    # For n_vars > 62, 2**i overflows int64 and causes exactly that collision
-    # (silently: numpy integer overflow raises no warning), so use
-    # arbitrary-precision Python integers in that regime, mirroring
-    # MLEObjectiveBase._apply_mysort.
-    if n_vars <= 62:
-        powers = (2 ** np.arange(n_vars - 1, -1, -1)).astype(np.int64)
-        pattern_ids = pattern_matrix @ powers
-    else:
-        powers = np.array(
-            [1 << (n_vars - 1 - i) for i in range(n_vars)],
-            dtype=object,
-        )
-        pattern_ids = pattern_matrix.astype(object) @ powers
-
-    # Find unique patterns
-    unique_patterns, inverse_indices = np.unique(pattern_ids, return_inverse=True)
-
-    # Build PatternInfo objects
     patterns = []
-    for i, pattern_id in enumerate(unique_patterns):
-        case_mask = (pattern_ids == pattern_id)
-        pattern_data = data[case_mask]
+    for group in groups:
+        pattern_vector = (~np.isnan(data[group.row_indices[0]])).astype(int)
+        patterns.append(PatternInfo(
+            pattern_id=0,                       # assigned after sorting
+            observed_indices=group.observed_indices,
+            missing_indices=group.missing_indices,
+            n_cases=group.n_obs,
+            data=group.data,
+            pattern_vector=pattern_vector,
+        ))
 
-        pattern_idx = np.where(pattern_ids == pattern_id)[0][0]
-        pattern_vector = pattern_matrix[pattern_idx]
+    patterns.sort(key=lambda p: (-p.n_cases, tuple(p.pattern_vector.tolist())))
 
-        observed_indices = np.where(pattern_vector == 1)[0]
-        missing_indices = np.where(pattern_vector == 0)[0]
-
-        pattern_data_observed = pattern_data[:, observed_indices]
-
-        pattern_info = PatternInfo(
-            pattern_id=i + 1,
-            observed_indices=observed_indices,
-            missing_indices=missing_indices,
-            n_cases=int(np.sum(case_mask)),
-            data=pattern_data_observed,
-            pattern_vector=pattern_vector
-        )
-
-        patterns.append(pattern_info)
-
-    # Sort by frequency (most common first)
-    patterns.sort(key=lambda p: p.n_cases, reverse=True)
-
-    # Update pattern IDs
     for i, pattern in enumerate(patterns):
         pattern.pattern_id = i + 1
-
-    # Calculate percentages
-    total_cases = n_obs
-    for pattern in patterns:
-        pattern.percent_cases = (pattern.n_cases / total_cases) * 100
+        pattern.percent_cases = (pattern.n_cases / n_obs) * 100
 
     return patterns
 

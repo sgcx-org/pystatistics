@@ -171,7 +171,7 @@ def little_mcar_test(data,
         Significance level.
     backend : str or None, default None
         Backend for the ML estimation step (the dominant cost).
-        Default None → 'cpu' (R-reference path). Explicit: 'cpu',
+        Default None → 'cpu' (double precision). Explicit: 'cpu',
         'gpu', or 'auto' to prefer GPU when available. The per-pattern
         test-statistic accumulation runs on CPU regardless — it's
         O(P × v³) for tiny v and is not the bottleneck.

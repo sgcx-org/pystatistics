@@ -21,9 +21,9 @@ move the argmin, so the fitted estimates and log-likelihood are identical to
 full precision; it only makes the gradient magnitude O(1) so ``gtol`` is a
 meaningful, dataset-size-invariant convergence test.
 
-The objective modules remain the R-exact reference (their ``compute_objective``
-is unchanged and is used directly for the reported log-likelihood); scaling is
-purely an optimiser-conditioning concern handled here.
+The objective modules are not modified (their ``compute_objective`` is used
+directly, unscaled, for the reported log-likelihood); scaling is purely an
+optimiser-conditioning concern handled here.
 """
 
 from dataclasses import dataclass
@@ -152,8 +152,7 @@ def run_scaled_minimize(
     # triggers ONE device->host synchronisation instead of two separate ones
     # (objective then gradient). On a GPU objective at large p that sync latency
     # dominates wall-clock — coalescing it is the main optimiser-loop saving.
-    # Objectives without this method (the numpy CPU reference) use the original
-    # two-callable path unchanged.
+    # Objectives without this method use the two-callable path.
     fused = getattr(objective, 'compute_value_and_gradient', None)
     if callable(fused):
         def scaled_value_and_gradient(theta: np.ndarray):
