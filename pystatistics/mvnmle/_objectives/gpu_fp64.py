@@ -100,9 +100,8 @@ class GPUObjectiveFP64(MLEObjectiveBase):
                     "or use CUDA for FP64."
                 )
             # A CPU torch device is a deliberate, supported configuration: the
-            # forward-Cholesky FP64 estimator on CPU is the fast default CPU
-            # path (it beats the numpy inverse-Cholesky reference and matches R
-            # to ~1e-9), so it is NOT warned about here. CUDA is the other
+            # forward-Cholesky FP64 estimator on CPU is the default CPU path
+            # (it matches R to ~1e-9), so it is NOT warned about here. CUDA is the other
             # supported device; anything else is an unexpected request.
             if device.type not in ('cuda', 'cpu'):
                 warnings.warn(

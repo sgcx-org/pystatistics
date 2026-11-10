@@ -1,300 +1,132 @@
 """
-Base objective function class with R-compatible pattern ordering.
+Shared data preparation for the MVN missing-data objectives.
 
-This implementation exactly replicates R's mvnmle behavior, including the
-critical pattern ordering where data is sorted by pattern codes.
+``MLEObjectiveBase`` validates the data matrix, groups its rows by
+missingness pattern (``_pattern_grouping``) and computes starting values
+(``_start_values``). The forward-Cholesky direct objectives subclass it; the
+EM and monotone solvers use it for its patterns and starting values.
+
+Input contract: ``data`` is a 2-D array with ``np.nan`` marking missing
+values, at least two rows and one column, and no row or column that is
+entirely missing. Violations raise ``ValidationError`` unless
+``skip_validation=True``, in which case the caller vouches for them.
 """
 
+from typing import List, Tuple
+
 import numpy as np
-from typing import List, Tuple, Dict, Any
-from dataclasses import dataclass
-import warnings
-from pystatistics.core.exceptions import NumericalError, ValidationError
 
+from pystatistics.core.exceptions import ValidationError
 
-@dataclass
-class PatternData:
-    """Data structure for a single missingness pattern."""
-    pattern_id: int                   # Unique identifier
-    n_obs: int                        # Number of observations with this pattern
-    data: np.ndarray                  # Data matrix (n_obs x n_observed_vars)
-    observed_indices: np.ndarray      # Indices of observed variables
-    missing_indices: np.ndarray       # Indices of missing variables
-    pattern_start: int                # Start index in sorted data
-    pattern_end: int                  # End index in sorted data
+from ._pattern_grouping import PatternData, group_rows_by_pattern
+from ._start_values import available_case_moments, positive_definite_start
+
+__all__ = ['MLEObjectiveBase', 'PatternData']
 
 
 class MLEObjectiveBase:
+    """Data preparation shared by the MVN missing-data estimators.
+
+    Attributes
+    ----------
+    original_data : np.ndarray, shape (n_obs, n_vars)
+        The data as float64, rows in their original order.
+    patterns : list of PatternData
+        Rows grouped by missingness pattern; see ``_pattern_grouping`` for
+        the (deterministic) pattern order.
+    n_observed_scalars : int
+        Number of observed scalar values. The optimisation driver divides the
+        summed objective by it so that the gradient tolerance does not depend
+        on the size of the dataset (see ``backends/_optimize.py``).
+    sample_mean : np.ndarray, shape (n_vars,)
+        Available-case means.
+    sample_cov_raw : np.ndarray, shape (n_vars, n_vars)
+        Pairwise-complete covariance, exactly as estimated (it may be
+        indefinite). Guards that screen the data for collinearity or scale
+        problems use this matrix.
+    sample_cov : np.ndarray, shape (n_vars, n_vars)
+        Positive definite starting covariance derived from
+        ``sample_cov_raw``; see ``_start_values``. It only determines where
+        iteration starts.
+    is_complete : bool
+        True when the data have no missing values.
     """
-    Base class for maximum likelihood estimation objective functions.
 
-    Handles:
-    1. R-compatible data sorting (mysort algorithm)
-    2. Pattern extraction with correct ordering
-    3. Initial parameter computation
-    4. Subclass interface for objective/gradient computation
-
-    Critical: Exact replication of R mvnmle behavior.
-    """
-
-    def __init__(self, data: np.ndarray,
-                 skip_validation: bool = False):
-        """
-        Initialize objective function with data.
-
-        Parameters
-        ----------
-        data : np.ndarray, shape (n_obs, n_vars)
-            Input data matrix with missing values as np.nan
-        skip_validation : bool
-            If True, skip data validation (assumes caller validated)
-        """
+    def __init__(self, data: np.ndarray, skip_validation: bool = False):
         if not skip_validation:
             self._validate_data(data)
 
-        # Store original data
         self.original_data = np.asarray(data, dtype=np.float64)
         self.n_obs, self.n_vars = self.original_data.shape
 
-        # Parameter dimensions
         self.n_mean_params = self.n_vars
         self.n_cov_params = self.n_vars * (self.n_vars + 1) // 2
         self.n_params = self.n_mean_params + self.n_cov_params
 
-        # Apply R's mysort algorithm
-        self._apply_mysort()
-
-        # Extract patterns WITHOUT reordering (keep R's sort order)
-        self.patterns = self._extract_patterns()
+        self.patterns: List[PatternData] = group_rows_by_pattern(
+            self.original_data)
         self.n_patterns = len(self.patterns)
 
-        # Number of observed (non-missing) scalar values across the dataset.
-        # Used by the optimisation driver to scale the summed -2*log-likelihood
-        # to a per-observation mean, so the gradient magnitude is O(1) and
-        # scipy's `gtol` is a meaningful, dataset-size-invariant convergence
-        # test (see backends/_optimize.py).
-        self.n_observed_scalars = int(self.presence_absence.sum())
+        observed = ~np.isnan(self.original_data)
+        self.n_observed_scalars = int(observed.sum())
+        self.is_complete = bool(observed.all())
 
-        # Compute sample statistics for subclasses
-        self.sample_mean = np.nanmean(self.original_data, axis=0)
-        self.sample_cov = self._compute_sample_covariance()
+        self.sample_mean, self.sample_cov_raw = available_case_moments(
+            self.original_data)
+        self.sample_cov = positive_definite_start(self.sample_cov_raw)
 
-        # Check if data is complete (no missing values)
-        self.is_complete = not np.any(np.isnan(self.original_data))
-
-    def _validate_data(self, data: np.ndarray) -> None:
-        """Validate input data matrix."""
-        if not isinstance(data, np.ndarray):
-            data = np.asarray(data)
-
+    @staticmethod
+    def _validate_data(data: np.ndarray) -> None:
+        """Raise ``ValidationError`` unless ``data`` meets the input contract."""
+        data = np.asarray(data)
         if data.ndim != 2:
             raise ValidationError(f"Data must be 2D, got shape {data.shape}")
-
         if data.shape[0] < 2:
-            raise ValidationError(f"Need at least 2 observations, got {data.shape[0]}")
-
+            raise ValidationError(
+                f"Need at least 2 observations, got {data.shape[0]}")
         if data.shape[1] < 1:
-            raise ValidationError(f"Need at least 1 variable, got {data.shape[1]}")
+            raise ValidationError(
+                f"Need at least 1 variable, got {data.shape[1]}")
 
-        # Check for all-missing rows or columns
-        if np.any(np.all(np.isnan(data), axis=1)):
+        missing = np.isnan(np.asarray(data, dtype=np.float64))
+        if np.any(missing.all(axis=1)):
             raise ValidationError("Data contains rows with all missing values")
-
-        if np.any(np.all(np.isnan(data), axis=0)):
-            raise ValidationError("Data contains columns with all missing values")
-
-    def _apply_mysort(self) -> None:
-        """
-        Apply R's mysort algorithm to sort data by missingness patterns.
-
-        CRITICAL for R compatibility - must match exactly.
-        Creates pattern codes using powers of 2 and sorts observations.
-        """
-        # Create presence/absence matrix (1 = observed, 0 = missing)
-        self.presence_absence = (~np.isnan(self.original_data)).astype(int)
-
-        # Create pattern codes using powers of 2 (R's approach). Each distinct
-        # missingness pattern must map to a distinct code, or rows with
-        # different patterns get grouped together and a group's observed mask is
-        # applied to rows it does not match — pulling NaNs into the "observed"
-        # data. For n_vars > 62, 2**i overflows int64 and causes exactly that
-        # collision, so use arbitrary-precision Python integers in that regime.
-        # The ordering is identical to the int64 codes for small n_vars, so
-        # R-compatible behaviour is preserved where R applies (n_vars <= 50).
-        if self.n_vars <= 62:
-            powers = (2 ** np.arange(self.n_vars - 1, -1, -1)).astype(np.int64)
-            pattern_codes = self.presence_absence @ powers
-        else:
-            powers = np.array(
-                [1 << (self.n_vars - 1 - i) for i in range(self.n_vars)],
-                dtype=object,
-            )
-            pattern_codes = self.presence_absence.astype(object) @ powers
-
-        # Sort data by pattern codes
-        sort_indices = np.argsort(pattern_codes)
-        self.sorted_data = self.original_data[sort_indices]
-        self.sorted_patterns = self.presence_absence[sort_indices]
-        self.sorted_codes = pattern_codes[sort_indices]
-
-        # Get unique patterns and their frequencies
-        unique_codes, indices, counts = np.unique(
-            self.sorted_codes,
-            return_index=True,
-            return_counts=True
-        )
-
-        self.pattern_frequencies = counts
-        self.pattern_start_indices = indices
-
-    def _extract_patterns(self) -> List[PatternData]:
-        """
-        Extract pattern data from sorted dataset.
-
-        Returns
-        -------
-        List[PatternData]
-            Pattern data structures in R's expected order
-        """
-        patterns = []
-
-        for i, (start_idx, count) in enumerate(zip(self.pattern_start_indices,
-                                                   self.pattern_frequencies)):
-            end_idx = start_idx + count
-
-            # Get pattern mask for this group
-            pattern_mask = self.sorted_patterns[start_idx]
-            observed_indices = np.where(pattern_mask == 1)[0]
-            missing_indices = np.where(pattern_mask == 0)[0]
-
-            # Extract data for this pattern (only observed variables)
-            pattern_data = self.sorted_data[start_idx:end_idx]
-            if len(observed_indices) > 0:
-                observed_data = pattern_data[:, observed_indices]
-            else:
-                observed_data = np.empty((count, 0))
-
-            patterns.append(PatternData(
-                pattern_id=i,
-                n_obs=count,
-                data=observed_data,
-                observed_indices=observed_indices,
-                missing_indices=missing_indices,
-                pattern_start=start_idx,
-                pattern_end=end_idx
-            ))
-
-        return patterns
-
-    def _compute_sample_covariance(self) -> np.ndarray:
-        """
-        Compute sample covariance using pairwise deletion with proper regularization.
-
-        Matches R's approach for getting initial parameter estimates.
-        Uses only pairs of observations where both variables are observed.
-
-        Returns
-        -------
-        np.ndarray, shape (n_vars, n_vars)
-            Sample covariance matrix (guaranteed positive definite)
-        """
-        cov = np.zeros((self.n_vars, self.n_vars))
-
-        for i in range(self.n_vars):
-            for j in range(i, self.n_vars):
-                # Get pairs where both variables are observed
-                mask = ~(np.isnan(self.original_data[:, i]) |
-                        np.isnan(self.original_data[:, j]))
-
-                n_complete = np.sum(mask)
-
-                if n_complete > 1:
-                    xi = self.original_data[mask, i]
-                    xj = self.original_data[mask, j]
-
-                    # Compute covariance with bias correction
-                    mean_xi = np.mean(xi)
-                    mean_xj = np.mean(xj)
-
-                    if i == j:
-                        # Variance on diagonal
-                        cov[i, i] = np.mean((xi - mean_xi) ** 2)
-                    else:
-                        # Covariance off diagonal
-                        cov_ij = np.mean((xi - mean_xi) * (xj - mean_xj))
-                        cov[i, j] = cov_ij
-                        cov[j, i] = cov_ij
-                elif i == j:
-                    # Not enough data for this variable, use unit variance
-                    cov[i, i] = 1.0
-
-        # Stash the RAW pairwise covariance (before any PD regularization) so
-        # backend guards can screen for near-collinearity on the true data
-        # structure. The regularization below floors ONLY the optimizer's start,
-        # which would otherwise mask a rank-deficient sample from those guards.
-        self.sample_cov_raw = cov.copy()
-
-        # Pairwise-complete sample covariance is frequently non-PD when
-        # data has missing values — that is EXPECTED and is the reason
-        # MVN-MLE exists. We need a PD starting point for the optimizer,
-        # so we apply minimal regularization to the INITIAL covariance only.
-        # This does NOT change the model or the final result — it only
-        # affects the optimizer's starting point.
-        eigenvals = np.linalg.eigvalsh(cov)
-        min_eig = np.min(eigenvals)
-
-        if min_eig < 1e-6:
-            # NUMERICAL GUARD: ensure PD starting point for optimizer.
-            # The final MLE result is not affected by starting values
-            # (optimizer converges to the same likelihood maximum).
-            max_eig = np.max(eigenvals)
-            reg_amount = max(1e-4, abs(min_eig) + 1e-4)
-            cov += reg_amount * np.eye(self.n_vars)
-
-        return cov
+        if np.any(missing.all(axis=0)):
+            raise ValidationError(
+                "Data contains columns with all missing values")
 
     def jitter_scale(self) -> np.ndarray:
         """Per-variable scale for the diagonal jitter: the observed variances.
 
-        Makes the torch objectives' jitter ``eps * var_j`` instead of an
-        absolute ``eps``, so its ~``-eps`` bias on the fitted variances is
-        relative to each variable's own scale — an absolute 1e-6 jitter
-        silently biased small-variance data (e.g. -10% on variances near
-        1e-5 in FP32). Non-positive or non-finite variances (rejected
-        upstream by the degeneracy guards anyway) fall back to scale 1.0.
+        The batched objectives add ``eps * scale_j`` to the diagonal of each
+        pattern's covariance block, so the jitter is relative to each
+        variable's own scale. A variance that is not positive and finite
+        (rejected upstream by the degeneracy guards unless forced) falls back
+        to scale 1.0.
         """
         var = np.diag(self.sample_cov_raw).copy()
         bad = ~np.isfinite(var) | (var <= 0.0)
         var[bad] = 1.0
         return var
 
+    # --- Subclass interface -------------------------------------------------
+
     def get_initial_parameters(self) -> np.ndarray:
-        """Get initial parameter values. Subclasses must implement."""
-        raise NotImplementedError("Subclasses must implement get_initial_parameters")
+        """Initial parameter vector. Subclasses must implement."""
+        raise NotImplementedError(
+            "Subclasses must implement get_initial_parameters")
 
     def compute_objective(self, theta: np.ndarray) -> float:
-        """Compute objective function value. Subclasses must implement."""
+        """Objective value at ``theta``. Subclasses must implement."""
         raise NotImplementedError("Subclasses must implement compute_objective")
 
     def compute_gradient(self, theta: np.ndarray) -> np.ndarray:
-        """
-        Compute gradient of objective function.
+        """Gradient at ``theta``. Subclasses must implement."""
+        raise NotImplementedError("Subclasses must implement compute_gradient")
 
-        Default implementation uses finite differences (R-compatible).
-        Subclasses may override with analytical gradients.
-        """
-        eps = 1e-8
-        grad = np.zeros_like(theta)
-        f0 = self.compute_objective(theta)
-
-        for i in range(len(theta)):
-            theta_plus = theta.copy()
-            theta_plus[i] += eps
-            f_plus = self.compute_objective(theta_plus)
-            grad[i] = (f_plus - f0) / eps
-
-        return grad
-
-    def extract_parameters(self, theta: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
-        """Extract mu, Sigma, and log-likelihood from parameter vector. Subclasses must implement."""
-        raise NotImplementedError("Subclasses must implement extract_parameters")
+    def extract_parameters(self, theta: np.ndarray
+                           ) -> Tuple[np.ndarray, np.ndarray, float]:
+        """``(mu, Sigma, log-likelihood)`` at ``theta``. Subclasses must
+        implement."""
+        raise NotImplementedError(
+            "Subclasses must implement extract_parameters")

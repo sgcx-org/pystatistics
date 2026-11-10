@@ -482,7 +482,7 @@ The single pre-launch consistency sweep (see the versioning policy below). Like
 | `newxreg` | arima, forecast_arima | `new_xreg` | S1: snake_case. |
 | values `CSS-ML`/`ML`/`CSS`/`Whittle` | arima, auto_arima `method=` | `css-ml`/`ml`/`css`/`whittle` | A1: lowercase option values. |
 | `levels` (whole percents) | forecast_ets, forecast_arima | `conf_level` (fractions) | S0 + reserved confidence-level name. |
-| `backend='cpu-reference'` | mvnmle | `solver='reference'` | scheduled removal; `backend` ≠ a `solver` choice. |
+| `backend='cpu-reference'` | mvnmle | `solver='reference'` | scheduled removal; `backend` ≠ a `solver` choice. (`solver='reference'` was itself removed later, together with the inverse-Cholesky reference optimizer; it now raises `ValidationError`.) |
 | bare `RuntimeError` | little_mcar_test | `ConvergenceError` / `NumericalError` | A4: error taxonomy. |
 | `SmoothInfo.lambda_` / `.s_scale` | gam | `.lambdas` / `.s_scales` | scheduled removal (per-margin tuples). |
 | `W` | grm_lmm | `random_factor` | S1: no single-letter matrix param. |

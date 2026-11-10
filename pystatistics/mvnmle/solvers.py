@@ -13,7 +13,6 @@ from pystatistics.core.compute.device import select_device
 from pystatistics.core.compute.backend import resolve_backend, unknown_backend_message
 from pystatistics.mvnmle.design import MVNDesign
 from pystatistics.mvnmle.solution import MVNSolution
-from pystatistics.mvnmle.backends.cpu import CPUMLEBackend
 
 
 BackendChoice = Literal['auto', 'cpu', 'gpu', 'gpu_fp64']
@@ -49,10 +48,8 @@ def mlest(
         Estimation method:
 
         - 'direct' (default): gradient-based optimization on the
-          log-likelihood. The parameterization depends on the backend (see
-          ``backend``): the default CPU path uses a forward-Cholesky
-          factorization; ``solver='reference'`` uses the R-exact inverse
-          Cholesky parameterization.
+          log-likelihood, parameterized by the Cholesky factor of the
+          covariance (``Sigma = L L^T``) with a closed-form gradient.
         - 'em': Expectation-Maximization algorithm. Typically slower to
           converge but guaranteed monotone likelihood increase.
         - 'monotone': Closed-form MLE for monotone missingness patterns
@@ -64,19 +61,19 @@ def mlest(
     backend : str or None
         Backend selection. Default None → 'cpu'.
 
-        - 'cpu' (and the default): fast PyTorch forward-Cholesky FP64 path
-          when PyTorch is installed; otherwise falls back (with a warning) to
-          the numpy inverse-Cholesky reference. Both match R; the PyTorch path
-          is substantially faster.
+        - 'cpu' (and the default): the forward-Cholesky FP64 estimator. It
+          runs on PyTorch when PyTorch is installed; otherwise the same
+          estimator runs in NumPy (with a warning naming the implementation
+          in use). The two agree to optimizer tolerance and match R.
         - 'gpu': require a GPU (CUDA or MPS), float32; raises if none available.
         - 'gpu_fp64': require CUDA, float64 (raises on MPS, which has no
           float64) — CPU-matching precision on the GPU.
         - 'auto': prefer CUDA (float32) when present, else the fast CPU path.
     solver : str or None
-        Numerical routine for the direct method. If None, auto-selected by
-        backend. ``'reference'`` selects the R-exact numpy inverse-Cholesky
-        reference (no PyTorch needed; valid only with ``method='direct'``); any
-        other value is passed as the scipy optimizer method. Ignored for EM.
+        scipy optimizer method for the direct method (e.g. ``'BFGS'``,
+        ``'L-BFGS-B'``). If None, auto-selected by backend. Ignored for EM.
+        ``'reference'`` (the inverse-Cholesky reference optimizer) has been
+        removed and raises ``ValidationError``.
     tol : float or None
         Convergence tolerance. If None, uses an algorithm- and
         precision-appropriate default: direct = per-observation gradient
@@ -122,17 +119,19 @@ def mlest(
     # an explicit choice). These must run BEFORE the backend normalization
     # below so an explicit request is distinguishable from the default.
     #
-    # solver='reference' selects the numpy inverse-Cholesky CPU reference; an
-    # explicit GPU backend alongside it is a contradiction, not a preference
-    # ranking. Likewise method='monotone' is a CPU closed form (Anderson
-    # 1957) and cannot honor an explicit GPU request.
-    if solver == 'reference' and backend not in (None, 'cpu'):
+    # Removed option (hard removal, no shim): fail loud with the migration
+    # path rather than passing 'reference' to scipy as an optimizer name.
+    if solver == 'reference':
         raise ValidationError(
-            f"solver='reference' selects the numpy inverse-Cholesky CPU "
-            f"reference and cannot run on backend={backend!r}. Drop the "
-            f"backend argument (or pass backend='cpu') to use the "
-            f"reference, or drop solver='reference' to run on the GPU."
+            "solver='reference' is no longer available: the inverse-Cholesky "
+            "reference optimizer has been removed from pystatistics. Omit the "
+            "solver argument to use the default CPU path, the double-precision "
+            "forward-Cholesky estimator (PyTorch when it is installed, NumPy "
+            "otherwise), which is the supported float64 estimator."
         )
+
+    # method='monotone' is a CPU closed form (Anderson 1957) and cannot honor
+    # an explicit GPU request.
     if method == 'monotone' and backend not in (None, 'cpu'):
         raise ValidationError(
             f"method='monotone' is a closed-form CPU solver and cannot "
@@ -144,20 +143,6 @@ def mlest(
     # explicitly or request 'auto'.
     if backend is None:
         backend = 'cpu'
-
-    # The R-exact numpy inverse-Cholesky reference is selected by
-    # ``solver='reference'`` (a numerical-routine choice, per CONVENTIONS) — a
-    # ``solver`` axis choice, never a ``backend`` (device+precision) one.
-    #
-    # The numpy inverse-Cholesky reference is a direct-method routine; it has no
-    # meaning for EM or the closed-form monotone solver. Fail loud (Rule 1)
-    # rather than silently ignoring the request.
-    if solver == 'reference' and method != 'direct':
-        raise ValidationError(
-            "solver='reference' selects the numpy inverse-Cholesky reference "
-            "and is only valid with method='direct'. "
-            f"Got method={method!r}."
-        )
 
     # Get or build Design
     if isinstance(data_or_design, MVNDesign):
@@ -315,18 +300,13 @@ def _solve_monotone(design, verbose):
 def _solve_direct(design, backend, solver, tol, max_iter, verbose):
     """Dispatch direct (BFGS) optimization.
 
-    ``solver='reference'`` selects the R-exact numpy inverse-Cholesky backend
-    (no PyTorch); any other ``solver`` value is the scipy optimizer method for
-    the resolved (device, precision) backend.
+    ``solver``, when given, is the scipy optimizer method for the resolved
+    (device, precision) backend.
     """
     effective_max_iter = max_iter if max_iter is not None else 100
 
-    if solver == 'reference':
-        backend_impl = CPUMLEBackend()
-        scipy_method = None
-    else:
-        backend_impl = _get_backend(backend, verbose=verbose)
-        scipy_method = solver
+    backend_impl = _get_backend(backend, verbose=verbose)
+    scipy_method = solver
 
     if verbose:
         print(f"Backend: {backend_impl.name}")
@@ -494,34 +474,39 @@ def _get_em_device(
         )
 
 
-def _fast_cpu_backend(implicit: bool):
-    """Return the fast forward-Cholesky FP64 CPU backend, or the numpy
-    inverse-Cholesky reference when PyTorch is unavailable.
+def _fast_cpu_backend():
+    """Return the forward-Cholesky FP64 CPU backend: PyTorch when it is
+    installed, otherwise the NumPy implementation of the same estimator.
 
-    The PyTorch forward-Cholesky estimator on a CPU torch device is the fast
-    default CPU path (it beats the numpy reference substantially and matches R
-    to ~1e-9). PyTorch is an optional dependency, so on a bare install the only
-    direct path is the numpy reference; we fall back to it rather than failing.
+    The forward-Cholesky estimator is the default direct CPU path (it matches
+    R to ~1e-9). PyTorch is an optional dependency, so on a bare install the
+    estimator runs through ``NumpyCholeskyMLEBackend`` instead: same
+    parameterization, objective, analytic gradient, optimizer and defaults,
+    in NumPy. The two implementations agree to optimizer tolerance.
 
-    Per Rule 1 (no silent fallbacks), an *implicit* fallback — the user asked
-    for the default/'cpu'/'auto' and got the reference because PyTorch is
-    missing — is surfaced via ``UserWarning``. An explicit ``solver='reference'``
-    request is silent (handled by the caller).
+    Per Rule 1 (no silent fallbacks), the switch of implementation — the user
+    asked for the default/'cpu'/'auto' and PyTorch is missing — is surfaced
+    via ``UserWarning``; the result's ``backend_name`` also records
+    which implementation ran.
     """
     try:
         import torch  # noqa: F401
     except ImportError:
-        if implicit:
-            warnings.warn(
-                "PyTorch is not installed, so direct MVN MLE falls back to the "
-                "numpy inverse-Cholesky reference. This path is correct and "
-                "R-validated but substantially slower than the PyTorch "
-                "forward-Cholesky path. Install 'pystatistics[gpu]' for the "
-                "fast path, or pass solver='reference' to select the "
-                "reference explicitly and silence this warning.",
-                UserWarning, stacklevel=4,
-            )
-        return CPUMLEBackend()
+        warnings.warn(
+            "PyTorch is not installed, so direct MVN MLE runs the NumPy "
+            "implementation of the forward-Cholesky estimator. It is the "
+            "same estimator as the PyTorch path and gives the same "
+            "estimates to optimizer tolerance, but it is CPU-only and can "
+            "be slower on wide data with many missingness patterns. "
+            "Install 'pystatistics[gpu]' to use PyTorch.",
+            # _fast_cpu_backend <- _get_backend <- _solve_direct <- mlest
+            # <- caller: attribute the warning to the caller's line.
+            UserWarning, stacklevel=5,
+        )
+        from pystatistics.mvnmle.backends.numpy_cholesky import (
+            NumpyCholeskyMLEBackend,
+        )
+        return NumpyCholeskyMLEBackend()
     from pystatistics.mvnmle.backends.gpu import DirectMLEBackend
     return DirectMLEBackend(device='cpu', use_fp64=True)
 
@@ -529,15 +514,13 @@ def _fast_cpu_backend(implicit: bool):
 def _get_backend(choice: BackendChoice, verbose: bool = False):
     """Select the direct-MLE backend from the resolved (device, precision) target.
 
-    The reference numpy path is not selected here — it is a ``solver``
-    ('reference') choice handled in :func:`_solve_direct`. This resolver only
-    maps the (device, precision) ``backend`` axis via :func:`resolve_backend`:
+    Maps the (device, precision) ``backend`` axis via :func:`resolve_backend`:
     'cpu'/None -> the fast forward-Cholesky CPU path, 'gpu' -> float32,
     'gpu_fp64' -> CUDA float64, 'auto' -> CUDA-float32 or CPU.
     """
     target = resolve_backend(choice, supports_fp64=True)
     if target.device_type == 'cpu':
-        return _fast_cpu_backend(implicit=True)
+        return _fast_cpu_backend()
 
     from pystatistics.mvnmle.backends.gpu import DirectMLEBackend
     return DirectMLEBackend(device=target.device_type, use_fp64=target.use_fp64)

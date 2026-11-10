@@ -103,8 +103,16 @@ build-frontend = "build"
 # that the platform's compiler honored -ffp-contract=off; the R-parity test is
 # the numerical gate. If parity fails on a wheel, that wheel's FP flags are
 # wrong — fix the build, never relax the test.
+#
+# The tests/mvnmle files run the MVN MLE estimators as a wheel user without
+# PyTorch gets them (the test environment has no torch): the NumPy
+# forward-Cholesky direct path, pattern grouping and starting values, the
+# pattern diagnostics and Little's MCAR test, and backend routing. They are the
+# only run of that code on Linux and Windows. Tests in those files that need
+# PyTorch, a GPU or scikit-learn skip. Fixtures are read relative to each test
+# file ({project}/tests/mvnmle/references), like the parity fixtures.
 test-requires = ["pytest", "scipy"]
-test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_ets_workspace_fit_regression.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py -q"
+test-command = "pytest {project}/tests/timeseries/test_arima_kalman_cython_parity.py {project}/tests/timeseries/test_arima_kalman_r_parity.py {project}/tests/timeseries/test_arima_workspace_fit_regression.py {project}/tests/timeseries/test_ets_kernel_parity.py {project}/tests/timeseries/test_ets_workspace_fit_regression.py {project}/tests/timeseries/test_stl_cython_parity.py {project}/tests/timeseries/test_stl_r_parity.py {project}/tests/survival/test_concordance_cython_parity.py {project}/tests/mvnmle/test_numpy_cholesky.py {project}/tests/mvnmle/test_base_preparation.py {project}/tests/mvnmle/test_backend_routing.py {project}/tests/mvnmle/test_mlest.py {project}/tests/mvnmle/test_optimize.py {project}/tests/mvnmle/test_degeneracy.py {project}/tests/mvnmle/test_pattern_codes_large_p.py {project}/tests/mvnmle/test_patterns_large_p.py {project}/tests/mvnmle/test_pattern_summary_format.py {project}/tests/mvnmle/test_mcar.py -q"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

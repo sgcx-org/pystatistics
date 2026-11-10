@@ -59,58 +59,6 @@ class CovarianceParameterization(ABC):
         return self.pack(sample_mean, sample_cov)
 
 
-class InverseCholeskyParameterization(CovarianceParameterization):
-    """
-    Inverse Cholesky parameterization (R-compatible).
-    
-    Parameters: [μ, log(diag(Δ)), off-diag(Δ)]
-    where Σ = (Δ^{-1})^T Δ^{-1} and Δ is upper triangular.
-    
-    This matches R's mvnmle package exactly.
-    """
-    
-    def pack(self, mu: np.ndarray, sigma: np.ndarray) -> np.ndarray:
-        """Pack using inverse Cholesky decomposition."""
-        # Compute Δ where Σ = (Δ^{-1})^T Δ^{-1}
-        L = np.linalg.cholesky(sigma)
-        delta = np.linalg.inv(L).T
-        
-        # Extract parameters
-        log_diag = np.log(np.diag(delta))
-        
-        # Extract UPPER triangular elements (column-wise, R style)
-        # Delta is upper triangular, so we extract i < j
-        tril_elements = []
-        for j in range(self.n_vars):
-            for i in range(j):  # i < j for upper triangle
-                tril_elements.append(delta[i, j])
-        
-        return np.concatenate([mu, log_diag, tril_elements])
-    
-    def unpack(self, theta: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """Unpack from inverse Cholesky parameters."""
-        mu = theta[:self.n_vars]
-        
-        # Reconstruct Δ matrix (upper triangular)
-        delta = np.zeros((self.n_vars, self.n_vars))
-        
-        # Diagonal elements
-        np.fill_diagonal(delta, np.exp(theta[self.n_vars:2*self.n_vars]))
-        
-        # Off-diagonal elements (column-wise, R style)
-        idx = 2 * self.n_vars
-        for j in range(self.n_vars):
-            for i in range(j):  # i < j for upper triangle
-                delta[i, j] = theta[idx]
-                idx += 1
-        
-        # Compute Σ = (Δ^{-1})^T Δ^{-1}
-        delta_inv = np.linalg.inv(delta)
-        sigma = delta_inv.T @ delta_inv
-        
-        return mu, sigma
-
-
 class CholeskyParameterization(CovarianceParameterization):
     """
     Standard Cholesky parameterization.

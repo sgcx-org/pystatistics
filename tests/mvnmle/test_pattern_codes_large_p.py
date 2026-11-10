@@ -1,11 +1,11 @@
-"""Pattern grouping must stay correct past 62 variables.
+"""Pattern grouping must be correct for any number of variables.
 
-`MLEObjectiveBase` groups rows by missingness pattern using a powers-of-two
-code. With int64 codes, `2**i` overflows for variable index >= 63, collapsing
-distinct patterns onto the same code; rows with different masks then get grouped
-together and the group's observed mask slices NaN (missing) cells into the
-"observed" data. These tests guard the arbitrary-precision path used for
-n_vars > 62.
+`MLEObjectiveBase` groups rows by exact equality of their missingness masks.
+A grouping keyed on a fixed-width integer code would collapse distinct
+patterns once the number of variables exceeds the code's width (63 for
+int64); rows with different masks would then be grouped together and the
+group's observed mask would slice NaN (missing) cells into the "observed"
+data. These tests guard against that across the 62/63/64 boundary.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pystatistics.mvnmle._objectives.base import MLEObjectiveBase
 
 
 class _Obj(MLEObjectiveBase):
-    # MLEObjectiveBase is abstract; we only exercise its pattern extraction.
+    # Only the pattern grouping is exercised here.
     def get_initial_parameters(self): ...
     def compute_objective(self, theta): ...
     def compute_gradient(self, theta): ...
@@ -32,7 +32,7 @@ def _ground_truth_n_patterns(X) -> int:
     return int(np.unique(~np.isnan(X), axis=0).shape[0])
 
 
-@pytest.mark.parametrize("n_vars", [40, 62, 63, 80, 120])
+@pytest.mark.parametrize("n_vars", [40, 51, 62, 63, 64, 65, 80, 120])
 def test_grouping_correct_across_the_int64_boundary(n_vars):
     rng = np.random.default_rng(n_vars)
     X = rng.standard_normal((400, n_vars))

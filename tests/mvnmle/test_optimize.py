@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from pystatistics.core.exceptions import NumericalError
-from pystatistics.mvnmle._objectives.cpu import CPUObjectiveFP64
+from pystatistics.mvnmle._objectives.numpy_fp64 import NumpyObjectiveFP64
 from pystatistics.mvnmle.backends._optimize import (
     run_scaled_minimize,
     ScaledMinimizeResult,
@@ -31,12 +31,34 @@ def _clean_data(n, p=5, seed=0):
     return X
 
 
+class _SeparateOnly:
+    """An objective exposing only the separate value and gradient callables
+    (no ``compute_value_and_gradient``), to exercise the driver's two-callable
+    path. Delegates to a ``NumpyObjectiveFP64``."""
+
+    def __init__(self, X):
+        self._obj = NumpyObjectiveFP64(X, validate=False)
+        self.n_observed_scalars = self._obj.n_observed_scalars
+
+    def get_initial_parameters(self):
+        return self._obj.get_initial_parameters()
+
+    def compute_objective(self, theta):
+        return self._obj.compute_objective(theta)
+
+    def compute_gradient(self, theta):
+        return self._obj.compute_gradient(theta)
+
+    def extract_parameters(self, theta):
+        return self._obj.extract_parameters(theta)
+
+
 class TestScale:
     """The scale factor is the count of observed scalar values."""
 
     def test_scale_equals_observed_count(self):
         X = _clean_data(n=1000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
             method='BFGS', tol=1e-5, max_iter=200,
@@ -46,7 +68,7 @@ class TestScale:
     def test_missing_count_fails_loud(self):
         """A non-positive observed-scalar count must raise, not divide by zero."""
         X = _clean_data(n=500)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         obj.n_observed_scalars = 0
         with pytest.raises(NumericalError, match="n_observed_scalars"):
             run_scaled_minimize(
@@ -60,7 +82,7 @@ class TestConvergence:
 
     def test_large_objective_fit_converges(self):
         X = _clean_data(n=5000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
             method='BFGS', tol=1e-5, max_iter=100,
@@ -73,7 +95,7 @@ class TestConvergence:
 
     def test_starved_fit_does_not_converge(self):
         X = _clean_data(n=5000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
             method='BFGS', tol=1e-5, max_iter=2,
@@ -88,7 +110,7 @@ class TestOptimumUnchanged:
         from scipy.optimize import minimize
 
         X = _clean_data(n=2000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         theta0 = obj.get_initial_parameters()
 
         # Unscaled reference run, allowed many iterations to reach the optimum
@@ -111,7 +133,7 @@ class TestOptimumUnchanged:
     def test_objective_value_reported_unscaled(self):
         """objective_value stays on the -2*loglik scale (consistent with loglik)."""
         X = _clean_data(n=2000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = NumpyObjectiveFP64(X, validate=False)
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
             method='BFGS', tol=1e-5, max_iter=200,
@@ -153,7 +175,7 @@ class TestFusedValueGradient:
 
     def test_fused_path_used_when_available(self):
         X = _clean_data(n=2000)
-        obj = _FusedAdapter(CPUObjectiveFP64(X, validate=False))
+        obj = _FusedAdapter(_SeparateOnly(X))
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
             method='L-BFGS-B', tol=1e-5, max_iter=200,
@@ -165,10 +187,10 @@ class TestFusedValueGradient:
         assert obj.n_sep_obj == 0
 
     def test_fallback_path_when_method_absent(self):
-        """An objective without ``compute_value_and_gradient`` (the numpy CPU
-        reference) uses the original two-callable path unchanged."""
+        """An objective without ``compute_value_and_gradient`` uses the
+        two-callable path."""
         X = _clean_data(n=2000)
-        obj = CPUObjectiveFP64(X, validate=False)
+        obj = _SeparateOnly(X)
         assert not hasattr(obj, 'compute_value_and_gradient')
         opt = run_scaled_minimize(
             obj, obj.get_initial_parameters(),
@@ -178,9 +200,9 @@ class TestFusedValueGradient:
 
     def test_fused_and_fallback_reach_same_optimum(self):
         X = _clean_data(n=2000)
-        theta0 = CPUObjectiveFP64(X, validate=False).get_initial_parameters()
-        fused = _FusedAdapter(CPUObjectiveFP64(X, validate=False))
-        sep = CPUObjectiveFP64(X, validate=False)  # no fused method -> fallback
+        theta0 = _SeparateOnly(X).get_initial_parameters()
+        fused = _FusedAdapter(_SeparateOnly(X))
+        sep = _SeparateOnly(X)  # no fused method -> fallback
         o_f = run_scaled_minimize(fused, theta0, method='BFGS',
                                   tol=1e-8, max_iter=100000)
         o_s = run_scaled_minimize(sep, theta0, method='BFGS',
