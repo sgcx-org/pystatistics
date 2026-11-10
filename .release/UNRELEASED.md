@@ -103,3 +103,9 @@
 - **mvnmle: `datasets` docstring.** `apple` and `missvals` are described as the
   example datasets also distributed with the R package `mvnmle` (same values);
   the data are unchanged.
+
+- **tests (core): `tests/core/test_datasource.py::test_to_cuda_without_gpu_raises`
+  skips when PyTorch is not installed** (`pytest.importorskip("torch")`). It
+  patches `torch.cuda.is_available`, so it cannot run without PyTorch and
+  previously errored with `ModuleNotFoundError` on a PyTorch-less install. No
+  library change.

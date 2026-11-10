@@ -100,7 +100,7 @@ class TestDataSourceDevice:
     def test_to_cuda_without_gpu_raises(self, monkeypatch):
         """When no GPU is available, `.to('cuda')` fails loudly (Rule 1
         — no silent fallback to CPU)."""
-        import torch
+        torch = pytest.importorskip("torch")
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         ds = DataSource.from_arrays(X=np.ones((10, 3)))
         with pytest.raises(RuntimeError, match="CUDA"):
