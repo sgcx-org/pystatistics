@@ -399,6 +399,29 @@ pip install pystatistics[dev]
 
 ## What's New
 
+### 7.0.0 — `mvnmle` without PyTorch; reference optimizer removed (breaking)
+
+- **The direct MVN MLE estimator no longer needs PyTorch.** Without PyTorch
+  installed, `mlest(X)` now runs a NumPy implementation of the same
+  forward-Cholesky estimator the PyTorch CPU path uses — same objective,
+  closed-form gradient, optimizer and defaults — instead of falling back to a
+  much slower optimizer. The two give the same fit (estimates agreeing to
+  1e-10 on 2,000 rows by 10 variables with 15% missing; about 25 ms in NumPy,
+  37 ms in PyTorch on an Apple M5 Pro). With PyTorch installed nothing
+  changes.
+- **Breaking: `solver='reference'` is removed.** The inverse-Cholesky
+  reference optimizer is gone and `mlest(..., solver='reference')` raises
+  `ValidationError`. Drop the argument; the default CPU path is the supported
+  double-precision estimator and reaches the same maximum.
+- **Better starting values on heavily incomplete data.** When the
+  available-case covariance is not positive definite, the start is repaired
+  in a unit-independent way. Converged estimates are unchanged; iteration
+  counts can differ on such data (the bundled `missvals` fit takes 152
+  iterations instead of about 570).
+- Missingness patterns are grouped by exact mask comparison for any number of
+  variables; pattern listings and Little's MCAR test results are unchanged.
+  See the [changelog](CHANGELOG.md).
+
 ### 6.1.3 — no more noise-driven float32 refusals; Apple-GPU integrity warning
 
 - **Float32 categorical line searches no longer reject good update steps on

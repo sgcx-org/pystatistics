@@ -72,8 +72,8 @@ def mlest(
     solver : str or None
         scipy optimizer method for the direct method (e.g. ``'BFGS'``,
         ``'L-BFGS-B'``). If None, auto-selected by backend. Ignored for EM.
-        ``'reference'`` (the inverse-Cholesky reference optimizer) has been
-        removed and raises ``ValidationError``.
+        ``'reference'`` (the inverse-Cholesky reference optimizer) was
+        removed in 7.0.0 and raises ``ValidationError``.
     tol : float or None
         Convergence tolerance. If None, uses an algorithm- and
         precision-appropriate default: direct = per-observation gradient
@@ -124,7 +124,7 @@ def mlest(
     if solver == 'reference':
         raise ValidationError(
             "solver='reference' is no longer available: the inverse-Cholesky "
-            "reference optimizer has been removed from pystatistics. Omit the "
+            "reference optimizer has been removed (pystatistics 7.0.0). Omit the "
             "solver argument to use the default CPU path, the double-precision "
             "forward-Cholesky estimator (PyTorch when it is installed, NumPy "
             "otherwise), which is the supported float64 estimator."

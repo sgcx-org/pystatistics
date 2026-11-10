@@ -1,5 +1,76 @@
 # Changelog
 
+## 7.0.0
+
+Breaking release for `mvnmle`. The direct estimator is now available without
+PyTorch, as a NumPy implementation of the same forward-Cholesky method, and
+the older inverse-Cholesky reference optimizer has been removed. Everything
+outside `mvnmle` is unchanged.
+
+### Removed (breaking)
+
+- **`mlest(..., solver='reference')` has been removed.** The inverse-Cholesky
+  reference optimizer it selected no longer exists; passing
+  `solver='reference'` raises `ValidationError` for every `method` and
+  `backend`. Drop the argument: the default CPU path is the supported
+  double-precision estimator. It reaches the same maximum (log-likelihood
+  within 2e-5 on the problems compared, up to 2,000 rows by 10 variables) and
+  is far faster. Other `solver` values — scipy optimizer names such as
+  `'BFGS'` or `'L-BFGS-B'` — work as before.
+- The internal classes behind that optimizer are gone:
+  `pystatistics.mvnmle.backends.CPUMLEBackend`,
+  `pystatistics.mvnmle._objectives.CPUObjectiveFP64` and
+  `InverseCholeskyParameterization`. Results can no longer report
+  `backend_name == 'cpu_bfgs_fp64'` or
+  `info['parameterization'] == 'inverse_cholesky'`; the direct method always
+  reports `'cholesky'`.
+
+### Added
+
+- **The direct MVN MLE estimator now runs without PyTorch.**
+  `mlest(X)` (and `backend='cpu'` / `'auto'`) on an install without PyTorch
+  runs a NumPy implementation of the forward-Cholesky estimator: the same
+  parameterization, objective, closed-form gradient, optimizer and defaults
+  as the PyTorch double-precision CPU path. Previously such an install fell
+  back to the slow reference optimizer. The two implementations evaluate the
+  same objective (gradient agreement ~6e-16 relative) and give the same fit:
+  on 2,000 rows by 10 variables with 15% missing values, identical iteration
+  counts and estimates agreeing to 1e-10. On that problem (Apple M5 Pro) the
+  NumPy path takes about 25 ms and the PyTorch CPU path about 37 ms, against
+  about 60 s for the removed optimizer; on 5,000 rows by 30 variables (3,236
+  missingness patterns) NumPy takes about 2.2 s and PyTorch about 1.7 s. A
+  `UserWarning` still notes when the NumPy implementation is used, and
+  `result.backend_name` is `'cpu_cholesky_numpy_fp64'`. With PyTorch
+  installed nothing changes.
+
+### Changed
+
+- **Starting values when the available-case covariance is not positive
+  definite.** The direct and EM methods start from available-case means and
+  pairwise-complete covariances. When that covariance matrix is indefinite
+  (common with heavy missingness), it used to be repaired by adding a fixed
+  amount to its diagonal; it is now repaired by shrinking the correlations
+  toward zero just enough to make the matrix positive definite, leaving the
+  variances untouched, so the repair no longer depends on the units of the
+  data. Only the starting point is affected: the objective is unchanged and
+  converged estimates agree with the previous release to optimizer
+  tolerance. Iteration counts can differ on such data — on the bundled
+  `missvals` dataset the direct method now takes 152 iterations instead of
+  about 570 — and single-precision GPU fits, which stop at a looser
+  tolerance, can stop at a slightly different point. When the available-case
+  covariance is already positive definite, the start and the iteration
+  counts are the same as before.
+- **Missingness patterns are grouped by exact comparison of each row's
+  missingness mask**, for any number of variables, in the estimators and in
+  `analyze_patterns` / `little_mcar_test`. Results are unchanged: the pattern
+  listing (order, counts, percentages) and Little's MCAR statistic and
+  p-value are identical to the previous release.
+- The no-PyTorch `UserWarning` is now attributed to the caller's
+  `mlest(...)` line.
+- The `mvnmle.datasets` documentation describes `apple` and `missvals` as the
+  example datasets also distributed with the R package `mvnmle`; the data are
+  unchanged.
+
 ## 6.1.5
 
 Cosmetic fix release for the mvnmle pattern-inspection output. (Supersedes
