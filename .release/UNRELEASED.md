@@ -133,3 +133,9 @@
     on one machine use optimizer-level tolerances (objective 1e-9 relative,
     estimates 1e-4, iteration count within 2). No library change.
 
+- **CI: the macOS wheel job runs on `macos-15`** (`.github/workflows/publish.yml`
+  matrix; was `macos-14`). GitHub no longer provides the `macos-14` runner
+  ("The configuration 'macos-14-arm64-us-default' is not supported"), which
+  cancelled the macOS wheel job and, because publishing requires every wheel
+  job, would have blocked the PyPI upload. Still arm64; no library change.
+
