@@ -1,8 +1,9 @@
 """
 Objective functions for MVN MLE optimization.
 
-Provides CPU and GPU implementations of the negative log-likelihood
-objective with R-compatible pattern ordering.
+Forward-Cholesky objectives (NumPy and PyTorch) share the data preparation in
+``base.py``. The inverse-Cholesky reference objective (``cpu.py``) and its
+data preparation (``_r_port_base.py``) are a port of the R package ``mvnmle``.
 """
 
 from .cpu import CPUObjectiveFP64

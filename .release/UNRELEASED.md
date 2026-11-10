@@ -43,3 +43,42 @@
     max|dSigma| = 1e-10 (identical iteration counts); NumPy vs reference
     |dloglik| = 1e-5. n=5000, p=30, 10% MCAR (3236 patterns): NumPy 2.2 s,
     PyTorch 1.7 s.
+
+- **mvnmle: shared data preparation rewritten; the R-derived routines now live
+  only with the reference path.** `pystatistics/mvnmle/_objectives/base.py`
+  (`MLEObjectiveBase`, used by the forward-Cholesky objectives, EM and the
+  monotone solver) no longer contains code ported from R's `mvnmle`.
+  - Pattern grouping: new `_objectives/_pattern_grouping.py`
+    (`group_rows_by_pattern`). Rows are grouped by exact equality of their
+    missingness mask (packed bytes), for any number of variables; there are no
+    integer pattern codes. Pattern order: fewest missing variables first, ties
+    lexicographic on the missing-indicator vector; rows keep their original
+    order within a pattern. `PatternData` gained `row_indices` and lost
+    `pattern_start` / `pattern_end`.
+  - Starting values: new `_objectives/_start_values.py`. Available-case means
+    and pairwise-complete covariances (ML divisor) — numerically the same
+    matrix as before (max abs difference 6e-14 on `missvals`). The
+    positive-definite repair changed: instead of adding an absolute ridge
+    (>= 1e-4) to the diagonal when the smallest covariance eigenvalue is below
+    1e-6, the correlation matrix is shrunk towards the identity just enough
+    for its smallest eigenvalue to reach 1e-4 (`MIN_CORRELATION_EIGENVALUE`);
+    variances are untouched, so the rule is unit-invariant. When the
+    available-case covariance is already positive definite the start is
+    unchanged. The repair still only affects where iteration starts.
+  - The former base class moved verbatim to `_objectives/_r_port_base.py`
+    (`RPortObjectiveBase`), imported only by `_objectives/cpu.py`
+    (`CPUObjectiveFP64`, `solver='reference'`). Reference-path results are
+    bit-for-bit unchanged (checked on `apple`, `missvals` and five seeded
+    problems). `MLEObjectiveBase.compute_gradient` no longer has a
+    finite-difference default (it stayed with the reference base).
+  - User impact: the objective function is unchanged (value at a fixed
+    parameter vector within 3e-14 relative of the previous value), so converged
+    estimates are unchanged to optimizer tolerance. When the available-case
+    covariance is positive definite (the usual case), iteration counts are
+    identical on every path. When it is not, the start differs and iteration
+    counts change: `missvals` forward-Cholesky FP64 570 -> 152 iterations
+    (NumPy; PyTorch 563 -> 152), EM 78 -> 85; a seeded n=500, p=5 problem with
+    an indefinite available-case covariance 100 (not converged) -> 52
+    (converged). FP32/MPS fits that stop at the loose FP32 tolerance land at a
+    different point in those cases (`missvals` log-likelihood -87.94 -> -90.12;
+    FP64 optimum -86.98).

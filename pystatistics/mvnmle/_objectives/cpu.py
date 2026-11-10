@@ -10,7 +10,7 @@ operations are preserved verbatim from the validated pymvnmle code.
 
 import numpy as np
 from typing import Tuple, Dict, Any
-from .base import MLEObjectiveBase, PatternData
+from ._r_port_base import RPortObjectiveBase, PatternData
 from .parameterizations import InverseCholeskyParameterization
 from pystatistics.core.exceptions import NumericalError
 
@@ -22,7 +22,7 @@ from pystatistics.core.exceptions import NumericalError
 _OBJECTIVE_FAILURE_SENTINEL: float = 1e20
 
 
-class CPUObjectiveFP64(MLEObjectiveBase):
+class CPUObjectiveFP64(RPortObjectiveBase):
     """
     R-compatible MLE objective using inverse Cholesky parameterization.
 
